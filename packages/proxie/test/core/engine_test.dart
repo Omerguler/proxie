@@ -291,6 +291,32 @@ void main() {
     expect(await done, isTrue);
   });
 
+  test(
+    'onRequest/onResponse after dispose pass through with no state',
+    () async {
+      final e = ProxieEngine(config: const ProxieConfig(), sink: sink);
+      e.rules = RuleSet([
+        _bp(BreakpointPhase.both),
+        ProxieRule(
+          id: 'm',
+          name: 'm',
+          kind: RuleKind.mapLocal,
+          matcher: UrlMatcher('api.test/*'),
+          mapLocal: const MapLocalAction(failure: SimulatedFailure.timeout),
+        ),
+      ]);
+      e.dispose();
+      final req = _req();
+      final d = await e.onRequest('c1', 'http', req);
+      expect(d, isA<Proceed>());
+      expect((d as Proceed).request, same(req));
+      final res = _res(200);
+      expect(await e.onResponse('c1', res), same(res));
+      expect(e.breakpoints.pending, isEmpty);
+      expect(sink.calls, isEmpty);
+    },
+  );
+
   test('three concurrent pauses all time out after 60 s', () {
     fakeAsync((async) {
       final e = ProxieEngine(config: const ProxieConfig(), sink: sink);

@@ -75,6 +75,7 @@ class ProxieEngine {
     String adapter,
     ProxieRequest req,
   ) async {
+    if (_disposed) return Proceed(req);
     final state = _CallState(req, adapter, DateTime.now());
     if (_states.containsKey(callId)) {
       breakpoints.resolve(callId, const ContinueUnchanged());
@@ -127,6 +128,7 @@ class ProxieEngine {
   }
 
   Future<ProxieResponse> onResponse(String callId, ProxieResponse res) async {
+    if (_disposed) return res;
     final state = _states[callId];
     if (state == null) return res;
     var current = res;
@@ -190,7 +192,12 @@ class ProxieEngine {
     originalLength: b.originalLength,
   );
 
-  /// Recording must never break live traffic, so failures are only logged.
+  /// Records a snapshot of the call: unmasked to the [sink], then masked and
+  /// body-stripped to the [calls] stream.
+  ///
+  /// Recording must never break live traffic, so each of the two blocks is
+  /// guarded separately and a failure is only logged; a failing sink does not
+  /// stop the stream emit. Does nothing once the engine is disposed.
   void _emit(
     String callId,
     _CallState s, {
