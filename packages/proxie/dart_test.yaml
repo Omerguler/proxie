@@ -1,0 +1,3 @@
+tags:
+  # Timing-sensitive tests; run alone with `flutter test --tags perf`.
+  perf:
