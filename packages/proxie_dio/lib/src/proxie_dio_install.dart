@@ -2,30 +2,77 @@ part of 'proxie_dio_interceptor.dart';
 
 /// Sets Proxie up on a [Dio].
 abstract final class ProxieDio {
-  /// Adds [interceptor] (a new one by default) to [dio] and wraps
-  /// `dio.httpClientAdapter` so the requests it records are not recorded
-  /// again by `ProxieHttpOverridesAdapter`. Returns the interceptor; attach
-  /// it to an engine to start capturing.
+  /// Sets [interceptor] (a new one by default) up on [dio] and returns it;
+  /// attach it to an engine to start capturing.
   ///
-  /// The interceptor remembers [dio] and replays with it. Installing on a
-  /// Dio that already has a [ProxieDioInterceptor] returns that one and
-  /// changes nothing. Setting `dio.httpClientAdapter` afterwards removes the
-  /// wrapper.
+  /// - The interceptor is added at the end of `dio.interceptors`, so requests
+  ///   are recorded (and paused, mocked or edited) as the app's interceptors
+  ///   left them.
+  /// - A response and error observer is inserted at the front, so responses
+  ///   and errors are recorded (and paused or edited) before the app's
+  ///   interceptors, such as retry or auth refresh, act on them.
+  /// - `dio.httpClientAdapter` is wrapped so the requests Proxie records are
+  ///   not recorded again by `ProxieHttpOverridesAdapter`.
+  ///
+  /// The interceptor remembers [dio] and replays with it. Install after
+  /// adding the app's own interceptors: one added later runs after Proxie's
+  /// request side, and if it answers requests itself without calling the
+  /// following interceptors (a cache, say) those calls stay pending.
+  ///
+  /// Installing again is a no-op that returns the installed interceptor;
+  /// passing a different [interceptor] then throws an [ArgumentError].
+  /// Setting `dio.httpClientAdapter` afterwards removes the adapter wrapper;
+  /// install again to restore it.
   static ProxieDioInterceptor install(
     Dio dio, {
     ProxieDioInterceptor? interceptor,
   }) {
     final existing = dio.interceptors.whereType<ProxieDioInterceptor>();
-    final installed = existing.isEmpty
-        ? (interceptor ?? ProxieDioInterceptor())
-        : existing.first;
-    if (existing.isEmpty) dio.interceptors.add(installed);
+    final ProxieDioInterceptor installed;
+    if (existing.isEmpty) {
+      installed = interceptor ?? ProxieDioInterceptor();
+      dio.interceptors.add(installed);
+    } else {
+      installed = existing.first;
+      if (interceptor != null && !identical(interceptor, installed)) {
+        throw ArgumentError.value(
+          interceptor,
+          'interceptor',
+          'This Dio already has a different ProxieDioInterceptor',
+        );
+      }
+    }
+    final observed = dio.interceptors.whereType<_ProxieDioObserver>().any(
+      (o) => identical(o.target, installed),
+    );
+    if (!observed) dio.interceptors.insert(0, _ProxieDioObserver(installed));
     if (dio.httpClientAdapter is! _ProxieMarkingAdapter) {
       dio.httpClientAdapter = _ProxieMarkingAdapter(dio.httpClientAdapter);
     }
     installed._installed = dio;
     return installed;
   }
+}
+
+/// Records responses and errors for [target] from the front of the
+/// interceptor list; requests pass straight on.
+///
+/// Once it has handled a call the call id is gone, so [target]'s own
+/// response and error callbacks pass that call through.
+class _ProxieDioObserver extends Interceptor {
+  _ProxieDioObserver(this.target);
+
+  final ProxieDioInterceptor target;
+
+  @override
+  Future<void> onResponse(
+    Response<dynamic> response,
+    ResponseInterceptorHandler handler,
+  ) => target._observeResponse(response, handler);
+
+  @override
+  Future<void> onError(DioException err, ErrorInterceptorHandler handler) =>
+      target._observeError(err, handler);
 }
 
 /// Runs the fetches of calls Proxie records (and replays) inside

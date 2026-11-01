@@ -100,6 +100,19 @@ void _onPause(
   });
 }
 
+/// An engine whose request handling always throws.
+class _ThrowingEngine extends ProxieEngine {
+  _ThrowingEngine(CallSink sink)
+    : super(config: const ProxieConfig(), sink: sink);
+
+  @override
+  Future<RequestDecision> onRequest(
+    String callId,
+    String adapter,
+    ProxieRequest req,
+  ) => throw StateError('broken');
+}
+
 /// The overrides set globally, ignoring zone overrides.
 HttpOverrides? _globalOverrides() => Zone.root.run(() => HttpOverrides.current);
 
@@ -403,15 +416,16 @@ void main() {
     },
   );
 
-  test('request breakpoint abort is an unknown DioException', () async {
+  test('request breakpoint abort is a connectionError', () async {
     engine.rules = RuleSet([_bp('*/json', BreakpointPhase.request)]);
     _onPause(engine, BreakpointPhase.request, (_) => const Abort());
     final err = await dio
         .get<dynamic>(url('/json'))
         .then<DioException>((_) => fail('expected an error'))
         .catchError((Object e) => e as DioException);
-    expect(err.type, DioExceptionType.unknown);
-    expect(err.message, 'Aborted at breakpoint');
+    expect(err.type, DioExceptionType.connectionError);
+    expect(err.message, 'Aborted by Proxie');
+    expect(err.error, 'Aborted at breakpoint');
     expect(server.hitsFor('/json'), 0);
     await pumpEventQueue();
     expect(sink.last.error!.type, 'aborted');
@@ -469,15 +483,16 @@ void main() {
     expect(res.data, {'status': 404});
   });
 
-  test('response breakpoint abort is an unknown DioException', () async {
+  test('response breakpoint abort is a connectionError', () async {
     engine.rules = RuleSet([_bp('*/json', BreakpointPhase.response)]);
     _onPause(engine, BreakpointPhase.response, (_) => const Abort());
     final err = await dio
         .get<dynamic>(url('/json'))
         .then<DioException>((_) => fail('expected an error'))
         .catchError((Object e) => e as DioException);
-    expect(err.type, DioExceptionType.unknown);
-    expect(err.message, 'Aborted at response breakpoint');
+    expect(err.type, DioExceptionType.connectionError);
+    expect(err.message, 'Aborted by Proxie');
+    expect(err.error, 'Aborted at response breakpoint');
     await pumpEventQueue();
     expect(sink.last.error!.type, 'aborted');
   });
@@ -576,30 +591,215 @@ void main() {
     expect(sink.calls, isEmpty);
   });
 
+  /// Retries the first failed request once, against /json.
+  Interceptor retryOnce(Dio d) {
+    var retried = false;
+    return InterceptorsWrapper(
+      onError: (err, handler) async {
+        if (retried) return handler.next(err);
+        retried = true;
+        final again = err.requestOptions..path = url('/json');
+        handler.resolve(await d.fetch<dynamic>(again));
+      },
+    );
+  }
+
   test(
-    'a retry that bypasses the interceptor supersedes the first try',
+    'install: a retry interceptor added first sees a recorded 500',
     () async {
-      var retried = false;
-      dio.interceptors.insert(
-        1,
-        InterceptorsWrapper(
-          onError: (err, handler) async {
-            if (retried) return handler.next(err);
-            retried = true;
-            final again = err.requestOptions..path = url('/json');
-            handler.resolve(await dio.fetch<dynamic>(again));
-          },
-        ),
-      );
-      final res = await dio.get<dynamic>(url('/status/500'));
+      final d = Dio();
+      d.interceptors.add(retryOnce(d));
+      ProxieDio.install(d).attach(engine);
+      final res = await d.get<dynamic>(url('/status/500'));
       expect(res.data, {'hello': 'world'});
       await pumpEventQueue();
       final calls = sink.latest;
       expect(calls, hasLength(2));
-      expect(calls[0].error!.type, 'superseded');
+      expect(calls[0].request.url, server.url('/status/500'));
+      expect(calls[0].response!.statusCode, 500);
+      expect(calls[0].response!.body.text, '{"status":500}');
+      expect(calls[0].error, isNull);
+      expect(calls[1].request.url, server.url('/json'));
       expect(calls[1].response!.statusCode, 200);
+      d.close(force: true);
     },
   );
+
+  test('hand-added after a retry interceptor: first try superseded', () async {
+    final d = Dio();
+    d.interceptors
+      ..add(retryOnce(d))
+      ..add(ProxieDioInterceptor()..attach(engine));
+    await d.get<dynamic>(url('/status/500'));
+    await pumpEventQueue();
+    final calls = sink.latest;
+    expect(calls, hasLength(2));
+    expect(calls[0].error!.type, 'superseded');
+    expect(calls[1].response!.statusCode, 200);
+    d.close(force: true);
+  });
+
+  test('content-type-only edit sends the recorded bytes', () async {
+    engine.rules = RuleSet([_bp('*/echo', BreakpointPhase.request)]);
+    _onPause(engine, BreakpointPhase.request, (p) {
+      return ExecuteRequest(
+        p.request.copyWith(
+          headers: {
+            ...p.request.headers,
+            'content-type': ['text/plain'],
+          },
+        ),
+      );
+    });
+    final res = await dio.post<dynamic>(url('/echo'), data: {'a': 1});
+    final echoed = res.data as Map;
+    expect((echoed['headers'] as Map)['content-type'], 'text/plain');
+    expect(echoed['body'], '{"a":1}');
+  });
+
+  test("header edits keep the app's header name casing", () async {
+    engine.rules = RuleSet([_bp('*/echo', BreakpointPhase.request)]);
+    _onPause(engine, BreakpointPhase.request, (p) {
+      return ExecuteRequest(
+        p.request.copyWith(
+          headers: {
+            ...p.request.headers,
+            'x-new': ['n'],
+          },
+        ),
+      );
+    });
+    final res = await dio.get<dynamic>(
+      url('/echo'),
+      options: Options(headers: {'X-Custom': 'a'}),
+    );
+    final keys = res.requestOptions.headers.keys.toList();
+    expect(keys, containsAll(['X-Custom', 'x-new']));
+    expect(keys, isNot(contains('x-custom')));
+    expect(((res.data as Map)['headers'] as Map)['x-custom'], 'a');
+  });
+
+  test('URL edit with baseUrl, relative path and query parameters', () async {
+    final d = Dio(BaseOptions(baseUrl: url('/')));
+    ProxieDio.install(d).attach(engine);
+    engine.rules = RuleSet([_bp('*/echo*', BreakpointPhase.request)]);
+    Uri? seen;
+    _onPause(engine, BreakpointPhase.request, (p) {
+      seen = p.request.url;
+      return ExecuteRequest(
+        p.request.copyWith(
+          url: p.request.url.replace(queryParameters: {'q': 'edited'}),
+        ),
+      );
+    });
+    final res = await d.get<dynamic>(
+      'echo',
+      queryParameters: {'q': 'orig', 'k': 'v'},
+    );
+    expect(seen, server.url('/echo?q=orig&k=v'));
+    expect((res.data as Map)['uri'], '/echo?q=edited');
+    await pumpEventQueue();
+    expect(sink.last.request.url, server.url('/echo?q=edited'));
+    d.close(force: true);
+  });
+
+  test('cancel while paused at a request breakpoint', () async {
+    engine.rules = RuleSet([_bp('*/json', BreakpointPhase.request)]);
+    final token = CancelToken();
+    late StreamSubscription<List<PausedCall>> sub;
+    sub = engine.breakpoints.changes.listen((pending) {
+      if (pending.isNotEmpty) {
+        sub.cancel();
+        token.cancel('bye');
+      }
+    });
+    final err = await dio
+        .get<dynamic>(url('/json'), cancelToken: token)
+        .then<DioException>((_) => fail('expected an error'))
+        .catchError((Object e) => e as DioException)
+        .timeout(const Duration(seconds: 2));
+    expect(err.type, DioExceptionType.cancel);
+    await pumpEventQueue();
+    expect(engine.breakpoints.pending, isEmpty);
+    expect(sink.last.error!.type, 'cancelled');
+    expect(server.hitsFor('/json'), 0);
+  });
+
+  test('edits to a truncated request body are refused', () async {
+    final small = ProxieEngine(
+      config: const ProxieConfig(teeCap: 4),
+      sink: sink,
+      breakpoints: BreakpointController(timeout: const Duration(seconds: 5)),
+    );
+    addTearDown(small.dispose);
+    interceptor.attach(small);
+    small.rules = RuleSet([_bp('*/echo', BreakpointPhase.request)]);
+    bool? truncated;
+    _onPause(small, BreakpointPhase.request, (p) {
+      truncated = p.request.body.truncated;
+      return ExecuteRequest(
+        p.request.copyWith(
+          body: ProxieBody.from(
+            Uint8List.fromList(utf8.encode('zz')),
+            'text/plain',
+          ),
+        ),
+      );
+    });
+    final res = await dio.post<dynamic>(
+      url('/echo'),
+      data: 'abcdefgh',
+      options: Options(contentType: 'text/plain'),
+    );
+    expect(truncated, isTrue);
+    expect((res.data as Map)['body'], 'abcdefgh');
+  });
+
+  test(
+    'invalid JSON edited into a JSON response reaches the app as text',
+    () async {
+      engine.rules = RuleSet([_bp('*/json', BreakpointPhase.response)]);
+      _onPause(
+        engine,
+        BreakpointPhase.response,
+        (p) => ExecuteResponse(p.response!.copyWith(body: _jsonBody('{oops'))),
+      );
+      final res = await dio.get<dynamic>(url('/json'));
+      expect(res.data, '{oops');
+      await pumpEventQueue();
+      expect(sink.last.response!.body.text, '{oops');
+      expect(sink.last.error, isNull);
+    },
+  );
+
+  test('a mock with invalid JSON reaches the app as text', () async {
+    engine.rules = RuleSet([
+      _mapLocal('*/json', MapLocalAction(response: _jsonRes(200, '{oops'))),
+    ]);
+    final res = await dio.get<dynamic>(url('/json'));
+    expect(res.data, '{oops');
+  });
+
+  test('an engine failure never breaks the request', () async {
+    final broken = _ThrowingEngine(sink);
+    addTearDown(broken.dispose);
+    interceptor.attach(broken);
+    final res = await dio.get<dynamic>(url('/json'));
+    expect(res.data, {'hello': 'world'});
+    expect(server.hitsFor('/json'), 1);
+  });
+
+  test('a non-String-keyed map body is captured as Dio sends it', () async {
+    final res = await dio.post<dynamic>(
+      url('/echo'),
+      data: <dynamic, dynamic>{'a': 1},
+      options: Options(contentType: 'text/plain'),
+    );
+    final sent = (res.data as Map)['body'];
+    expect(sent, '{a: 1}');
+    await pumpEventQueue();
+    expect(sink.last.request.body.text, sent);
+  });
 
   group('install', () {
     test('wraps the adapter: captured fetches run marked', () async {
@@ -613,6 +813,16 @@ void main() {
       expect(rec.marked, [false, true]);
       d.close(force: true);
       expect(rec.closedForce, isTrue);
+    });
+
+    test('a different interceptor on an installed Dio throws', () {
+      final d = Dio();
+      ProxieDio.install(d);
+      expect(
+        () => ProxieDio.install(d, interceptor: ProxieDioInterceptor()),
+        throwsArgumentError,
+      );
+      d.close();
     });
 
     test('is idempotent and accepts a given interceptor', () {

@@ -46,7 +46,9 @@ Future<ProxieBody> captureRequestBody(
     if (data is Uint8List) {
       bytes = data;
     } else {
-      final transformed = await transformer.transformRequest(options);
+      final transformed = _bypassesTransformer(data, options, transformer)
+          ? '$data'
+          : await transformer.transformRequest(options);
       final encoder = options.requestEncoder;
       if (encoder == null) {
         bytes = utf8.encode(transformed);
@@ -61,6 +63,19 @@ Future<ProxieBody> captureRequestBody(
     return _placeholder('body not captured: $e', 0);
   }
 }
+
+/// Whether [data] is a map Dio's built-in transformers only stringify (with
+/// a warning): then the same text is produced here without logging that
+/// warning a second time.
+bool _bypassesTransformer(
+  Object data,
+  RequestOptions options,
+  Transformer transformer,
+) =>
+    (transformer is SyncTransformer || transformer is FusedTransformer) &&
+    data is Map &&
+    data is! Map<String, dynamic> &&
+    !Transformer.isJsonMimeType(options.contentType);
 
 ProxieBody _placeholder(String text, int originalLength) => ProxieBody(
   bytes: Uint8List.fromList(utf8.encode(text)),
@@ -108,20 +123,30 @@ ProxieBody streamedResponseBody(ResponseBody body, String? contentType) {
 /// [bytes] decoded the way Dio decodes a response body for [options]
 /// (`responseType`, `responseDecoder`, JSON content types) with
 /// [transformer].
+///
+/// Bytes that do not decode (for example invalid JSON under a JSON content
+/// type, edited at a breakpoint or mocked) are handed over as UTF-8 text
+/// instead of failing the call.
 Future<Object?> decodeResponseData(
   RequestOptions options,
   Transformer transformer,
   Uint8List bytes,
   int statusCode,
   Map<String, List<String>> headers,
-) => transformer.transformResponse(
-  options,
-  ResponseBody.fromBytes(
-    bytes,
-    statusCode,
-    headers: {for (final e in headers.entries) e.key: List.of(e.value)},
-  ),
-);
+) async {
+  try {
+    return await transformer.transformResponse(
+      options,
+      ResponseBody.fromBytes(
+        bytes,
+        statusCode,
+        headers: {for (final e in headers.entries) e.key: List.of(e.value)},
+      ),
+    );
+  } catch (_) {
+    return utf8.decode(bytes, allowMalformed: true);
+  }
+}
 
 /// Whether two header maps hold the same names and values.
 bool sameHeaders(Map<String, List<String>> a, Map<String, List<String>> b) {

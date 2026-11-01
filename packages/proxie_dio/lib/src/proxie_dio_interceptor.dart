@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
@@ -21,10 +22,19 @@ final _defaultTransformer = SyncTransformer();
 
 /// A Dio [Interceptor] that records calls into an attached Proxie engine.
 ///
-/// Prefer [ProxieDio.install], which also keeps the `HttpOverrides` adapter
-/// from recording the same call again and enables [replay]. Added by hand
-/// (`dio.interceptors.add(ProxieDioInterceptor())`) it captures as well, but
-/// with `ProxieHttpOverridesAdapter` attached each call is recorded twice,
+/// Prefer [ProxieDio.install]: it adds this interceptor last (so it records
+/// requests as the app's interceptors left them) and a response and error
+/// observer first (so responses and errors are recorded before app
+/// interceptors such as retry or auth refresh act on them), keeps the
+/// `HttpOverrides` adapter from recording the same call again, and enables
+/// [replay].
+///
+/// Added by hand (`dio.interceptors.add(ProxieDioInterceptor())`) it records
+/// as well, but responses and errors only once they reach it: a retry or
+/// auth-refresh interceptor placed before it that handles an error hides
+/// that attempt, which is then recorded as `superseded` when the same
+/// request is sent again (or stays pending if it is not). With
+/// `ProxieHttpOverridesAdapter` attached each call is also recorded twice,
 /// bodies are encoded with Dio's default transformer, and [replay] needs a
 /// [replayClient].
 ///
@@ -32,18 +42,22 @@ final _defaultTransformer = SyncTransformer();
 /// through untouched.
 ///
 /// Mocked responses, breakpoint edits and simulated failures are handed on
-/// with `callFollowing…Interceptor` set, so interceptors after this one see
-/// them as they would see real responses and errors.
+/// with `callFollowing…Interceptor` set where Dio allows it, so the app's
+/// interceptors see them as they would see real responses and errors.
 ///
 /// Limitations:
 /// - Request bodies sent as [FormData] or a [Stream] are recorded as a text
-///   placeholder (marked truncated, so they cannot be replayed).
+///   placeholder (marked truncated, so they cannot be replayed or edited).
+/// - Edits to a request body that was stored truncated (over the capture
+///   cap) are ignored: the app's full body is sent.
 /// - [ResponseType.stream] responses are not read: their body is recorded
 ///   empty and marked truncated, and response breakpoints cannot edit them.
 /// - Response bodies are recorded as Dio decoded them (decoded JSON is
 ///   encoded again), not as the raw bytes received.
-/// - A call stays pending if another interceptor completes it without
-///   calling the interceptors after it.
+/// - A call stays pending if an interceptor that runs after this one in the
+///   request phase completes it without calling the following interceptors,
+///   for example a cache interceptor added after [ProxieDio.install] that
+///   answers from its cache. Add such interceptors before installing.
 class ProxieDioInterceptor extends Interceptor implements ProxieCaptureAdapter {
   ProxieDioInterceptor({Dio? replayClient}) : _replayClient = replayClient;
 
@@ -95,8 +109,10 @@ class ProxieDioInterceptor extends Interceptor implements ProxieCaptureAdapter {
     }
     final callId = engine.newCallId();
     options.extra[_callIdKey] = callId;
+    final ProxieRequest captured;
+    final RequestDecision decision;
     try {
-      final captured = ProxieRequest(
+      captured = ProxieRequest(
         method: options.method,
         url: options.uri,
         headers: requestHeaders(options.headers),
@@ -106,8 +122,20 @@ class ProxieDioInterceptor extends Interceptor implements ProxieCaptureAdapter {
           cap: engine.config.teeCap,
         ),
       );
-      final decision = await engine.onRequest(callId, name, captured);
-      if (handler.isCompleted) return;
+      decision = await engine.onRequest(callId, name, captured);
+    } catch (e, st) {
+      // Capturing must never break the request: send it on unrecorded.
+      developer.log('Proxie capture failed', error: e, stackTrace: st);
+      engine.onError(
+        callId,
+        ProxieError(type: 'unknown', message: 'Proxie capture failed: $e'),
+      );
+      _finish(options);
+      if (!handler.isCompleted) handler.next(options);
+      return;
+    }
+    if (handler.isCompleted) return;
+    try {
       switch (decision) {
         case AbortRequest(:final error):
           _finish(options);
@@ -121,10 +149,11 @@ class ProxieDioInterceptor extends Interceptor implements ProxieCaptureAdapter {
           handler.next(options);
       }
     } catch (e, st) {
-      // Capturing must never break the request itself.
+      // Applying the decision failed (ignored when already recorded).
+      developer.log('Proxie decision failed', error: e, stackTrace: st);
       engine.onError(
         callId,
-        ProxieError(type: 'unknown', message: 'Proxie capture failed: $e'),
+        ProxieError(type: 'unknown', message: 'Proxie failed: $e'),
       );
       _finish(options);
       if (!handler.isCompleted) {
@@ -140,6 +169,15 @@ class ProxieDioInterceptor extends Interceptor implements ProxieCaptureAdapter {
   Future<void> onResponse(
     Response<dynamic> response,
     ResponseInterceptorHandler handler,
+  ) => _observeResponse(response, handler);
+
+  @override
+  Future<void> onError(DioException err, ErrorInterceptorHandler handler) =>
+      _observeError(err, handler);
+
+  Future<void> _observeResponse(
+    Response<dynamic> response,
+    ResponseInterceptorHandler handler,
   ) async {
     final engine = _engine;
     final options = response.requestOptions;
@@ -152,6 +190,11 @@ class ProxieDioInterceptor extends Interceptor implements ProxieCaptureAdapter {
     } on ProxieAbortedException catch (e) {
       _finish(options);
       return handler.reject(_aborted(options, e.error), true);
+    } catch (e, st) {
+      developer.log('Proxie response capture failed', error: e, stackTrace: st);
+      _finish(options);
+      if (!handler.isCompleted) handler.next(response);
+      return;
     }
     _finish(options);
     if (handler.isCompleted) return;
@@ -169,8 +212,7 @@ class ProxieDioInterceptor extends Interceptor implements ProxieCaptureAdapter {
     );
   }
 
-  @override
-  Future<void> onError(
+  Future<void> _observeError(
     DioException err,
     ErrorInterceptorHandler handler,
   ) async {
@@ -189,11 +231,21 @@ class ProxieDioInterceptor extends Interceptor implements ProxieCaptureAdapter {
       } on ProxieAbortedException catch (e) {
         _finish(options);
         return handler.next(_aborted(options, e.error));
+      } catch (e, st) {
+        developer.log(
+          'Proxie response capture failed',
+          error: e,
+          stackTrace: st,
+        );
+        _finish(options);
+        if (!handler.isCompleted) handler.next(err);
+        return;
       }
       _finish(options);
       if (handler.isCompleted) return;
       if (out == null) return handler.next(err);
       if (options.validateStatus(response.statusCode)) {
+        // Dio 5.11 offers no callFollowingResponseInterceptor here.
         return handler.resolve(response);
       }
       return handler.next(
@@ -427,9 +479,12 @@ class ProxieDioInterceptor extends Interceptor implements ProxieCaptureAdapter {
 /// Writes the parts of [proceeded] edited at a breakpoint into [options].
 ///
 /// An edited URL becomes the full `path` (so `baseUrl` no longer applies)
-/// with no separate query parameters. An edited body is sent as its bytes;
-/// unchanged bytes keep the app's data (a [FormData] or stream behind a
-/// placeholder, or a body longer than the capture cap).
+/// with no separate query parameters. Edited headers keep the app's casing
+/// for names it already used. An edited body is sent as its bytes, and so is
+/// the recorded body when only the content type changed (Dio would encode
+/// the app's data differently for the new type). Unchanged bytes keep the
+/// app's data (a [FormData] or stream behind a placeholder). Edits to a body
+/// stored truncated are refused: only part of it is known.
 void _applyRequest(
   RequestOptions options,
   ProxieRequest captured,
@@ -441,31 +496,59 @@ void _applyRequest(
       ..path = proceeded.url.toString()
       ..queryParameters = {};
   }
+  const ct = Headers.contentTypeHeader;
+  final typeChanged = !_sameValues(captured.headers[ct], proceeded.headers[ct]);
   if (!sameHeaders(captured.headers, proceeded.headers)) {
-    final contentType = proceeded.headers[Headers.contentTypeHeader];
+    final names = {for (final k in options.headers.keys) k.toLowerCase(): k};
+    final contentType = proceeded.headers[ct];
     options
       ..headers = {
         for (final e in proceeded.headers.entries)
-          e.key: e.value.length == 1 ? e.value.single : e.value,
+          names[e.key] ?? e.key: e.value.length == 1 ? e.value.single : e.value,
       }
       // Clears Dio's default content type too when it was removed.
       ..contentType = contentType?.join(', ');
   }
-  if (!sameBytes(captured.body.bytes, proceeded.body.bytes)) {
+  final bodyEdited = !sameBytes(captured.body.bytes, proceeded.body.bytes);
+  if (captured.body.truncated) {
+    if (bodyEdited) {
+      developer.log(
+        'Proxie: edit to a truncated request body ignored; '
+        'the original body is sent',
+      );
+    }
+    return;
+  }
+  final data = options.data;
+  final reencoded =
+      typeChanged && data != null && data is! FormData && data is! Stream;
+  if (bodyEdited || reencoded) {
     final bytes = proceeded.body.bytes;
     options.data = bytes.isEmpty ? null : Uint8List.fromList(bytes);
   }
+}
+
+bool _sameValues(List<String>? a, List<String>? b) {
+  if (a == null || b == null) return a == b;
+  if (a.length != b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    if (a[i] != b[i]) return false;
+  }
+  return true;
 }
 
 /// Marks the call behind [options] as finished, so later interceptor
 /// callbacks for it (and the marking adapter) pass through.
 void _finish(RequestOptions options) => options.extra.remove(_callIdKey);
 
+/// The error the app gets for a call aborted at a breakpoint; [error]'s
+/// message is kept as `DioException.error`.
 DioException _aborted(RequestOptions options, ProxieError error) =>
     DioException(
       requestOptions: options,
+      type: DioExceptionType.connectionError,
       error: error.message,
-      message: error.message,
+      message: 'Aborted by Proxie',
     );
 
 Headers _dioHeaders(RequestOptions options, Map<String, List<String>> h) =>
