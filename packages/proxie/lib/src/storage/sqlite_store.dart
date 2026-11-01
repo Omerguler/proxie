@@ -40,7 +40,11 @@ class SqliteStore implements ProxieStore {
     DateTime Function()? now,
   }) {
     final db = sqlite3.open(dbPath);
+    final SqliteStore store;
     try {
+      // Wait for a lock held by another connection (e.g. a debugging tool)
+      // instead of failing at once.
+      db.execute('PRAGMA busy_timeout = 5000');
       db.createFunction(
         functionName: _lowerFn,
         argumentCount: const AllowedArgumentCount(1),
@@ -49,12 +53,13 @@ class SqliteStore implements ProxieStore {
       );
       migrateSqliteSchema(db);
       Directory(spillDir).createSync(recursive: true);
+      store = SqliteStore._(db, spillDir, spillThreshold, now ?? DateTime.now)
+        .._sweepOrphans();
     } catch (_) {
       db.close();
       rethrow;
     }
-    return SqliteStore._(db, spillDir, spillThreshold, now ?? DateTime.now)
-      .._sweepOrphans();
+    return store;
   }
 
   /// Deletes spill files no bodies row refers to, left behind by a crash
@@ -168,7 +173,8 @@ class SqliteStore implements ProxieStore {
       _deleteSpillFiles(written);
       rethrow;
     }
-    _deleteSpillFiles(old);
+    // Names are fresh per write, but never delete a file just written.
+    _deleteSpillFiles(old.difference(written));
   }
 
   void _insertBody(
@@ -310,41 +316,43 @@ class SqliteStore implements ProxieStore {
     final (where, params) = _where(q);
     final rows = _db.select(
       '''
-      SELECT id, session_id, method, url, status, duration_ms, res_size, kind,
-        tags, started_at, started_utc, adapter, error_type
-      FROM calls $where
+      SELECT $_summaryColumns FROM calls $where
       ORDER BY started_at DESC, id DESC
       LIMIT ? OFFSET ?''',
       [...params, limit, offset < 0 ? 0 : offset],
     );
-    final out = <CallSummary>[];
-    for (final r in rows) {
-      try {
-        out.add(
-          CallSummary(
-            id: r['id'] as String,
-            sessionId: r['session_id'] as int,
-            method: r['method'] as String,
-            url: r['url'] as String,
-            statusCode: r['status'] as int?,
-            durationMs: r['duration_ms'] as int?,
-            responseSize: r['res_size'] as int,
-            kind: BodyKind.values.byName(r['kind'] as String),
-            tags: Set.unmodifiable(_decodeTags(r['tags'] as String)),
-            startedAt: _startedAt(r),
-            adapter: r['adapter'] as String,
-            hasError: r['error_type'] != null,
-          ),
-        );
-      } on Exception {
-        // Skip a row that no longer decodes rather than failing the page.
-      } on TypeError {
-        // A wrongly typed column.
-      } on ArgumentError {
-        // An unknown enum name (e.g. a kind written by a newer version).
-      }
+    return List.unmodifiable([for (final r in rows) ?_decodeSummary(r)]);
+  }
+
+  static const _summaryColumns =
+      'id, session_id, method, url, status, duration_ms, res_size, kind, '
+      'tags, started_at, started_utc, adapter, error_type';
+
+  /// The summary of a calls row, or null when the row no longer decodes, so
+  /// one bad row is skipped instead of failing the whole page.
+  static CallSummary? _decodeSummary(Row r) {
+    try {
+      return CallSummary(
+        id: r['id'] as String,
+        sessionId: r['session_id'] as int,
+        method: r['method'] as String,
+        url: r['url'] as String,
+        statusCode: r['status'] as int?,
+        durationMs: r['duration_ms'] as int?,
+        responseSize: r['res_size'] as int,
+        kind: BodyKind.values.byName(r['kind'] as String),
+        tags: Set.unmodifiable(_decodeTags(r['tags'] as String)),
+        startedAt: _startedAt(r),
+        adapter: r['adapter'] as String,
+        hasError: r['error_type'] != null,
+      );
+    } on Exception {
+      return null;
+    } on TypeError {
+      return null; // A wrongly typed column.
+    } on ArgumentError {
+      return null; // An unknown enum name (e.g. from a newer version).
     }
-    return List.unmodifiable(out);
   }
 
   /// The stored instant, as a UTC or local DateTime like the original.
@@ -365,11 +373,15 @@ class SqliteStore implements ProxieStore {
   @override
   Future<int> count(CallQuery q) async {
     final (where, params) = _where(q);
-    return _db
-            .select('SELECT count(*) FROM calls $where', params)
-            .single
-            .columnAt(0)
-        as int;
+    // Decodes like query() so both agree when a row is corrupt.
+    var n = 0;
+    for (final r in _db.select(
+      'SELECT $_summaryColumns FROM calls $where',
+      params,
+    )) {
+      if (_decodeSummary(r) != null) n++;
+    }
+    return n;
   }
 
   @override

@@ -706,6 +706,8 @@ void main() {
       db.execute("UPDATE calls SET meta = x'7b' WHERE id = 'c'");
       db.execute("UPDATE bodies SET kind = 'future' WHERE call_id = 'd'");
       expect(await _ids(store, const CallQuery()), ['d', 'c', 'a']);
+      expect(await store.count(const CallQuery()), 3);
+      expect(await store.count(const CallQuery(methods: {'POST'})), 3);
       expect(await store.get('a'), isNotNull);
       expect(await store.get('c'), isNull);
       expect(await store.get('d'), isNull);
