@@ -4,6 +4,8 @@ library;
 export 'src/adapters/capture_adapter.dart';
 export 'src/adapters/capture_marker.dart';
 export 'src/adapters/http_client_adapter.dart';
+export 'src/adapters/http_overrides_stub.dart'
+    if (dart.library.io) 'src/adapters/http_overrides_adapter.dart';
 export 'src/core/body_classifier.dart' show classifyBody;
 export 'src/config.dart';
 export 'src/core/breakpoint_controller.dart';

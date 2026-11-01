@@ -6,11 +6,16 @@ import 'dart:typed_data';
 ///
 /// Routes:
 /// - `/json` → `{"hello":"world"}`
-/// - `/echo` → JSON `{method, headers, body}` (body is the UTF-8 request body)
+/// - `/echo` → JSON `{method, uri, headers, body}` (body is the UTF-8 request
+///   body)
 /// - `/big?mb=N` → N MB of `a` in 64 KB chunks, `text/plain`
 /// - `/status/<code>` → that status with a JSON body
 /// - `/redirect` → 302 to the absolute `/json` URL
 /// - `/cookies` → two `Set-Cookie` headers (one with an `Expires` date)
+/// - `/stream` → `text/plain` chunks of 1 KB every 10 ms for up to 10 s (or
+///   until the server closes)
+/// - `/drop` → promises 100 bytes of `text/plain`, sends `partial`, then
+///   closes the connection
 class TestServer {
   TestServer._(this._server) {
     _server.listen(_handle);
@@ -25,7 +30,24 @@ class TestServer {
 
   int hitsFor(String path) => hits[path] ?? 0;
 
-  Future<void> close() => _server.close(force: true);
+  /// Completes once no client connection is open, or throws a [StateError]
+  /// after [timeout].
+  Future<void> waitForNoConnections({
+    Duration timeout = const Duration(seconds: 5),
+  }) async {
+    final sw = Stopwatch()..start();
+    while (_server.connectionsInfo().total > 0) {
+      if (sw.elapsed > timeout) throw StateError('Connections still open');
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+  }
+
+  var _closed = false;
+
+  Future<void> close() {
+    _closed = true;
+    return _server.close(force: true);
+  }
 
   Future<void> _handle(HttpRequest req) async {
     final path = req.uri.path;
@@ -46,6 +68,7 @@ class TestServer {
         res.write(
           jsonEncode({
             'method': req.method,
+            'uri': req.uri.toString(),
             'headers': headers,
             'body': utf8.decode(body.takeBytes(), allowMalformed: true),
           }),
@@ -68,6 +91,23 @@ class TestServer {
           ..add('set-cookie', 'b=2');
         res.headers.contentType = ContentType.text;
         res.write('ok');
+      } else if (path == '/stream') {
+        res.headers.contentType = ContentType.text;
+        final chunk = Uint8List(1024)..fillRange(0, 1024, 0x62);
+        for (var i = 0; i < 1000 && !_closed; i++) {
+          res.add(chunk);
+          await res.flush();
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+        }
+      } else if (path == '/drop') {
+        final socket = await res.detachSocket(writeHeaders: false);
+        socket.write(
+          'HTTP/1.1 200 OK\r\ncontent-length: 100\r\n'
+          'content-type: text/plain\r\n\r\npartial',
+        );
+        await socket.flush();
+        socket.destroy();
+        return;
       } else if (path.startsWith('/status/')) {
         final code = int.parse(path.substring('/status/'.length));
         res.statusCode = code;
