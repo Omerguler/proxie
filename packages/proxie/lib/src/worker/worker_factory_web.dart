@@ -7,4 +7,5 @@ import 'worker.dart';
 Future<ProxieWorker> spawnProxieWorker(
   ProxieConfig config, {
   String? supportDir,
+  Duration startupTimeout = const Duration(seconds: 30),
 }) => InProcessWorker.start(MemoryStore(), config);

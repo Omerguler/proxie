@@ -1,7 +1,8 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 import 'dart:isolate';
 
-import 'package:flutter/foundation.dart' show debugPrint, visibleForTesting;
+import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import '../config.dart';
 import '../model/call.dart';
@@ -12,20 +13,27 @@ import 'worker.dart';
 /// A [ProxieWorker] running in its own isolate of the same group, so
 /// commands and results are sent as objects, without serialization.
 class IsolateWorker implements ProxieWorker {
-  IsolateWorker._(this._isolate, this._port);
+  IsolateWorker._(this._isolate, this._port, this._disposeTimeout);
 
-  /// How long [dispose] waits for queued commands before killing the isolate.
-  static const disposeTimeout = Duration(seconds: 5);
+  /// Default bound on opening and starting the store.
+  static const defaultStartupTimeout = Duration(seconds: 30);
+
+  /// Default time [dispose] waits for queued commands before killing the
+  /// isolate.
+  static const defaultDisposeTimeout = Duration(seconds: 5);
 
   /// Spawns the worker; [openStore] runs inside the new isolate and must be
   /// sendable (capture only plain values).
   ///
   /// Fails with a [ProxieWorkerException] when the store cannot be opened or
-  /// started, or a [StateError] when the isolate dies during startup.
+  /// started, or a [StateError] when the isolate dies during startup or
+  /// startup takes longer than [startupTimeout] (the isolate is then killed).
   static Future<IsolateWorker> spawn(
     ProxieConfig config,
-    ProxieStore Function() openStore,
-  ) async {
+    ProxieStore Function() openStore, {
+    Duration startupTimeout = defaultStartupTimeout,
+    Duration disposeTimeout = defaultDisposeTimeout,
+  }) async {
     final port = RawReceivePort();
     final ready = Completer<_Ready>();
     Object? lastError;
@@ -38,7 +46,10 @@ class IsolateWorker implements ProxieWorker {
           ready.completeError(msg.exception);
         case null: // exit
           ready.completeError(
-            StateError('Proxie worker exited during startup: $lastError'),
+            StateError(
+              'Proxie worker exited during startup'
+              '${lastError == null ? '' : ': $lastError'}',
+            ),
           );
         case [final error, final stack]: // uncaught error
           lastError = '$error\n$stack';
@@ -59,13 +70,18 @@ class IsolateWorker implements ProxieWorker {
     }
     final _Ready r;
     try {
-      r = await ready.future;
+      r = await ready.future.timeout(
+        startupTimeout,
+        onTimeout: () => throw StateError(
+          'Proxie worker did not start within $startupTimeout',
+        ),
+      );
     } catch (_) {
       port.close();
       isolate.kill(priority: Isolate.immediate);
       rethrow;
     }
-    return IsolateWorker._(isolate, port)
+    return IsolateWorker._(isolate, port, disposeTimeout)
       .._commands = r.commands
       .._sessionId = r.sessionId
       .._listen();
@@ -76,6 +92,7 @@ class IsolateWorker implements ProxieWorker {
   @visibleForTesting
   Isolate get isolate => _isolate;
   final RawReceivePort _port;
+  final Duration _disposeTimeout;
   late final SendPort _commands;
   late final int _sessionId;
 
@@ -130,7 +147,7 @@ class IsolateWorker implements ProxieWorker {
     try {
       _commands.send(_Upsert(call));
     } catch (e) {
-      debugPrint('Proxie: failed to send call ${call.id}: $e');
+      developer.log('Failed to send call ${call.id}', name: 'proxie', error: e);
     }
   }
 
@@ -142,13 +159,16 @@ class IsolateWorker implements ProxieWorker {
     _pending[id] = completer;
     try {
       _commands.send(_Run(id, cmd));
-    } catch (_) {
+    } catch (e, st) {
       _pending.remove(id);
-      rethrow;
+      throw ProxieWorkerException.wrap(e, st);
     }
     return await completer.future as R;
   }
 
+  /// Waits up to the dispose timeout (default [defaultDisposeTimeout]) for
+  /// queued commands and the store's close; after that the isolate is
+  /// killed, queued work is dropped and the store is left unclosed.
   @override
   Future<void> dispose() => _disposing ??= _dispose();
 
@@ -157,8 +177,13 @@ class IsolateWorker implements ProxieWorker {
     if (_dead) return;
     _commands.send(const _Dispose());
     try {
-      await _exited.future.timeout(disposeTimeout);
+      await _exited.future.timeout(_disposeTimeout);
     } on TimeoutException {
+      developer.log(
+        'Worker did not stop within $_disposeTimeout; killing it. '
+        'Queued work is dropped and the store is not closed.',
+        name: 'proxie',
+      );
       _isolate.kill(priority: Isolate.immediate);
       await _exited.future;
     }
@@ -203,7 +228,11 @@ class IsolateWorker implements ProxieWorker {
               .then(
                 (_) => Isolate.exit(),
                 onError: (Object e) {
-                  debugPrint('Proxie: failed to close the store: $e');
+                  developer.log(
+                    'Failed to close the store',
+                    name: 'proxie',
+                    error: e,
+                  );
                   Isolate.exit();
                 },
               );

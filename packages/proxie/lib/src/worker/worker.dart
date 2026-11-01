@@ -23,6 +23,8 @@ class WorkerContext {
 abstract class WorkerCommand<R> {
   const WorkerCommand();
 
+  /// Must complete. Commands run one at a time, so one that never completes
+  /// stalls every later command until the worker is disposed.
   Future<R> execute(WorkerContext ctx);
 }
 

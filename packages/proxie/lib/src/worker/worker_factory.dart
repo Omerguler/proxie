@@ -12,8 +12,15 @@ import 'worker_factory_io.dart'
 /// [supportDir] is resolved with `getApplicationSupportDirectory()` on the
 /// calling isolate. Web: an in-process worker over an in-memory store.
 ///
-/// The worker starts a session and applies retention before completing.
+/// The worker starts a session and applies retention before completing;
+/// on native, startup that takes longer than [startupTimeout] fails with a
+/// [StateError].
 Future<ProxieWorker> spawnProxieWorker(
   ProxieConfig config, {
   String? supportDir,
-}) => impl.spawnProxieWorker(config, supportDir: supportDir);
+  Duration startupTimeout = const Duration(seconds: 30),
+}) => impl.spawnProxieWorker(
+  config,
+  supportDir: supportDir,
+  startupTimeout: startupTimeout,
+);

@@ -1,3 +1,4 @@
+import '../config.dart';
 import '../core/presets.dart';
 import '../core/rule.dart';
 import '../model/call.dart';
@@ -98,7 +99,9 @@ class SavePreset extends WorkerCommand<void> {
       ctx.store.saveCustomPreset(id, label, action);
 }
 
-/// Applies retention; unset limits default to the configured ones.
+/// Applies retention. A null limit means "use the configured value"
+/// ([ProxieConfig.retentionCalls] / [ProxieConfig.retentionAge]), not
+/// unlimited.
 class Trim extends WorkerCommand<void> {
   const Trim({this.maxCalls, this.maxAge});
 

@@ -1,9 +1,12 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
+import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 import 'package:proxie/proxie.dart';
 import 'package:proxie/src/worker/in_process_worker.dart';
 import 'package:proxie/src/worker/isolate_worker.dart';
@@ -99,6 +102,60 @@ class _ClosingStore extends MemoryStore {
 // A plain function so the closure captures only [marker] and stays sendable.
 ProxieStore Function() _closingOpener(String marker) =>
     () => _ClosingStore(marker);
+
+/// Never finishes starting a session; the open port keeps its isolate alive
+/// the way a blocked database open would.
+class _HangingStore extends MemoryStore {
+  @override
+  Future<int> startSession() {
+    RawReceivePort();
+    return Completer<int>().future;
+  }
+}
+
+/// Fails every upsert.
+class _FailingUpsertStore extends MemoryStore {
+  @override
+  Future<void> upsert(ProxieCall c) async => throw StateError('disk full');
+}
+
+ProxieStore _hangingOpener() => _HangingStore();
+
+ProxieStore _failingUpsertOpener() => _FailingUpsertStore();
+
+ProxieStore _exitingOpener() => Isolate.exit();
+
+/// Holds a port, so it cannot be sent to the worker isolate.
+class _UnsendableCommand extends WorkerCommand<int> {
+  _UnsendableCommand() : port = RawReceivePort();
+
+  final RawReceivePort port;
+
+  @override
+  Future<int> execute(WorkerContext ctx) async => 1;
+}
+
+/// Never completes.
+class _Hang extends WorkerCommand<void> {
+  const _Hang();
+
+  @override
+  Future<void> execute(WorkerContext ctx) => Completer<void>().future;
+}
+
+class _FakePathProvider extends PathProviderPlatform
+    with MockPlatformInterfaceMixin {
+  _FakePathProvider(this.support);
+
+  final String support;
+  int calls = 0;
+
+  @override
+  Future<String?> getApplicationSupportPath() async {
+    calls++;
+    return support;
+  }
+}
 
 void _contract(
   String name,
@@ -262,7 +319,106 @@ void main() {
     expect(File(marker).existsSync(), isTrue);
   });
 
+  test('InProcessWorker keeps serving after a failed upsert', () async {
+    final w = await InProcessWorker.start(
+      _FailingUpsertStore(),
+      const ProxieConfig(),
+    );
+    w.upsert(_call('f'));
+    expect(await w.run(const CountCalls()), 0);
+    await w.dispose();
+  });
+
   group('IsolateWorker on disk', () {
+    test('a null supportDir is resolved with path_provider', () async {
+      final original = PathProviderPlatform.instance;
+      addTearDown(() => PathProviderPlatform.instance = original);
+      final dir = _tempDir();
+      final fake = _FakePathProvider(dir.path);
+      PathProviderPlatform.instance = fake;
+      final w = await spawnProxieWorker(const ProxieConfig());
+      addTearDown(w.dispose);
+      expect(fake.calls, 1);
+      expect(
+        File(_join(_join(dir.path, 'proxie'), 'proxie.db')).existsSync(),
+        isTrue,
+      );
+    });
+
+    test('startup that never completes fails after startupTimeout', () async {
+      await expectLater(
+        IsolateWorker.spawn(
+          const ProxieConfig(),
+          _hangingOpener,
+          startupTimeout: const Duration(milliseconds: 200),
+        ),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('did not start'),
+          ),
+        ),
+      );
+    });
+
+    test('an isolate exiting during startup fails spawn', () async {
+      await expectLater(
+        IsolateWorker.spawn(const ProxieConfig(), _exitingOpener),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('exited during startup'),
+          ),
+        ),
+      );
+    });
+
+    test('a failed upsert is logged and the worker keeps serving', () async {
+      final w = await IsolateWorker.spawn(
+        const ProxieConfig(),
+        _failingUpsertOpener,
+      );
+      addTearDown(w.dispose);
+      w.upsert(_call('f'));
+      expect(await w.run(const CountCalls()), 0);
+    });
+
+    test(
+      'a command that cannot be sent fails with ProxieWorkerException',
+      () async {
+        final w = await spawnProxieWorker(
+          const ProxieConfig(persistHistory: false),
+        );
+        addTearDown(w.dispose);
+        final cmd = _UnsendableCommand();
+        addTearDown(cmd.port.close);
+        await expectLater(
+          w.run(cmd),
+          throwsA(
+            isA<ProxieWorkerException>().having(
+              (e) => e.type,
+              'type',
+              'ArgumentError',
+            ),
+          ),
+        );
+        expect(await w.run(const CountCalls()), 0);
+      },
+    );
+
+    test('dispose kills a stalled worker after disposeTimeout', () async {
+      final w = await IsolateWorker.spawn(
+        const ProxieConfig(),
+        MemoryStore.new,
+        disposeTimeout: const Duration(milliseconds: 200),
+      );
+      final stalled = w.run(const _Hang());
+      await w.dispose().timeout(const Duration(seconds: 10));
+      await expectLater(stalled, throwsStateError);
+    });
+
     test('stores proxie.db and spill under <supportDir>/proxie', () async {
       final dir = _tempDir();
       final w = await spawnProxieWorker(
@@ -283,6 +439,7 @@ void main() {
         _closingOpener(marker),
       );
       final exit = ReceivePort();
+      addTearDown(exit.close);
       w.isolate.addOnExitListener(exit.sendPort);
       w.upsert(_call('d'));
       await w.run(const CountCalls());
@@ -290,7 +447,6 @@ void main() {
       await w.dispose();
       expect(File(marker).existsSync(), isTrue);
       await exit.first.timeout(const Duration(seconds: 10));
-      exit.close();
     });
 
     test('history survives into the next worker', () async {
@@ -334,7 +490,11 @@ void main() {
           const ProxieConfig(),
           supportDir: dir.path,
         ).timeout(const Duration(seconds: 20)),
-        throwsA(isA<ProxieWorkerException>()),
+        throwsA(
+          isA<ProxieWorkerException>()
+              .having((e) => e.type, 'type', 'SqliteException')
+              .having((e) => e.message, 'message', contains('unable to open')),
+        ),
       );
     });
 

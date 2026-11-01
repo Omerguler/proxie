@@ -12,9 +12,14 @@ import 'worker.dart';
 Future<ProxieWorker> spawnProxieWorker(
   ProxieConfig config, {
   String? supportDir,
+  Duration startupTimeout = const Duration(seconds: 30),
 }) async {
   if (!config.persistHistory) {
-    return IsolateWorker.spawn(config, MemoryStore.new);
+    return IsolateWorker.spawn(
+      config,
+      MemoryStore.new,
+      startupTimeout: startupTimeout,
+    );
   }
   // Plugins are unavailable in background isolates: resolve the path here.
   final base = supportDir ?? (await getApplicationSupportDirectory()).path;
@@ -24,6 +29,7 @@ Future<ProxieWorker> spawnProxieWorker(
       '$base${Platform.pathSeparator}proxie',
       config.spillThreshold,
     ),
+    startupTimeout: startupTimeout,
   );
 }
 

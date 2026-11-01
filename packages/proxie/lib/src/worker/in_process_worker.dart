@@ -1,4 +1,4 @@
-import 'package:flutter/foundation.dart' show debugPrint;
+import 'dart:developer' as developer;
 
 import '../config.dart';
 import '../model/call.dart';
@@ -19,15 +19,10 @@ class InProcessWorker implements ProxieWorker {
     ProxieConfig config,
   ) async {
     try {
+      final ctx = WorkerContext(store: store, config: config);
       final session = await store.startSession();
-      await store.trim(
-        maxCalls: config.retentionCalls,
-        maxAge: config.retentionAge,
-      );
-      return InProcessWorker._(
-        WorkerContext(store: store, config: config),
-        session,
-      );
+      await const Trim().execute(ctx);
+      return InProcessWorker._(ctx, session);
     } catch (_) {
       try {
         await store.close();
@@ -55,8 +50,13 @@ class InProcessWorker implements ProxieWorker {
   @override
   void upsert(ProxieCall call) {
     if (_disposing != null) return;
-    _enqueue(UpsertCall(call)).catchError((Object e) {
-      debugPrint('Proxie: failed to store call ${call.id}: $e');
+    _enqueue(UpsertCall(call)).catchError((Object e, StackTrace st) {
+      developer.log(
+        'Failed to store call ${call.id}',
+        name: 'proxie',
+        error: e,
+        stackTrace: st,
+      );
     });
   }
 
