@@ -14,6 +14,14 @@ const int escapedFlag = 0x08;
 /// [JsonNodes.flags]: an expanded container.
 const int expandedFlag = 0x10;
 
+/// [JsonNodes.flags]: a node removed by an edit. It stays allocated but is
+/// unlinked from its parent and must not be used.
+const int deletedFlag = 0x20;
+
+/// [JsonNodes.flags]: a scalar set by an edit; its value is held outside
+/// the source bytes and [JsonNodes.valueStart] is meaningless.
+const int editedFlag = 0x40;
+
 /// Typed parallel arrays describing every node of a JSON document; -1
 /// means "none". Children are linked through [firstChild] / [nextSibling]
 /// and every node's id is larger than its parent's.
@@ -52,6 +60,8 @@ class JsonNodes {
   bool isContainer(int id) => (flags[id] & kindMask) <= JsonKind.array.index;
 
   bool expanded(int id) => flags[id] & expandedFlag != 0;
+
+  bool deleted(int id) => flags[id] & deletedFlag != 0;
 
   void setExpanded(int id, bool value) =>
       flags[id] = value ? flags[id] | expandedFlag : flags[id] & ~expandedFlag;

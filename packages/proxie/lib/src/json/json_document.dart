@@ -1,3 +1,4 @@
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:typed_data';
@@ -6,6 +7,8 @@ import 'json_nodes.dart';
 import 'json_parser.dart';
 import 'json_row.dart';
 import 'json_schema.dart';
+
+part 'json_edit.dart';
 
 /// Longest [JsonRow.preview].
 const int _previewLimit = 120;
@@ -25,6 +28,9 @@ const int _previewLimit = 120;
 /// expanded; a toggle updates that count along the ancestor chain, and each
 /// container caches prefix sums of its children's visible sizes (rebuilt
 /// lazily once invalidated), so [rows] is O(count + depth · log(children)).
+///
+/// [apply] edits the tree in place. Node ids stay stable: new nodes get new
+/// ids and deleted ones are retired, never reused.
 class JsonDocument {
   JsonDocument._(this.parseError, this._source, this._n);
 
@@ -63,8 +69,40 @@ class JsonDocument {
   /// Quoted UTF-8 member names, per key id, built on first [encode].
   List<Uint8List>? _encodedKeys;
 
-  /// Number of values in the document (0 when it did not parse).
-  int get nodeCount => _n.length;
+  /// Key id per member name, built on the first edit that needs it.
+  Map<String, int>? _keyIds;
+
+  /// Values of scalars set by edits (marked [editedFlag]): the text of a
+  /// string, the lexeme of a number, or a [bool].
+  final Map<int, Object> _values = {};
+
+  /// Nodes retired by edits; they keep their storage.
+  int _deleted = 0;
+
+  bool _dirty = false;
+
+  /// Whether an edit has changed the document.
+  bool get dirty => _dirty;
+
+  /// Number of values in the document (0 when it did not parse); nodes
+  /// removed by edits are not counted.
+  int get nodeCount => _n.length - _deleted;
+
+  /// Node slots held in storage, including those of removed nodes; what the
+  /// document's memory grows with.
+  int get storedNodes => _n.length;
+
+  /// Applies [edit] and returns the new [visibleCount]. Throws a
+  /// [StateError] when there is a [parseError], and an [ArgumentError]
+  /// (leaving the document unchanged) when the edit does not apply; see
+  /// [JsonEdit].
+  int apply(JsonEdit edit) {
+    if (parseError != null) {
+      throw StateError('Document has no JSON: $parseError');
+    }
+    _apply(edit);
+    return visibleCount;
+  }
 
   bool get _scalarRoot => _n.length > 0 && !_n.isContainer(0);
 
@@ -236,6 +274,7 @@ class JsonDocument {
     // Row depth of each node, filled in id order (parents come first).
     final depth = Int32List(_n.length);
     for (var id = 1; id < _n.length; id++) {
+      if (_n.deleted(id)) continue;
       final p = _n.parent[id];
       depth[id] = p == 0 ? 0 : depth[p] + 1;
       _n.setExpanded(id, _n.isContainer(id) && depth[id] < maxDepth);
@@ -257,6 +296,7 @@ class JsonDocument {
     final inner = _n.inner;
     inner.fillRange(0, _n.length, 0);
     for (var id = _n.length - 1; id > 0; id--) {
+      if (_n.deleted(id)) continue;
       inner[_n.parent[id]] += 1 + (_n.expanded(id) ? inner[id] : 0);
     }
     _children.clear();
@@ -282,7 +322,10 @@ class JsonDocument {
     if (parseError != null || source == null) {
       throw StateError('Document has no JSON: $parseError');
     }
-    final keys = _encodedKeys ??= [for (final k in _n.keys) _quotedUtf8(k)];
+    final keys = _encodedKeys ??= [];
+    for (var k = keys.length; k < _n.keys.length; k++) {
+      keys.add(_quotedUtf8(_n.keys[k]));
+    }
     final out = _ByteSink(source.length + 16);
     final open = <int>[]; // containers being written
     final cursor = <int>[]; // next child to write in each of them
@@ -309,12 +352,17 @@ class JsonDocument {
             open.add(id);
             cursor.add(_n.firstChild[id]);
           }
+        case JsonKind.string when _edited(id):
+          final s = _quotedUtf8(_values[id] as String);
+          out.addRange(s, 0, s.length);
         case JsonKind.string:
           out.addRange(source, start, jsonStringEnd(source, start));
+        case JsonKind.number when _edited(id):
+          out.addAscii(_values[id] as String);
         case JsonKind.number:
           out.addRange(source, start, jsonNumberEnd(source, start));
         case JsonKind.boolean:
-          out.addAscii(source[start] == 0x74 ? 'true' : 'false');
+          out.addAscii(_boolean(id) ? 'true' : 'false');
         case JsonKind.nullValue:
           out.addAscii('null');
       }
@@ -358,14 +406,22 @@ class JsonDocument {
         return '[$n ${n == 1 ? 'item' : 'items'}]';
       case JsonKind.string:
         return _quotedPreview(
-          decodeJsonString(
-            _source!,
-            start,
-            maxUnits: _previewLimit,
-            escaped: _n.flags[id] & escapedFlag != 0,
-          ),
+          _edited(id)
+              ? _values[id] as String
+              : decodeJsonString(
+                  _source!,
+                  start,
+                  maxUnits: _previewLimit,
+                  escaped: _n.flags[id] & escapedFlag != 0,
+                ),
         );
       case JsonKind.number:
+        if (_edited(id)) {
+          final lexeme = _values[id] as String;
+          return lexeme.length <= _previewLimit
+              ? lexeme
+              : '${lexeme.substring(0, _previewLimit - 1)}…';
+        }
         final source = _source!;
         final end = jsonNumberEnd(source, start);
         if (end - start <= _previewLimit) {
@@ -373,14 +429,25 @@ class JsonDocument {
         }
         return '${String.fromCharCodes(source, start, start + _previewLimit - 1)}…';
       case JsonKind.boolean:
-        return _source![start] == 0x74 ? 'true' : 'false';
+        return _boolean(id) ? 'true' : 'false';
       case JsonKind.nullValue:
         return 'null';
     }
   }
 
-  void _checkId(int nodeId) =>
-      RangeError.checkValueInInterval(nodeId, 0, _n.length - 1, 'nodeId');
+  /// Throws an [ArgumentError] ([RangeError] when out of range) unless
+  /// [nodeId] names a live node.
+  void _checkId(int nodeId) {
+    RangeError.checkValueInInterval(nodeId, 0, _n.length - 1, 'nodeId');
+    if (_n.deleted(nodeId)) {
+      throw ArgumentError.value(nodeId, 'nodeId', 'Node was deleted');
+    }
+  }
+
+  bool _edited(int id) => _n.flags[id] & editedFlag != 0;
+
+  bool _boolean(int id) =>
+      _edited(id) ? _values[id] as bool : _source![_n.valueStart[id]] == 0x74;
 }
 
 class _Children {

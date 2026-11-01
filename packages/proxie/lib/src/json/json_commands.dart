@@ -132,6 +132,43 @@ class JsonSchema extends WorkerCommand<ArraySchema?> {
       _JsonDocs.of(ctx).get(docId).schemaOf(nodeId);
 }
 
+/// Applies [edit] to the document; returns the new visible row count. See
+/// [JsonDocument.apply].
+class JsonApply extends WorkerCommand<int> {
+  const JsonApply(this.docId, this.edit);
+
+  final String docId;
+  final JsonEdit edit;
+
+  @override
+  Future<int> execute(WorkerContext ctx) async {
+    final docs = _JsonDocs.of(ctx);
+    final count = docs.get(docId).apply(edit);
+    docs.recharge(docId);
+    return count;
+  }
+}
+
+/// The document as UTF-8 JSON (see [JsonDocument.encode]). A compact
+/// encoding of a document no edit has changed is the original body, byte
+/// for byte. Throws a [StateError] when the body did not parse.
+class JsonEncode extends WorkerCommand<Uint8List> {
+  const JsonEncode(this.docId, {this.pretty = false});
+
+  final String docId;
+  final bool pretty;
+
+  @override
+  Future<Uint8List> execute(WorkerContext ctx) async {
+    final docs = _JsonDocs.of(ctx);
+    final doc = docs.get(docId);
+    if (!pretty && !doc.dirty && doc.parseError == null) {
+      return Uint8List.fromList(docs.bytes(docId));
+    }
+    return doc.encode(pretty: pretty);
+  }
+}
+
 /// Releases a document; unknown ids are ignored.
 class CloseJson extends WorkerCommand<void> {
   const CloseJson(this.docId);
@@ -144,11 +181,15 @@ class CloseJson extends WorkerCommand<void> {
 }
 
 class _Entry {
-  _Entry(this.source, this.bytes);
+  _Entry(this.source, this.bytes, this.nodes);
 
   /// `callId \0 side`.
   final String source;
+
   final Uint8List bytes;
+
+  /// Nodes charged to the budget for this document.
+  int nodes;
 }
 
 /// Open documents, stored in [WorkerContext.resources] as `json:<docId>`,
@@ -187,17 +228,34 @@ class _JsonDocs {
   }
 
   (String, JsonDocument) add(String source, Uint8List bytes, JsonDocument doc) {
+    final nodes = doc.storedNodes;
     while (_open.isNotEmpty &&
         (_open.length >= maxOpenJsonDocs ||
-            _nodes + doc.nodeCount > maxOpenJsonNodes)) {
+            _nodes + nodes > maxOpenJsonNodes)) {
       remove(_open.keys.first);
     }
     final id = '${_nextId++}';
     _resources['json:$id'] = doc;
-    _open[id] = _Entry(source, bytes);
+    _open[id] = _Entry(source, bytes, nodes);
     _bySource[source] = id;
-    _nodes += doc.nodeCount;
+    _nodes += nodes;
     return (id, doc);
+  }
+
+  /// The body [docId] was opened from.
+  Uint8List bytes(String docId) => _open[docId]!.bytes;
+
+  /// Charges the open document [docId] for nodes added since it was opened,
+  /// evicting other documents (least recently used first) to stay within
+  /// [maxOpenJsonNodes].
+  void recharge(String docId) {
+    final entry = _open[docId]!;
+    final nodes = _doc(docId).storedNodes;
+    _nodes += nodes - entry.nodes;
+    entry.nodes = nodes;
+    while (_nodes > maxOpenJsonNodes && _open.keys.first != docId) {
+      remove(_open.keys.first);
+    }
   }
 
   /// The open document [docId], marked as most recently used.
@@ -211,7 +269,7 @@ class _JsonDocs {
   void remove(String docId) {
     final entry = _open.remove(docId);
     if (entry == null) return;
-    _nodes -= _doc(docId).nodeCount;
+    _nodes -= entry.nodes;
     _resources.remove('json:$docId');
     _bySource.remove(entry.source);
   }

@@ -224,6 +224,115 @@ void main() {
     expect(await JsonSchema(h.docId, rows[1].nodeId).execute(ctx), isNull);
   });
 
+  test('JsonApply edits; JsonEncode returns untouched bodies as is', () async {
+    const src = '{ "a" : 1.0,\n  "b": [1, 2] }';
+    await store.upsert(_call('c1', response: _body(src)));
+    final h = await open('c1', JsonBodySide.response);
+    final untouched = await JsonEncode(h.docId).execute(ctx);
+    expect(utf8.decode(untouched), src);
+    expect(
+      utf8.decode(await JsonEncode(h.docId, pretty: true).execute(ctx)),
+      '{\n  "a": 1.0,\n  "b": [\n    1,\n    2\n  ]\n}',
+    );
+    final b = (await JsonRows(h.docId, 1, 1).execute(ctx)).single;
+    expect(await JsonApply(h.docId, AddItem(b.nodeId, 3)).execute(ctx), 2);
+    expect(
+      utf8.decode(await JsonEncode(h.docId).execute(ctx)),
+      '{"a":1.0,"b":[1,2,3]}',
+    );
+    // The stored body is not touched by edits.
+    expect(utf8.decode((await store.get('c1'))!.response!.body.bytes), src);
+    expect(() => JsonApply('x', const DeleteNode(1)).execute(ctx), _closed);
+    expect(() => JsonEncode('x').execute(ctx), _closed);
+  });
+
+  test('JsonApply and JsonEncode on an unparsed body throw', () async {
+    await store.upsert(_call('c1', response: _body('{"a":')));
+    final h = await open('c1', JsonBodySide.response);
+    expect(
+      () => JsonApply(h.docId, const SetValue(0, 1)).execute(ctx),
+      throwsStateError,
+    );
+    expect(() => JsonEncode(h.docId).execute(ctx), throwsStateError);
+  });
+
+  test('nodes added by edits count towards the budget', () async {
+    await store.upsert(_call('big', response: _zeros(2500000)));
+    await store.upsert(_call('small', response: _body('[1]')));
+    final big = await open('big', JsonBodySide.response);
+    final small = await open('small', JsonBodySide.response);
+    final count = await JsonApply(
+      small.docId,
+      AddItem(0, List.filled(1600000, 0)),
+    ).execute(ctx);
+    expect(count, 2);
+    // big was least recently used and had to go; small stays.
+    expect(() => JsonRows(big.docId, 0, 1).execute(ctx), _closed);
+    expect(await JsonRows(small.docId, 0, 1).execute(ctx), hasLength(1));
+    // Closing releases what was charged: two 2M-node docs fit again.
+    await CloseJson(small.docId).execute(ctx);
+    await store.upsert(_call('a', response: _zeros(2000000)));
+    await store.upsert(_call('b', response: _zeros(1999998)));
+    final a = await open('a', JsonBodySide.response);
+    await open('b', JsonBodySide.response);
+    expect(await JsonRows(a.docId, 0, 1).execute(ctx), hasLength(1));
+  });
+
+  test('edits cross the isolate boundary', () async {
+    final worker = await IsolateWorker.spawn(
+      const ProxieConfig(persistHistory: false),
+      MemoryStore.new,
+    );
+    addTearDown(worker.dispose);
+    worker.upsert(
+      _call('c1', response: _body('{"l":[{"id":1,"x":"a"},{"id":2}],"k":0}')),
+    );
+    final h = await worker.run(OpenJson('c1', JsonBodySide.response));
+    Future<int> apply(JsonEdit e) => worker.run(JsonApply(h.docId, e));
+    final top = await worker.run(JsonRows(h.docId, 0, 2));
+    final l = top[0].nodeId;
+    final k = top[1].nodeId;
+    await worker.run(JsonToggle(h.docId, l));
+    final items = await worker.run(JsonRows(h.docId, 1, 2));
+    await apply(AddMissingKey(items[1].nodeId, 'x'));
+    await apply(DuplicateItem(items[0].nodeId));
+    await apply(AddKeyToAll(l, 'tags', ['t', 1, null, true]));
+    await apply(RemoveKeyFromAll(l, 'id'));
+    await apply(NewItemFromSchema(l));
+    await apply(AddItem(l, {'n': const JsonNumber('1e400')}, at: 0));
+    await apply(
+      SetValue(k, {
+        'deep': <Object?>[{}, 2.5],
+      }),
+    );
+    await apply(const AddKey(0, 'z', 'zz'));
+    await apply(RenameKey(k, 'kk'));
+    const item = '{"x":"a","tags":["t",1,null,true]}';
+    expect(
+      utf8.decode(await worker.run(JsonEncode(h.docId))),
+      '{"l":[{"n":1e400},$item,$item,$item,{"x":"","tags":[]}],'
+      '"kk":{"deep":[{},2.5]},"z":"zz"}',
+    );
+    final count = await apply(DeleteNode(l));
+    expect(count, 2);
+    expect(
+      utf8.decode(await worker.run(JsonEncode(h.docId))),
+      '{"kk":{"deep":[{},2.5]},"z":"zz"}',
+    );
+    await apply(const SetValue(0, [1]));
+    expect(utf8.decode(await worker.run(JsonEncode(h.docId))), '[1]');
+    await expectLater(
+      apply(const RenameKey(0, 'x')),
+      throwsA(
+        isA<ProxieWorkerException>().having(
+          (e) => e.type,
+          'type',
+          'ArgumentError',
+        ),
+      ),
+    );
+  });
+
   test('handles, rows and schemas cross the isolate boundary', () async {
     final worker = await IsolateWorker.spawn(
       const ProxieConfig(persistHistory: false),
