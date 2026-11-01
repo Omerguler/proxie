@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:proxie/proxie.dart';
 
@@ -61,6 +64,23 @@ void main() {
       expect(m.matches(Uri.parse('https://a.com/abc')), isFalse);
     });
 
+    test('wildcard host matching is case-insensitive', () {
+      expect(UrlMatcher('API.A.com/*').matches(url), isTrue);
+      expect(UrlMatcher('HTTPS://API.a.com/*').matches(url), isTrue);
+      // Regex patterns keep the case the author wrote.
+      expect(
+        UrlMatcher(r'^https://API\.a\.com', isRegex: true).matches(url),
+        isFalse,
+      );
+    });
+
+    test('equality is by pattern and isRegex', () {
+      expect(UrlMatcher('a*'), UrlMatcher('a*'));
+      expect(UrlMatcher('a*').hashCode, UrlMatcher('a*').hashCode);
+      expect(UrlMatcher('a*') == UrlMatcher('a*', isRegex: true), isFalse);
+      expect(UrlMatcher('a*') == UrlMatcher('b*'), isFalse);
+    });
+
     test('invalid regex never matches and never throws', () {
       expect(UrlMatcher('(', isRegex: true).matches(url), isFalse);
     });
@@ -101,6 +121,14 @@ void main() {
       expect(set.responseBreakpointFor(get)?.id, 'both');
     });
 
+    test('stores an unmodifiable copy of the caller list', () {
+      final list = [_rule('a', '*/users/*')];
+      final set = RuleSet(list);
+      list.add(_rule('b', '*'));
+      expect(set.rules, hasLength(1));
+      expect(() => set.rules.add(_rule('c', '*')), throwsUnsupportedError);
+    });
+
     test('phase request is not returned by response lookup', () {
       final set = RuleSet([_rule('req', '*/users/*')]);
       expect(set.responseBreakpointFor(get), isNull);
@@ -133,5 +161,84 @@ void main() {
     expect(back.mapLocal!.failure, SimulatedFailure.timeout);
     expect(back.mapLocal!.response!.statusCode, 404);
     expect(back.matcher.pattern, '*/users/*');
+  });
+
+  test('MapLocalAction roundtrips a json body and headers', () {
+    final action = MapLocalAction(
+      response: ProxieResponse(
+        statusCode: 201,
+        reasonPhrase: 'Created',
+        headers: {
+          'content-type': ['application/json'],
+          'x-multi': ['a', 'b'],
+        },
+        body: ProxieBody.from(
+          Uint8List.fromList(utf8.encode('{"id":7,"ok":true}')),
+          'application/json',
+        ),
+      ),
+      delay: const Duration(milliseconds: 1500),
+    );
+    final back = MapLocalAction.fromMap(action.toMap());
+    expect(back.delay, const Duration(milliseconds: 1500));
+    expect(back.failure, isNull);
+    final r = back.response!;
+    expect(r.statusCode, 201);
+    expect(r.reasonPhrase, 'Created');
+    expect(r.headers['x-multi'], ['a', 'b']);
+    expect(r.headers['content-type'], ['application/json']);
+    expect(r.body.kind, BodyKind.json);
+    expect(r.body.text, '{"id":7,"ok":true}');
+    expect(back.toMap().toString(), action.toMap().toString());
+  });
+
+  group('ProxieRule.fromMap', () {
+    Map<String, Object?> base() => _rule('x', '*').toMap();
+
+    test('missing phase means both', () {
+      final m = base()..remove('phase');
+      expect(ProxieRule.fromMap(m).phase, BreakpointPhase.both);
+    });
+
+    test('unknown kind, phase or failure throw FormatException', () {
+      expect(
+        () => ProxieRule.fromMap(base()..['kind'] = 'nope'),
+        throwsFormatException,
+      );
+      expect(
+        () => ProxieRule.fromMap(base()..remove('kind')),
+        throwsFormatException,
+      );
+      expect(
+        () => ProxieRule.fromMap(base()..['phase'] = 'nope'),
+        throwsFormatException,
+      );
+      expect(
+        () => MapLocalAction.fromMap({'failure': 'nope'}),
+        throwsFormatException,
+      );
+      expect(
+        () => ProxieRule.fromMap(
+          base()..['mapLocal'] = {'delayMs': 0, 'failure': 'nope'},
+        ),
+        throwsFormatException,
+      );
+    });
+  });
+
+  test('copyWith can clear method and mapLocal', () {
+    final rule = _rule(
+      'm',
+      '*',
+      method: 'GET',
+      kind: RuleKind.mapLocal,
+      mapLocal: const MapLocalAction(failure: SimulatedFailure.timeout),
+    );
+    expect(rule.copyWith(name: 'n').method, 'GET');
+    expect(rule.copyWith(name: 'n').mapLocal, isNotNull);
+    final cleared = rule.copyWith(clearMethod: true, clearMapLocal: true);
+    expect(cleared.method, isNull);
+    expect(cleared.mapLocal, isNull);
+    expect(cleared.id, 'm');
   });
 }

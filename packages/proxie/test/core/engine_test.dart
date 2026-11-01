@@ -226,7 +226,7 @@ void main() {
   });
 
   test('throwing rule lookup is treated as no match', () async {
-    engine.rules = const _ThrowingRules();
+    engine.rules = _ThrowingRules();
     expect(await engine.onRequest('c1', 'http', _req()), isA<Proceed>());
   });
 
@@ -409,7 +409,7 @@ class _ThrowingSink implements CallSink {
 }
 
 class _ThrowingRules extends RuleSet {
-  const _ThrowingRules() : super(const []);
+  _ThrowingRules() : super(const []);
   @override
   ProxieRule? requestBreakpointFor(ProxieRequest request) =>
       throw StateError('bad');

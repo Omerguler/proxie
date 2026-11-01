@@ -58,10 +58,19 @@ ResponsePreset _fixed(String id, String label, ProxieResponse response) =>
       build: (_) => MapLocalAction(response: response),
     );
 
-ResponsePreset _error(String id, String label, int status) => _fixed(
+ResponsePreset _error(
+  String id,
+  String label,
+  int status, {
+  Map<String, List<String>> headers = const {},
+}) => _fixed(
   id,
   label,
-  _json(status, '{"error":{"code":$status,"message":"${_reasons[status]}"}}'),
+  _json(
+    status,
+    '{"error":{"code":$status,"message":"${_reasons[status] ?? 'Unknown'}"}}',
+    headers: headers,
+  ),
 );
 
 ProxieResponse _capturedOrEmpty(ProxieResponse? captured) =>
@@ -101,16 +110,13 @@ final List<ResponsePreset> builtInPresets = List.unmodifiable([
     '422 Unprocessable Entity',
     _json(422, '{"errors":{"field":["is invalid"]}}'),
   ),
-  _fixed(
+  _error(
     'too_many',
     '429 Too Many Requests',
-    _json(
-      429,
-      '{"error":{"code":429,"message":"${_reasons[429]}"}}',
-      headers: {
-        'retry-after': ['30'],
-      },
-    ),
+    429,
+    headers: {
+      'retry-after': ['30'],
+    },
   ),
   _error('server_error', '500 Server Error', 500),
   _error('unavailable', '503 Service Unavailable', 503),

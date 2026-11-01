@@ -45,7 +45,7 @@ class ProxieEngine {
   final BreakpointController breakpoints;
   final bool _ownsBreakpoints;
 
-  RuleSet rules = const RuleSet([]);
+  RuleSet rules = RuleSet(const []);
   int sessionId;
 
   final _states = <String, _CallState>{};

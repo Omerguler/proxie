@@ -16,7 +16,9 @@ class UrlMatcher {
   RegExp? get _regex {
     if (_compiled != null || _compileFailed) return _compiled;
     try {
-      _compiled = RegExp(isRegex ? pattern : _wildcardToRegex(pattern));
+      _compiled = isRegex
+          ? RegExp(pattern)
+          : RegExp(_wildcardToRegex(pattern), caseSensitive: false);
     } on FormatException {
       _compileFailed = true;
     }
@@ -25,7 +27,7 @@ class UrlMatcher {
 
   /// Whether [url] matches. An invalid regular expression never matches.
   ///
-  /// Wildcard patterns without `://` are matched against the URL with its
+  /// Wildcard patterns are case-insensitive. Those without `://` are matched against the URL with its
   /// scheme removed (`host/path?query`) as well as the full URL.
   bool matches(Uri url) {
     final regex = _regex;
@@ -36,6 +38,15 @@ class UrlMatcher {
     final i = full.indexOf('://');
     return i >= 0 && regex.hasMatch(full.substring(i + 3));
   }
+
+  @override
+  bool operator ==(Object other) =>
+      other is UrlMatcher &&
+      other.pattern == pattern &&
+      other.isRegex == isRegex;
+
+  @override
+  int get hashCode => Object.hash(pattern, isRegex);
 
   Map<String, Object?> toMap() => {'pattern': pattern, 'isRegex': isRegex};
 

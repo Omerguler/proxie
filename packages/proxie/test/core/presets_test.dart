@@ -87,6 +87,10 @@ void main() {
     final t = _preset('too_many').build(null).response!;
     expect(t.statusCode, 429);
     expect(t.headers['retry-after'], ['30']);
+    expect(t.headers['content-type'], ['application/json']);
+    expect(jsonDecode(t.body.text!), {
+      'error': {'code': 429, 'message': 'Too Many Requests'},
+    });
   });
 
   test('failure presets', () {
