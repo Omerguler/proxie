@@ -1,6 +1,9 @@
 import 'dart:async';
+import 'dart:developer' as developer;
+import 'dart:typed_data';
 
 import '../config.dart';
+import '../model/body.dart';
 import '../model/call.dart';
 import '../model/request.dart';
 import '../model/response.dart';
@@ -8,7 +11,7 @@ import 'breakpoint_controller.dart';
 import 'decision.dart';
 import 'rule.dart';
 
-/// Receives masked call snapshots.
+/// Receives call snapshots (unmasked; the worker masks before storing).
 abstract interface class CallSink {
   void upsert(ProxieCall call);
 }
@@ -22,18 +25,25 @@ class _CallState {
   final tags = <CallTag>{};
 }
 
-/// Decides what happens to each captured call and records masked copies.
+/// Decides what happens to each captured call and records snapshots.
+///
+/// The [sink] receives unmasked calls; the [calls] stream carries copies with
+/// masked headers and bodies stripped (no JSON work on the UI isolate).
 class ProxieEngine {
   ProxieEngine({
     required this.config,
     required this.sink,
-    required this.breakpoints,
+    BreakpointController? breakpoints,
     this.sessionId = 0,
-  });
+  }) : _ownsBreakpoints = breakpoints == null,
+       breakpoints =
+           breakpoints ??
+           BreakpointController(timeout: config.breakpointTimeout);
 
   final ProxieConfig config;
   final CallSink sink;
   final BreakpointController breakpoints;
+  final bool _ownsBreakpoints;
 
   RuleSet rules = const RuleSet([]);
   int sessionId;
@@ -44,8 +54,15 @@ class ProxieEngine {
 
   Stream<ProxieCall> get calls => _calls.stream;
 
+  /// A call id unique within this engine (not across engines or sessions).
   String newCallId() =>
       '${DateTime.now().microsecondsSinceEpoch}-${_counter++}';
+
+  /// Releases pending breakpoints and closes streams.
+  void dispose() {
+    if (_ownsBreakpoints) breakpoints.dispose();
+    _calls.close();
+  }
 
   Future<RequestDecision> onRequest(
     String callId,
@@ -53,10 +70,13 @@ class ProxieEngine {
     ProxieRequest req,
   ) async {
     final state = _CallState(req, adapter, DateTime.now());
+    if (_states.containsKey(callId)) {
+      breakpoints.resolve(callId, const ContinueUnchanged());
+    }
     _states[callId] = state;
 
     var current = req;
-    final paused = rules.requestBreakpointFor(req) != null;
+    final paused = _guard(() => rules.requestBreakpointFor(req)) != null;
     if (paused) state.tags.add(CallTag.breakpoint);
     _emit(callId, state);
     if (paused) {
@@ -68,6 +88,8 @@ class ProxieEngine {
           pausedAt: DateTime.now(),
         ),
       );
+      // The call failed or was replaced while paused: stop recording.
+      if (!identical(_states[callId], state)) return Proceed(current);
       switch (r) {
         case ExecuteRequest(:final request):
           current = request;
@@ -80,6 +102,7 @@ class ProxieEngine {
           onError(callId, error);
           return const AbortRequest(error);
         case ExecuteResponse():
+          assert(false, 'ExecuteResponse resolved a request breakpoint');
         case ContinueUnchanged():
           break;
       }
@@ -87,7 +110,7 @@ class ProxieEngine {
       if (state.tags.contains(CallTag.edited)) _emit(callId, state);
     }
 
-    final rule = rules.mapLocalFor(current);
+    final rule = _guard(() => rules.mapLocalFor(current));
     final action = rule?.mapLocal;
     if (action != null) {
       state.tags.add(CallTag.mapLocal);
@@ -101,7 +124,7 @@ class ProxieEngine {
     final state = _states[callId];
     if (state == null) return res;
     var current = res;
-    if (rules.responseBreakpointFor(state.request) != null) {
+    if (_guard(() => rules.responseBreakpointFor(state.request)) != null) {
       state.tags.add(CallTag.breakpoint);
       final r = await breakpoints.pause(
         PausedCall(
@@ -112,7 +135,19 @@ class ProxieEngine {
           pausedAt: DateTime.now(),
         ),
       );
-      // Abort has no meaning once a response exists; it continues unchanged.
+      if (!identical(_states[callId], state)) return current;
+      if (r is Abort) {
+        const error = ProxieError(
+          type: 'aborted',
+          message: 'Aborted at response breakpoint',
+        );
+        onError(callId, error);
+        throw const ProxieAbortedException(error);
+      }
+      assert(
+        r is! ExecuteRequest,
+        'ExecuteRequest resolved a response breakpoint',
+      );
       if (r is ExecuteResponse) {
         current = r.response;
         if (!_sameResponse(res, r.response)) state.tags.add(CallTag.edited);
@@ -126,34 +161,69 @@ class ProxieEngine {
   void onError(String callId, ProxieError err) {
     final state = _states.remove(callId);
     if (state == null) return;
+    breakpoints.resolve(callId, const ContinueUnchanged());
     _emit(callId, state, error: err);
   }
 
+  T? _guard<T>(T Function() f) {
+    try {
+      return f();
+    } catch (e, st) {
+      developer.log('Proxie rule lookup failed', error: e, stackTrace: st);
+      return null;
+    }
+  }
+
+  ProxieBody _stripBody(ProxieBody b) => ProxieBody(
+    bytes: Uint8List(0),
+    contentType: b.contentType,
+    kind: b.kind,
+    truncated: b.truncated,
+    originalLength: b.originalLength,
+  );
+
+  /// Recording must never break live traffic, so failures are only logged.
   void _emit(
     String callId,
     _CallState s, {
     ProxieResponse? response,
     ProxieError? error,
   }) {
-    final done = response != null || error != null;
-    final masking = config.masking;
-    final tags = {...s.tags};
-    if (s.request.body.truncated || (response?.body.truncated ?? false)) {
-      tags.add(CallTag.truncated);
+    try {
+      final done = response != null || error != null;
+      final tags = {...s.tags};
+      if (s.request.body.truncated || (response?.body.truncated ?? false)) {
+        tags.add(CallTag.truncated);
+      }
+      final duration = done ? DateTime.now().difference(s.startedAt) : null;
+      ProxieCall build(ProxieRequest rq, ProxieResponse? rs) => ProxieCall(
+        id: callId,
+        sessionId: sessionId,
+        adapter: s.adapter,
+        request: rq,
+        response: rs,
+        error: error,
+        startedAt: s.startedAt,
+        duration: duration,
+        tags: tags,
+      );
+      sink.upsert(build(s.request, response));
+      final masking = config.masking;
+      _calls.add(
+        build(
+          masking.maskRequest(
+            s.request.copyWith(body: _stripBody(s.request.body)),
+          ),
+          response == null
+              ? null
+              : masking.maskResponse(
+                  response.copyWith(body: _stripBody(response.body)),
+                ),
+        ),
+      );
+    } catch (e, st) {
+      developer.log('Proxie recording failed', error: e, stackTrace: st);
     }
-    final call = ProxieCall(
-      id: callId,
-      sessionId: sessionId,
-      adapter: s.adapter,
-      request: masking.maskRequest(s.request),
-      response: response == null ? null : masking.maskResponse(response),
-      error: error,
-      startedAt: s.startedAt,
-      duration: done ? DateTime.now().difference(s.startedAt) : null,
-      tags: tags,
-    );
-    sink.upsert(call);
-    _calls.add(call);
   }
 }
 

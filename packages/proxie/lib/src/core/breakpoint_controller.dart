@@ -67,13 +67,14 @@ class BreakpointController {
   /// Pauses [p]; completes when resolved, or with [ContinueUnchanged] on
   /// timeout.
   Future<BreakpointResolution> pause(PausedCall p) {
+    resolve(p.callId, const ContinueUnchanged());
     final entry = _Entry(p);
     entry.timer = Timer(
       timeout,
       () => resolve(p.callId, const ContinueUnchanged()),
     );
     _entries[p.callId] = entry;
-    _changes.add(pending);
+    _notify();
     return entry.completer.future;
   }
 
@@ -83,7 +84,19 @@ class BreakpointController {
     if (entry == null) return;
     entry.timer?.cancel();
     entry.completer.complete(r);
-    _changes.add(pending);
+    _notify();
+  }
+
+  /// Resolves everything pending as [ContinueUnchanged] and closes [changes].
+  void dispose() {
+    for (final id in _entries.keys.toList()) {
+      resolve(id, const ContinueUnchanged());
+    }
+    _changes.close();
+  }
+
+  void _notify() {
+    if (!_changes.isClosed) _changes.add(pending);
   }
 }
 

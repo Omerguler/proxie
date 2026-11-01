@@ -62,6 +62,33 @@ void main() {
     expect(c.pending, isEmpty);
   });
 
+  test('pausing a repeated id resolves the earlier one', () {
+    fakeAsync((async) {
+      final c = BreakpointController();
+      BreakpointResolution? first;
+      c.pause(_paused('a')).then((r) => first = r);
+      c.pause(_paused('a'));
+      async.flushMicrotasks();
+      expect(first, isA<ContinueUnchanged>());
+      expect(c.pending, hasLength(1));
+    });
+  });
+
+  test('dispose resolves pending, cancels timers, closes changes', () {
+    fakeAsync((async) {
+      final c = BreakpointController();
+      BreakpointResolution? got;
+      c.pause(_paused('a')).then((r) => got = r);
+      var closed = false;
+      c.changes.listen((_) {}, onDone: () => closed = true);
+      c.dispose();
+      async.flushMicrotasks();
+      expect(got, isA<ContinueUnchanged>());
+      expect(closed, isTrue);
+      expect(async.pendingTimers, isEmpty);
+    });
+  });
+
   test('changes emits on add and remove', () {
     fakeAsync((async) {
       final c = BreakpointController();

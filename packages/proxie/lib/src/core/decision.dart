@@ -27,3 +27,13 @@ class AbortRequest extends RequestDecision {
 
   final ProxieError error;
 }
+
+/// Thrown by `onResponse` when a response breakpoint is aborted.
+class ProxieAbortedException implements Exception {
+  const ProxieAbortedException(this.error);
+
+  final ProxieError error;
+
+  @override
+  String toString() => 'ProxieAbortedException: ${error.message}';
+}

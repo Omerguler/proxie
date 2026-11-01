@@ -60,6 +60,8 @@ class ProxieCall {
   final ProxieResponse? response;
   final ProxieError? error;
   final DateTime startedAt;
+
+  /// Time from start to completion; includes time spent paused at breakpoints.
   final Duration? duration;
   final Set<CallTag> tags;
 
