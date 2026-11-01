@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import '../../model/response.dart';
 import 'proxie_http_headers.dart';
+import 'status_phrases.dart';
 
 /// The [HttpClientResponse] Proxie hands to the app.
 ///
@@ -16,38 +17,80 @@ import 'proxie_http_headers.dart';
 ///   every member and replacing only the body stream (a capture tee).
 class ProxieClientResponse extends Stream<List<int>>
     implements HttpClientResponse {
-  /// A response delivering [bytes] as described by [response].
+  /// A response to a [method] request delivering [bytes] as described by
+  /// [response].
   ///
-  /// [response]'s headers are kept with every value separate, except that
-  /// `content-length` is set to the delivered length and `transfer-encoding`
-  /// is dropped. Values describing the real exchange ([redirects],
-  /// [compressionState], ...) come from [real] when the response was
-  /// received from the network.
-  ProxieClientResponse.buffered(
+  /// [response]'s headers are kept with every value separate (checked as
+  /// received headers), except that `content-length` is set to the delivered
+  /// length and `transfer-encoding` is dropped; for a mock (no [real]),
+  /// `content-encoding` is dropped too, since the body is delivered as is.
+  ///
+  /// The reason phrase is [response]'s, unless the status was edited and
+  /// the phrase was not, in which case it is the standard one for the new
+  /// status. [isRedirect] follows the status. Values describing the real
+  /// exchange ([redirects], [compressionState], connection details) come
+  /// from [real] when the response was received from the network; a mock's
+  /// [persistentConnection] follows its `connection` header.
+  ///
+  /// [bytes] are copied unless [owned] says nobody else holds them.
+  factory ProxieClientResponse.buffered(
     ProxieResponse response,
     Uint8List bytes, {
+    required String method,
     HttpClientResponse? real,
-  }) : _real = null,
-       // Single-subscription like a real response; no chunk when empty.
-       _body = Stream.fromIterable([if (bytes.isNotEmpty) bytes]),
-       statusCode = response.statusCode,
-       reasonPhrase = response.reasonPhrase ?? real?.reasonPhrase ?? '',
-       contentLength = bytes.length,
-       headers = ProxieHttpHeaders.fromMap({
-         for (final e in response.headers.entries)
-           if (e.key != HttpHeaders.contentLengthHeader &&
-               e.key != HttpHeaders.transferEncodingHeader)
-             e.key: e.value,
-         HttpHeaders.contentLengthHeader: ['${bytes.length}'],
-       }),
-       compressionState =
-           real?.compressionState ??
-           HttpClientResponseCompressionState.notCompressed,
-       persistentConnection = real?.persistentConnection ?? true,
-       isRedirect = real?.isRedirect ?? false,
-       redirects = List.unmodifiable(real?.redirects ?? const []),
-       certificate = real?.certificate,
-       connectionInfo = real?.connectionInfo;
+    bool owned = false,
+  }) {
+    final body = owned ? bytes : Uint8List.fromList(bytes);
+    final headers = ProxieHttpHeaders.received({
+      for (final e in response.headers.entries)
+        if (e.key != HttpHeaders.contentLengthHeader &&
+            e.key != HttpHeaders.transferEncodingHeader &&
+            (real != null || e.key != HttpHeaders.contentEncodingHeader))
+          e.key: e.value,
+      HttpHeaders.contentLengthHeader: ['${body.length}'],
+    });
+    final status = response.statusCode;
+    var phrase = response.reasonPhrase;
+    if (phrase == null ||
+        (real != null &&
+            status != real.statusCode &&
+            phrase == real.reasonPhrase)) {
+      phrase = reasonPhraseFor(status);
+    }
+    return ProxieClientResponse._(
+      null,
+      // Single-subscription like a real response; no chunk when empty.
+      Stream.fromIterable([if (body.isNotEmpty) body]),
+      statusCode: status,
+      reasonPhrase: phrase,
+      contentLength: body.length,
+      headers: headers,
+      compressionState:
+          real?.compressionState ??
+          HttpClientResponseCompressionState.notCompressed,
+      persistentConnection:
+          real?.persistentConnection ?? headers.persistentConnection,
+      isRedirect: isRedirectStatus(method, status),
+      redirects: List.unmodifiable(real?.redirects ?? const []),
+      certificate: real?.certificate,
+      connectionInfo: real?.connectionInfo,
+    );
+  }
+
+  ProxieClientResponse._(
+    this._real,
+    this._body, {
+    required this.statusCode,
+    required this.reasonPhrase,
+    required this.contentLength,
+    required this.headers,
+    required this.compressionState,
+    required this.persistentConnection,
+    required this.isRedirect,
+    required this.redirects,
+    required this.certificate,
+    required this.connectionInfo,
+  });
 
   /// [real] with its body replaced by [body].
   ProxieClientResponse.streamed(HttpClientResponse real, Stream<List<int>> body)

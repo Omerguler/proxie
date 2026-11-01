@@ -16,6 +16,8 @@ import 'dart:typed_data';
 ///   until the server closes)
 /// - `/drop` → promises 100 bytes of `text/plain`, sends `partial`, then
 ///   closes the connection
+/// - `/gzip` → gzip-encoded `{"zipped":true}` with `content-encoding: gzip`
+/// - `/utf8-header` → a `content-disposition` value holding raw UTF-8 bytes
 class TestServer {
   TestServer._(this._server) {
     _server.listen(_handle);
@@ -107,6 +109,27 @@ class TestServer {
         );
         await socket.flush();
         socket.destroy();
+        return;
+      } else if (path == '/gzip') {
+        res.headers
+          ..contentType = ContentType.json
+          ..set(HttpHeaders.contentEncodingHeader, 'gzip');
+        res.add(gzip.encode(utf8.encode('{"zipped":true}')));
+      } else if (path == '/utf8-header') {
+        // Raw UTF-8 bytes in a header value, which HttpHeaders refuses to
+        // send but dart:io accepts when receiving.
+        final socket = await res.detachSocket(writeHeaders: false);
+        socket.add([
+          ...latin1.encode(
+            'HTTP/1.1 200 OK\r\ncontent-length: 2\r\n'
+            'content-type: text/plain\r\n'
+            'content-disposition: attachment; filename="',
+          ),
+          ...utf8.encode('café.txt'),
+          ...latin1.encode('"\r\nconnection: close\r\n\r\nok'),
+        ]);
+        await socket.flush();
+        await socket.close();
         return;
       } else if (path.startsWith('/status/')) {
         final code = int.parse(path.substring('/status/'.length));

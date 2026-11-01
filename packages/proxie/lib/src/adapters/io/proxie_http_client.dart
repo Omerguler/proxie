@@ -13,6 +13,13 @@ import 'http_tokens.dart';
 /// [runMarkedCaptured] (already captured by a higher-level adapter), are the
 /// inner client's own requests, untouched. Others are
 /// [BufferedHttpClientRequest]s, which send nothing until closed.
+///
+/// Because those open their inner request late, [close] keeps `dart:io`'s
+/// promise that requests opened before it still complete: a non-forced
+/// close stops new requests at once but closes [inner] only after every
+/// pending buffered request has opened its inner request (or ended). A
+/// forced close aborts pending buffered requests (recorded as cancelled)
+/// and force-closes [inner].
 class ProxieIoHttpClient implements HttpClient {
   ProxieIoHttpClient(
     this.inner, {
@@ -26,6 +33,10 @@ class ProxieIoHttpClient implements HttpClient {
   final ProxieEngine? Function() _engineOf;
   final String _adapterName;
   bool _closing = false;
+  bool _innerClosed = false;
+
+  /// Buffered requests that may still open a request on [inner].
+  final _pending = <BufferedHttpClientRequest>{};
   bool _hasConnectionFactory = false;
 
   bool get _passThrough => _engineOf() == null || isProxieCaptured();
@@ -113,7 +124,32 @@ class ProxieIoHttpClient implements HttpClient {
   @override
   void close({bool force = false}) {
     _closing = true;
+    if (force) {
+      for (final request in _pending.toList()) {
+        request.abort(
+          HttpException('Client closed forcefully', uri: request.uri),
+        );
+      }
+      _pending.clear();
+      _closeInner(force: true);
+    } else if (_pending.isEmpty) {
+      _closeInner(force: false);
+    }
+  }
+
+  void _settled(BufferedHttpClientRequest request) {
+    _pending.remove(request);
+    if (_closing && _pending.isEmpty) _closeInner(force: false);
+  }
+
+  void _closeInner({required bool force}) {
+    if (_innerClosed && !force) return;
+    _innerClosed = true;
     inner.close(force: force);
+  }
+
+  void _checkOpen() {
+    if (_closing) throw StateError('Client is closed');
   }
 
   @override
@@ -123,6 +159,7 @@ class ProxieIoHttpClient implements HttpClient {
     int port,
     String path,
   ) {
+    _checkOpen();
     if (_passThrough) return inner.open(method, host, port, path);
     // Splits path, query and fragment like dart:io does.
     var fragmentStart = path.length;
@@ -149,6 +186,7 @@ class ProxieIoHttpClient implements HttpClient {
 
   @override
   Future<HttpClientRequest> openUrl(String method, Uri url) {
+    _checkOpen();
     if (_passThrough) return inner.openUrl(method, url);
     return _buffered(method, url);
   }
@@ -198,7 +236,6 @@ class ProxieIoHttpClient implements HttpClient {
   /// Validates like `dart:io` (throwing synchronously) and returns a request
   /// that sends on close.
   Future<HttpClientRequest> _buffered(String method, Uri url) {
-    if (_closing) throw StateError('Client is closed');
     url = url.removeFragment();
     if (!isHttpToken(method)) throw ArgumentError.value(method, 'method');
     if (method != 'CONNECT') {
@@ -210,14 +247,15 @@ class ProxieIoHttpClient implements HttpClient {
         throw ArgumentError("Unsupported scheme '${url.scheme}' in URI $url");
       }
     }
-    return Future.value(
-      BufferedHttpClientRequest(
-        method: method.toUpperCase(),
-        uri: url,
-        inner: inner,
-        engine: _engineOf,
-        adapterName: _adapterName,
-      ),
+    final request = BufferedHttpClientRequest(
+      method: method.toUpperCase(),
+      uri: url,
+      inner: inner,
+      engine: _engineOf,
+      adapterName: _adapterName,
+      onSettled: _settled,
     );
+    _pending.add(request);
+    return Future.value(request);
   }
 }

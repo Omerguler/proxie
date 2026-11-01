@@ -162,11 +162,9 @@ void main() {
     await expectLater(
       req.done,
       throwsA(
-        isA<HttpException>().having(
-          (e) => e.message,
-          'message',
-          'Request has been aborted',
-        ),
+        isA<HttpException>()
+            .having((e) => e.message, 'message', 'Request has been aborted')
+            .having((e) => e.uri, 'uri', h.server.url('/echo')),
       ),
     );
     await expectLater(req.close(), throwsA(isA<HttpException>()));
@@ -198,5 +196,103 @@ void main() {
     final res = await req.close();
     req.abort();
     expect(await readText(res), '{"hello":"world"}');
+  });
+
+  test('abort() during addStream cancels the source', () async {
+    final client = HttpClient();
+    final req = await client.postUrl(h.server.url('/echo'));
+    var cancelled = false;
+    final source = StreamController<List<int>>(
+      onCancel: () => cancelled = true,
+    );
+    final bound = req.addStream(source.stream);
+    source.add([1]);
+    await pumpEventQueue();
+    req.abort();
+    await bound;
+    expect(cancelled, isTrue);
+    await expectLater(req.done, throwsA(isA<HttpException>()));
+    expect(h.server.hitsFor('/echo'), 0);
+  });
+
+  test('client.close() lets a closed request finish', () async {
+    h.engine.rules = RuleSet([
+      breakpointRule('*/json', BreakpointPhase.request),
+    ]);
+    onPause(
+      h.engine,
+      BreakpointPhase.request,
+      (_) => const ContinueUnchanged(),
+    );
+    final client = HttpClient();
+    final req = await client.getUrl(h.server.url('/json'));
+    final f = req.close();
+    client.close();
+    expect(() => client.getUrl(h.server.url('/json')), throwsStateError);
+    final res = await f;
+    expect(res.statusCode, 200);
+    expect(await readText(res), '{"hello":"world"}');
+  });
+
+  test('client.close() lets a request opened earlier be sent later', () async {
+    final client = HttpClient();
+    final req = await client.postUrl(h.server.url('/echo'));
+    client.close();
+    req.write('late');
+    final e = await h.echo(await req.close());
+    expect(e['body'], 'late');
+  });
+
+  test('pass-through opens after close() throw like dart:io', () async {
+    final client = HttpClient();
+    h.adapter.detach();
+    client.close();
+    expect(() => client.getUrl(h.server.url('/json')), throwsStateError);
+  });
+
+  test('close(force: true) aborts a request paused at a breakpoint', () async {
+    h.engine.rules = RuleSet([
+      breakpointRule('*/json', BreakpointPhase.request),
+    ]);
+    final client = HttpClient();
+    final req = await client.getUrl(h.server.url('/json'));
+    final f = req.close();
+    await pumpEventQueue();
+    expect(h.engine.breakpoints.pending, hasLength(1));
+    client.close(force: true);
+    await expectLater(f, throwsA(isA<HttpException>()));
+    await pumpEventQueue();
+    expect(h.engine.breakpoints.pending, isEmpty);
+    expect(h.server.hitsFor('/json'), 0);
+    expect(h.sink.last.error!.type, 'cancelled');
+  });
+
+  test('close(force: true) stops a delayed mock from answering', () async {
+    h.engine.rules = RuleSet([
+      mapLocalRule(
+        '*/json',
+        MapLocalAction(
+          response: jsonResponse(200, '{}'),
+          delay: const Duration(milliseconds: 100),
+        ),
+      ),
+    ]);
+    final client = HttpClient();
+    final req = await client.getUrl(h.server.url('/json'));
+    final f = req.close();
+    await pumpEventQueue();
+    client.close(force: true);
+    await expectLater(f, throwsA(isA<HttpException>()));
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+    expect(h.sink.last.error!.type, 'cancelled');
+    expect(h.sink.last.response, isNull);
+  });
+
+  test('close(force: true) fails requests not yet closed', () async {
+    final client = HttpClient();
+    final req = await client.postUrl(h.server.url('/echo'));
+    client.close(force: true);
+    await expectLater(req.close(), throwsA(isA<HttpException>()));
+    expect(h.server.hitsFor('/echo'), 0);
   });
 }

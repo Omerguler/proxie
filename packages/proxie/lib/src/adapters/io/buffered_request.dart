@@ -22,9 +22,11 @@ class BufferedHttpClientRequest implements HttpClientRequest {
     required HttpClient inner,
     required ProxieEngine? Function() engine,
     required String adapterName,
+    void Function(BufferedHttpClientRequest request)? onSettled,
   }) : _inner = inner,
        _engineOf = engine,
        _adapterName = adapterName,
+       _onSettled = onSettled,
        headers = ProxieHttpHeaders(
          defaultPort: uri.isScheme('https')
              ? HttpClient.defaultHttpsPort
@@ -32,6 +34,7 @@ class BufferedHttpClientRequest implements HttpClientRequest {
        ) {
     // Errors reach whoever awaits close() or done; none is left unhandled.
     _done.future.ignore();
+    _done.future.whenComplete(_settle).ignore();
     var host = uri.host;
     if (host.contains(':')) host = '[$host]';
     headers
@@ -54,12 +57,16 @@ class BufferedHttpClientRequest implements HttpClientRequest {
   final HttpClient _inner;
   final ProxieEngine? Function() _engineOf;
   final String _adapterName;
+  final void Function(BufferedHttpClientRequest)? _onSettled;
+  bool _settled = false;
   final _body = BytesBuilder();
   final _done = Completer<HttpClientResponse>();
   IoExchange? _exchange;
   bool _closed = false;
   bool _aborted = false;
   bool _bound = false;
+  StreamSubscription<List<int>>? _boundSource;
+  Completer<void>? _boundDone;
   (Object, StackTrace)? _sinkError;
   Encoding? _encoding;
   bool _followRedirects = true;
@@ -154,16 +161,17 @@ class BufferedHttpClientRequest implements HttpClientRequest {
     _checkWritable();
     _bound = true;
     final completer = Completer<void>();
-    stream.listen(
+    _boundDone = completer;
+    _boundSource = stream.listen(
       _body.add,
       onError: (Object e, StackTrace st) {
         // Like dart:io, a failing stream fails the request too.
-        _bound = false;
+        _unbind();
         _sinkError ??= (e, st);
         completer.completeError(e, st);
       },
       onDone: () {
-        _bound = false;
+        _unbind();
         completer.complete();
       },
       cancelOnError: true,
@@ -223,9 +231,10 @@ class BufferedHttpClientRequest implements HttpClientRequest {
   }
 
   /// Aborts the call. Before the response arrives, [done] completes with
-  /// [exception] (an [HttpException] by default), the real request (if
-  /// opened) is aborted and the call is recorded as cancelled; afterwards it
-  /// is forwarded to the real request, where it has no effect.
+  /// [exception] (an [HttpException] by default), a running [addStream] is
+  /// cancelled, the real request (if opened) is aborted and the call is
+  /// recorded as cancelled; afterwards it is forwarded to the real request,
+  /// where it has no effect.
   @override
   void abort([Object? exception, StackTrace? stackTrace]) {
     if (_done.isCompleted) {
@@ -233,7 +242,15 @@ class BufferedHttpClientRequest implements HttpClientRequest {
       return;
     }
     _aborted = true;
-    final error = exception ?? const HttpException('Request has been aborted');
+    final source = _boundSource;
+    final boundDone = _boundDone;
+    if (source != null && boundDone != null) {
+      _unbind();
+      unawaited(source.cancel());
+      boundDone.complete();
+    }
+    final error =
+        exception ?? HttpException('Request has been aborted', uri: uri);
     _exchange?.abort(error, stackTrace);
     _done.completeError(error, stackTrace);
   }
@@ -250,6 +267,7 @@ class BufferedHttpClientRequest implements HttpClientRequest {
       engine: _engineOf(),
       adapterName: _adapterName,
       bytes: _body.takeBytes(),
+      onOpened: _settle,
     );
     _exchange = exchange;
     exchange.run().then(
@@ -260,6 +278,20 @@ class BufferedHttpClientRequest implements HttpClientRequest {
         if (!_done.isCompleted) _done.completeError(e, st);
       },
     );
+  }
+
+  void _unbind() {
+    _bound = false;
+    _boundSource = null;
+    _boundDone = null;
+  }
+
+  /// Tells the client once this request no longer needs to open a request
+  /// on the inner client.
+  void _settle() {
+    if (_settled) return;
+    _settled = true;
+    _onSettled?.call(this);
   }
 
   void _checkWritable() {

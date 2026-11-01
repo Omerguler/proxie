@@ -20,11 +20,20 @@ import 'io/http_tokens.dart';
 /// [detach] restores them. While detached every client and request is a
 /// pure pass-through, including ones created while attached.
 ///
+/// [attach] chains to the global overrides even when called inside an
+/// [HttpOverrides.runZoned] zone, so [detach] never installs a zone-scoped
+/// override globally.
+///
 /// Limitations:
 /// - Code running inside [HttpOverrides.runZoned] with its own overrides
 ///   bypasses capture.
-/// - Requests are buffered until `close()`, so connection errors surface
+/// - Requests are buffered until `close()`: request bodies (uploads) are
+///   held fully in memory while attached, and connection errors surface
 ///   from `close()` rather than from opening the request.
+/// - A non-forced `HttpClient.close()` closes the underlying client only
+///   once requests opened before it have been closed and sent; a request
+///   the app opens but never closes keeps it open (idle connections still
+///   time out).
 /// - A streamed response the app never listens to leaves the call pending.
 /// - `abort()` before `close()` sends and records nothing.
 class ProxieHttpOverridesAdapter implements ProxieCaptureAdapter {
@@ -45,7 +54,9 @@ class ProxieHttpOverridesAdapter implements ProxieCaptureAdapter {
       current.engine = engine;
       return;
     }
-    final overrides = _ProxieHttpOverrides(HttpOverrides.current, name)
+    // The global overrides, not a zone's: detach must never install a
+    // zone-scoped override globally.
+    final overrides = _ProxieHttpOverrides(_globalOverrides(), name)
       ..engine = engine;
     _overrides = overrides;
     HttpOverrides.global = overrides;
@@ -81,9 +92,10 @@ class ProxieHttpOverridesAdapter implements ProxieCaptureAdapter {
       try {
         final out = await client.openUrl(request.method, request.url);
         for (final e in request.headers.entries) {
-          if (e.key == HttpHeaders.contentLengthHeader ||
-              e.key == HttpHeaders.transferEncodingHeader ||
-              e.key == HttpHeaders.hostHeader) {
+          final name = e.key.toLowerCase();
+          if (name == HttpHeaders.contentLengthHeader ||
+              name == HttpHeaders.transferEncodingHeader ||
+              name == HttpHeaders.hostHeader) {
             continue;
           }
           out.headers.set(e.key, e.value);

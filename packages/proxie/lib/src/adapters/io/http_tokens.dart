@@ -26,12 +26,31 @@ String validateHeaderName(String name) {
 }
 
 /// [value] unchanged; throws a [FormatException] for a string holding
-/// anything but visible US-ASCII, space or tab (so no line breaks).
+/// anything but US-ASCII from space up (DEL included, as in `dart:io`) or
+/// tab, so no line breaks.
 Object validateHeaderValue(Object value) {
   if (value is String) {
     for (var i = 0; i < value.length; i++) {
       final c = value.codeUnitAt(i);
-      if (!((c > 31 && c < 127) || c == 9)) {
+      if (!((c > 31 && c < 128) || c == 9)) {
+        throw FormatException(
+          'Invalid HTTP header field value: ${json.encode(value)}',
+          value,
+          i,
+        );
+      }
+    }
+  }
+  return value;
+}
+
+/// [value] unchanged; throws a [FormatException] for a string holding CR,
+/// LF or NUL, the only characters a header `dart:io` receives cannot hold.
+Object validateReceivedHeaderValue(Object value) {
+  if (value is String) {
+    for (var i = 0; i < value.length; i++) {
+      final c = value.codeUnitAt(i);
+      if (c == 13 || c == 10 || c == 0) {
         throw FormatException(
           'Invalid HTTP header field value: ${json.encode(value)}',
           value,

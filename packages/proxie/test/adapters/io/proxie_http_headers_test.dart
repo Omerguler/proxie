@@ -179,8 +179,8 @@ void main() {
     expect(() => h['bad:name'], throwsFormatException);
   });
 
-  test('fromMap keeps every value and is immutable', () {
-    final m = ProxieHttpHeaders.fromMap({
+  test('received keeps every value and is immutable', () {
+    final m = ProxieHttpHeaders.received({
       'set-cookie': ['a=1', 'b=2'],
       'content-length': ['3'],
     });
@@ -205,5 +205,31 @@ void main() {
       'x-a': ['1'],
       'set-cookie': ['a=1', 'b=2'],
     });
+  });
+
+  test('DEL (0x7F) is a valid value character, as in dart:io', () {
+    h.add('a', 'x\u007fy');
+    expect(h['a'], ['x\u007fy']);
+  });
+
+  test('received headers accept any byte but CR, LF and NUL', () {
+    final r = ProxieHttpHeaders.received({
+      'content-disposition': ['cafÃ©'],
+      'content-type': ['text/plain', 'application/json'],
+      'date': ['a', 'b'],
+    });
+    expect(r['content-disposition'], ['cafÃ©']);
+    expect(r['content-type'], ['text/plain', 'application/json']);
+    expect(r.contentType!.mimeType, 'text/plain');
+    expect(r['date'], ['a', 'b']);
+    expect(() => r.add('x', '1'), throwsA(isA<HttpException>()));
+    for (final bad in ['a\rb', 'a\nb', 'a\u0000b']) {
+      expect(
+        () => ProxieHttpHeaders.received({
+          'x': [bad],
+        }),
+        throwsFormatException,
+      );
+    }
   });
 }

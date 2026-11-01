@@ -34,7 +34,7 @@ void main() {
   });
 
   test('redirects are followed (streamed)', () async {
-    final res = await h.send('GET', '/redirect');
+    final res = await h.send('GET', '/redirect', closeClient: false);
     expect(res.statusCode, 200);
     expect(res.redirects.single.location, h.server.url('/json'));
     expect(await readText(res), '{"hello":"world"}');
@@ -83,7 +83,7 @@ void main() {
     expect(res.isRedirect, isFalse);
     expect(res.certificate, isNull);
     expect(res.connectionInfo, isNull);
-    expect(res.reasonPhrase, '');
+    expect(res.reasonPhrase, 'Service Unavailable');
     expect(() => res.redirect(), throwsUnsupportedError);
     expect(() => res.detachSocket(), throwsUnsupportedError);
     expect(await readText(res), '{"down":true}');
@@ -269,5 +269,104 @@ void main() {
     final req = await client.getUrl(Uri.parse('http://127.0.0.1:$port/x'));
     await expectLater(req.close(), throwsA(isA<SocketException>()));
     expect(h.sink.last.error!.type, 'network');
+  });
+
+  test('mock header values with non-ASCII bytes reach the app', () async {
+    h.engine.rules = RuleSet([
+      mapLocalRule(
+        '*/json',
+        MapLocalAction(
+          response: jsonResponse(
+            200,
+            '{}',
+            h: {
+              'content-disposition': ['attachment; filename="cafÃ©"'],
+            },
+          ),
+        ),
+      ),
+    ]);
+    final res = await h.send('GET', '/json');
+    expect(
+      res.headers.value('content-disposition'),
+      'attachment; filename="cafÃ©"',
+    );
+    await res.drain<void>();
+  });
+
+  test('mock reason phrase, redirect flag and connection follow it', () async {
+    h.engine.rules = RuleSet([
+      mapLocalRule(
+        '*/json',
+        MapLocalAction(
+          response: jsonResponse(
+            503,
+            '{}',
+            h: {
+              'connection': ['close'],
+            },
+          ),
+        ),
+      ),
+    ]);
+    final res = await h.send('GET', '/json');
+    expect(res.reasonPhrase, 'Service Unavailable');
+    expect(res.persistentConnection, isFalse);
+    expect(res.isRedirect, isFalse);
+    await res.drain<void>();
+  });
+
+  test('mock with several content-type values keeps them all', () async {
+    h.engine.rules = RuleSet([
+      mapLocalRule(
+        '*/json',
+        MapLocalAction(
+          response: jsonResponse(
+            200,
+            '{}',
+            h: {
+              'content-type': ['application/json', 'text/plain'],
+            },
+          ),
+        ),
+      ),
+    ]);
+    final res = await h.send('GET', '/json');
+    expect(res.headers['content-type'], ['application/json', 'text/plain']);
+    expect(res.headers.contentType!.mimeType, 'application/json');
+    await res.drain<void>();
+  });
+
+  test('mock copied from a gzip call drops content-encoding', () async {
+    final real = await h.send('GET', '/gzip');
+    await real.drain<void>();
+    await pumpEventQueue();
+    final captured = h.sink.last.response!;
+    expect(captured.headers['content-encoding'], ['gzip']);
+    h.engine.rules = RuleSet([
+      mapLocalRule('*/gzip', MapLocalAction(response: captured)),
+    ]);
+    final res = await h.send('GET', '/gzip');
+    expect(res.headers['content-encoding'], isNull);
+    expect(
+      res.compressionState,
+      HttpClientResponseCompressionState.notCompressed,
+    );
+    final text = await readText(res);
+    expect(text, '{"zipped":true}');
+    expect(res.contentLength, text.length);
+  });
+
+  test('the app gets a copy of mocked body bytes', () async {
+    final mocked = jsonResponse(200, '{"a":1}');
+    h.engine.rules = RuleSet([
+      mapLocalRule('*/json', MapLocalAction(response: mocked)),
+    ]);
+    final first = await h.send('GET', '/json');
+    final chunks = await first.toList();
+    chunks.single[0] = 0x58;
+    expect(utf8.decode(mocked.body.bytes), '{"a":1}');
+    final second = await h.send('GET', '/json');
+    expect(await readText(second), '{"a":1}');
   });
 }

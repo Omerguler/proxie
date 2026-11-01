@@ -316,4 +316,31 @@ void main() {
       throwsUnsupportedError,
     );
   });
+
+  test('attach inside a zone override chains to the global overrides', () {
+    h.adapter.detach();
+    final zoned = _PrevOverrides();
+    HttpOverrides.runWithHttpOverrides(() {
+      h.adapter.attach(h.engine);
+    }, zoned);
+    h.adapter.detach();
+    expect(globalOverrides(), isNull);
+  });
+
+  test('replay skips framing headers whatever their case', () async {
+    final r = await h.adapter.replay(
+      ProxieRequest(
+        method: 'POST',
+        url: h.server.url('/echo'),
+        headers: {
+          'Content-Length': ['999'],
+          'Transfer-Encoding': ['chunked'],
+        },
+        body: ProxieBody.from(Uint8List.fromList(utf8.encode('ok')), null),
+      ),
+    );
+    final e = jsonDecode(r.body.text!) as Map;
+    expect(e['body'], 'ok');
+    expect((e['headers'] as Map)['content-length'], '2');
+  });
 }

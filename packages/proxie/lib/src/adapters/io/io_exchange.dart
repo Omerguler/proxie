@@ -35,7 +35,9 @@ class IoExchange {
     required ProxieEngine? engine,
     required String adapterName,
     required Uint8List bytes,
+    void Function()? onOpened,
   }) : _request = request,
+       _onOpened = onOpened,
        _inner = inner,
        _engine = engine,
        _adapterName = adapterName,
@@ -45,7 +47,11 @@ class IoExchange {
   final HttpClient _inner;
   final ProxieEngine? _engine;
   final String _adapterName;
-  final Uint8List _bytes;
+  final void Function()? _onOpened;
+
+  /// The body to send; released once sent, so uploads are held only until
+  /// then.
+  Uint8List _bytes;
   String? _callId;
   Object? _abortError;
 
@@ -103,6 +109,7 @@ class IoExchange {
     String callId,
     MapLocalAction action,
   ) async {
+    _bytes = Uint8List(0);
     if (action.delay > Duration.zero) {
       await Future<void>.delayed(action.delay);
       _checkNotAborted();
@@ -130,7 +137,11 @@ class IoExchange {
         action.response ??
         ProxieResponse(statusCode: 200, headers: {}, body: ProxieBody.empty());
     final out = await _respond(engine, callId, mocked);
-    return ProxieClientResponse.buffered(out, out.body.bytes);
+    return ProxieClientResponse.buffered(
+      out,
+      out.body.bytes,
+      method: _request.method,
+    );
   }
 
   Future<HttpClientResponse> _proceed(
@@ -198,10 +209,13 @@ class IoExchange {
       ),
     );
     final out = await _respond(engine, callId, received);
+    final full = keepsFull(received.body, out.body);
     return ProxieClientResponse.buffered(
       out,
-      keepsFull(received.body, out.body) ? body : out.body.bytes,
+      full ? body : out.body.bytes,
+      method: proceeded.method,
       real: res,
+      owned: full,
     );
   }
 
@@ -218,7 +232,12 @@ class IoExchange {
     Uint8List bytes,
   ) => runMarkedCaptured(() async {
     final app = _request;
-    final out = await _inner.openUrl(method, url);
+    final HttpClientRequest out;
+    try {
+      out = await _inner.openUrl(method, url);
+    } finally {
+      _onOpened?.call();
+    }
     real = out;
     final abortError = _abortError;
     if (abortError != null) {
@@ -245,6 +264,7 @@ class IoExchange {
       out.contentLength = bytes.length;
     }
     if (bytes.isNotEmpty) out.add(bytes);
+    _bytes = Uint8List(0);
     return out.close();
   });
 

@@ -13,13 +13,22 @@ import 'http_tokens.dart';
 class ProxieHttpHeaders implements HttpHeaders {
   /// Empty headers; [defaultPort] is the scheme's port, omitted from `host`.
   ProxieHttpHeaders({int defaultPort = HttpClient.defaultHttpPort})
-    : _defaultPort = defaultPort;
+    : _defaultPort = defaultPort,
+      _received = false;
 
-  /// Immutable headers holding every value of [values] separately.
-  ProxieHttpHeaders.fromMap(
+  /// Immutable response headers holding every value of [values] separately,
+  /// checked the way `dart:io` checks headers it receives.
+  ///
+  /// Values may hold any character except CR, LF and NUL (received headers
+  /// can carry raw non-ASCII bytes, which `dart:io` reads as Latin-1).
+  /// Single-value headers (`content-type`, `date`, `expires`,
+  /// `if-modified-since`) keep every value; their typed getters read the
+  /// first.
+  ProxieHttpHeaders.received(
     Map<String, List<String>> values, {
     int defaultPort = HttpClient.defaultHttpPort,
-  }) : _defaultPort = defaultPort {
+  }) : _defaultPort = defaultPort,
+       _received = true {
     for (final e in values.entries) {
       for (final v in e.value) {
         add(e.key, v);
@@ -29,6 +38,7 @@ class ProxieHttpHeaders implements HttpHeaders {
   }
 
   final int _defaultPort;
+  final bool _received;
   final _headers = <String, List<String>>{};
   final _originalNames = <String, String>{};
   final _noFolding = <String>{};
@@ -268,12 +278,16 @@ class ProxieHttpHeaders implements HttpHeaders {
   void _addAll(String name, Object value) {
     if (value is Iterable) {
       for (final v in value) {
-        _add(name, validateHeaderValue(v as Object));
+        _add(name, _checkValue(v as Object));
       }
     } else {
-      _add(name, validateHeaderValue(value));
+      _add(name, _checkValue(value));
     }
   }
+
+  Object _checkValue(Object value) => _received
+      ? validateReceivedHeaderValue(value)
+      : validateHeaderValue(value);
 
   void _add(String name, Object value) {
     switch (name) {
@@ -291,7 +305,7 @@ class ProxieHttpHeaders implements HttpHeaders {
         if (value is DateTime) {
           _setDate(name, value);
         } else if (value is String) {
-          _set(name, value);
+          _received ? _addValue(name, value) : _set(name, value);
         } else {
           throw HttpException('Unexpected type for header named $name');
         }
@@ -303,7 +317,8 @@ class ProxieHttpHeaders implements HttpHeaders {
         if (v == 'keep-alive') _persistentConnection = true;
         _addValue(name, value);
       case HttpHeaders.contentTypeHeader:
-        _set(name, _checkString(name, value));
+        final v = _checkString(name, value);
+        _received ? _addValue(name, v) : _set(name, v);
       default:
         _addValue(name, value);
     }

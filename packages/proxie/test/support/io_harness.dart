@@ -61,16 +61,22 @@ class IoHarness {
         breakpoints: BreakpointController(timeout: const Duration(seconds: 5)),
       );
 
-  /// Sends [method] [path] with a fresh `HttpClient()`.
+  /// Sends [method] [path] with a fresh `HttpClient()`, closed (not forced)
+  /// right after the request is closed, as apps commonly do, unless
+  /// [closeClient] is false (dart:io cannot follow redirects on a closed
+  /// client).
   Future<HttpClientResponse> send(
     String method,
     String path, {
     void Function(HttpClientRequest)? prepare,
+    bool closeClient = true,
   }) async {
     final client = HttpClient();
     final req = await client.openUrl(method, server.url(path));
     prepare?.call(req);
-    return req.close();
+    final res = req.close();
+    if (closeClient) client.close();
+    return res;
   }
 
   /// The decoded body of an `/echo` response.

@@ -19,7 +19,7 @@ void main() {
       BreakpointPhase.response,
       (_) => const ContinueUnchanged(),
     );
-    final res = await h.send('GET', '/redirect');
+    final res = await h.send('GET', '/redirect', closeClient: false);
     expect(res.statusCode, 200);
     expect(res.redirects, hasLength(1));
     expect(await readText(res), '{"hello":"world"}');
@@ -243,5 +243,88 @@ void main() {
     ]);
     await expectLater(h.send('GET', '/drop'), throwsA(isA<HttpException>()));
     expect(h.sink.last.error!.type, 'stream_error');
+  });
+
+  test('non-ASCII header bytes pass a response breakpoint', () async {
+    h.engine.rules = RuleSet([
+      breakpointRule('*/utf8-header', BreakpointPhase.response),
+    ]);
+    onPause(
+      h.engine,
+      BreakpointPhase.response,
+      (_) => const ContinueUnchanged(),
+    );
+    final res = await h.send('GET', '/utf8-header');
+    final value = res.headers.value('content-disposition')!;
+    expect(value.codeUnits, contains(0xc3));
+    expect(await readText(res), 'ok');
+  });
+
+  test('edited status brings its reason phrase and redirect flag', () async {
+    h.engine.rules = RuleSet([
+      breakpointRule('*/json', BreakpointPhase.response),
+    ]);
+    onPause(
+      h.engine,
+      BreakpointPhase.response,
+      (p) => ExecuteResponse(p.response!.copyWith(statusCode: 302)),
+    );
+    final res = await h.send('GET', '/json');
+    expect(res.statusCode, 302);
+    expect(res.reasonPhrase, 'Found');
+    expect(res.isRedirect, isTrue);
+    await res.drain<void>();
+  });
+
+  test('an explicitly edited reason phrase is kept', () async {
+    h.engine.rules = RuleSet([
+      breakpointRule('*/json', BreakpointPhase.response),
+    ]);
+    onPause(
+      h.engine,
+      BreakpointPhase.response,
+      (p) => ExecuteResponse(
+        p.response!.copyWith(statusCode: 404, reasonPhrase: 'Gone Fishing'),
+      ),
+    );
+    final res = await h.send('GET', '/json');
+    expect(res.reasonPhrase, 'Gone Fishing');
+    expect(res.isRedirect, isFalse);
+    await res.drain<void>();
+  });
+
+  test('unchanged status keeps the server reason phrase', () async {
+    h.engine.rules = RuleSet([
+      breakpointRule('*/status/*', BreakpointPhase.response),
+    ]);
+    onPause(
+      h.engine,
+      BreakpointPhase.response,
+      (_) => const ContinueUnchanged(),
+    );
+    final res = await h.send('GET', '/status/418');
+    expect(res.reasonPhrase, 'Status 418');
+    await res.drain<void>();
+  });
+
+  test('gzip response through a response breakpoint', () async {
+    h.engine.rules = RuleSet([
+      breakpointRule('*/gzip', BreakpointPhase.response),
+    ]);
+    onPause(
+      h.engine,
+      BreakpointPhase.response,
+      (_) => const ContinueUnchanged(),
+    );
+    final res = await h.send('GET', '/gzip');
+    expect(
+      res.compressionState,
+      HttpClientResponseCompressionState.decompressed,
+    );
+    final text = await readText(res);
+    expect(text, '{"zipped":true}');
+    expect(res.contentLength, text.length);
+    await pumpEventQueue();
+    expect(h.sink.last.response!.body.text, '{"zipped":true}');
   });
 }
