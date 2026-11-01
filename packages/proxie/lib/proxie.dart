@@ -2,6 +2,7 @@
 library;
 
 export 'src/core/body_classifier.dart' show classifyBody;
+export 'src/core/breakpoint_controller.dart';
 export 'src/core/curl.dart';
 export 'src/core/masking.dart';
 export 'src/core/presets.dart';

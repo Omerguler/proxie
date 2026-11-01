@@ -1,0 +1,96 @@
+import 'dart:async';
+
+import '../model/request.dart';
+import '../model/response.dart';
+import 'rule.dart';
+
+/// How a paused call was resolved.
+sealed class BreakpointResolution {
+  const BreakpointResolution();
+}
+
+/// Continue with an edited request.
+class ExecuteRequest extends BreakpointResolution {
+  const ExecuteRequest(this.request);
+
+  final ProxieRequest request;
+}
+
+/// Continue with an edited response.
+class ExecuteResponse extends BreakpointResolution {
+  const ExecuteResponse(this.response);
+
+  final ProxieResponse response;
+}
+
+/// Abort the call.
+class Abort extends BreakpointResolution {
+  const Abort();
+}
+
+/// Continue exactly as captured.
+class ContinueUnchanged extends BreakpointResolution {
+  const ContinueUnchanged();
+}
+
+/// A call waiting at a breakpoint.
+class PausedCall {
+  const PausedCall({
+    required this.callId,
+    required this.phase,
+    required this.request,
+    this.response,
+    required this.pausedAt,
+  });
+
+  final String callId;
+  final BreakpointPhase phase;
+  final ProxieRequest request;
+  final ProxieResponse? response;
+  final DateTime pausedAt;
+}
+
+/// Holds paused calls in arrival order until resolved or timed out.
+class BreakpointController {
+  BreakpointController({this.timeout = const Duration(seconds: 60)});
+
+  final Duration timeout;
+  final _entries = <String, _Entry>{};
+  final _changes = StreamController<List<PausedCall>>.broadcast();
+
+  /// Paused calls, oldest first.
+  List<PausedCall> get pending => [for (final e in _entries.values) e.call];
+
+  /// Emits the pending list whenever a call is added or removed.
+  Stream<List<PausedCall>> get changes => _changes.stream;
+
+  /// Pauses [p]; completes when resolved, or with [ContinueUnchanged] on
+  /// timeout.
+  Future<BreakpointResolution> pause(PausedCall p) {
+    final entry = _Entry(p);
+    entry.timer = Timer(
+      timeout,
+      () => resolve(p.callId, const ContinueUnchanged()),
+    );
+    _entries[p.callId] = entry;
+    _changes.add(pending);
+    return entry.completer.future;
+  }
+
+  /// Resolves a paused call; unknown ids are ignored.
+  void resolve(String callId, BreakpointResolution r) {
+    final entry = _entries.remove(callId);
+    if (entry == null) return;
+    entry.timer?.cancel();
+    entry.completer.complete(r);
+    _changes.add(pending);
+  }
+}
+
+class _Entry {
+  _Entry(this.call);
+
+  final PausedCall call;
+  final completer = Completer<BreakpointResolution>();
+  Timer? timer;
+}
