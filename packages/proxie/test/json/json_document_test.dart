@@ -340,9 +340,23 @@ void main() {
       expect(last.depth, depth - 1);
       expect(doc.pathOf(last.nodeId), List.filled(depth, 0));
       expect(utf8.decode(doc.encode()), src);
-      // Pretty output grows with depth squared; check a smaller one.
-      final pretty = _doc('${'[' * 3000}${']' * 3000}').encode(pretty: true);
-      expect(utf8.decode(pretty), startsWith('[\n  [\n    ['));
+    });
+
+    test('pretty output indents at most 512 levels, else is compact', () {
+      // Indentation would make pretty output grow with depth squared.
+      String pretty(String s) => utf8.decode(_doc(s).encode(pretty: true));
+      // 512 levels: the innermost array is the 512th container.
+      final ok = '${'[' * 510}{"a":[]}${']' * 510}';
+      expect(
+        pretty(ok),
+        const JsonEncoder.withIndent('  ').convert(jsonDecode(ok)),
+      );
+      final over = '${'[' * 511}{"a":[]}${']' * 511}';
+      expect(pretty(over), over);
+      final deep = '${'[' * 10000}1${']' * 10000}';
+      final sw = Stopwatch()..start();
+      expect(pretty(deep), deep);
+      expect(sw.elapsedMilliseconds, lessThan(1000));
     });
   });
 

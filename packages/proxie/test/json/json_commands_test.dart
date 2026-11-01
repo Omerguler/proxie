@@ -256,6 +256,16 @@ void main() {
     expect(() => JsonEncode(h.docId).execute(ctx), throwsStateError);
   });
 
+  test('unparsed bodies are not kept; reopening parses again', () async {
+    await store.upsert(_call('c1', response: _body('{"a":')));
+    final a = await open('c1', JsonBodySide.response);
+    final b = await open('c1', JsonBodySide.response);
+    expect(b.docId, isNot(a.docId));
+    expect(b.parseError, a.parseError);
+    expect(() => JsonRows(a.docId, 0, 1).execute(ctx), _closed);
+    expect(openDocs(), hasLength(1));
+  });
+
   test('nodes added by edits count towards the budget', () async {
     await store.upsert(_call('big', response: _zeros(2500000)));
     await store.upsert(_call('small', response: _body('[1]')));

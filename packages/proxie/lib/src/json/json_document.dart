@@ -13,6 +13,9 @@ part 'json_edit.dart';
 /// Longest [JsonRow.preview].
 const int _previewLimit = 120;
 
+/// Deepest container nesting [JsonDocument.encode] indents.
+const int _prettyMaxDepth = 512;
+
 /// A parsed JSON body in typed parallel arrays, with a windowed view of its
 /// visible rows for a virtualized tree.
 ///
@@ -317,11 +320,20 @@ class JsonDocument {
   /// `JsonEncoder.withIndent('  ')`. Scalars are copied from the source as
   /// written; member names are re-encoded from their decoded text. Throws a
   /// [StateError] when there is a [parseError].
+  ///
+  /// Indentation grows with depth, so pretty output of a document nested
+  /// more than 512 containers deep would grow with depth squared; such a
+  /// document is encoded compactly instead.
   Uint8List encode({bool pretty = false}) {
-    final source = _source;
-    if (parseError != null || source == null) {
+    if (parseError != null || _source == null) {
       throw StateError('Document has no JSON: $parseError');
     }
+    return (pretty ? _encode(true) : null) ?? _encode(false)!;
+  }
+
+  /// [encode]; null when [pretty] output would nest too deep.
+  Uint8List? _encode(bool pretty) {
+    final source = _source!;
     final keys = _encodedKeys ??= [];
     for (var k = keys.length; k < _n.keys.length; k++) {
       keys.add(_quotedUtf8(_n.keys[k]));
@@ -329,6 +341,7 @@ class JsonDocument {
     final out = _ByteSink(source.length + 16);
     final open = <int>[]; // containers being written
     final cursor = <int>[]; // next child to write in each of them
+    var tooDeep = false;
 
     void indent(int depth) {
       out.addByte(0x0A);
@@ -345,7 +358,9 @@ class JsonDocument {
       switch (kind) {
         case JsonKind.object || JsonKind.array:
           final isObject = kind == JsonKind.object;
-          if (_n.childCount[id] == 0) {
+          if (pretty && open.length >= _prettyMaxDepth) {
+            tooDeep = true;
+          } else if (_n.childCount[id] == 0) {
             out.addAscii(isObject ? '{}' : '[]');
           } else {
             out.addByte(isObject ? 0x7B : 0x5B);
@@ -391,6 +406,7 @@ class JsonDocument {
       }
       cursor[cursor.length - 1] = _n.nextSibling[child];
       write(child);
+      if (tooDeep) return null;
     }
     return out.takeBytes();
   }

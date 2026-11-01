@@ -28,7 +28,7 @@ final _booleanFlags = JsonKind.boolean.index;
 final _nullFlags = JsonKind.nullValue.index;
 
 class _Parser {
-  _Parser(this.b) : nodes = JsonNodes(b.length ~/ 6 + 16);
+  _Parser(this.b) : nodes = JsonNodes(b.length ~/ 64 + 16);
 
   final Uint8List b;
   final JsonNodes nodes;

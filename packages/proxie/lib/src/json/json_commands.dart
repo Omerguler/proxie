@@ -162,8 +162,9 @@ class JsonEncode extends WorkerCommand<Uint8List> {
   Future<Uint8List> execute(WorkerContext ctx) async {
     final docs = _JsonDocs.of(ctx);
     final doc = docs.get(docId);
-    if (!pretty && !doc.dirty && doc.parseError == null) {
-      return Uint8List.fromList(docs.bytes(docId));
+    final original = docs.bytes(docId);
+    if (!pretty && !doc.dirty && original != null) {
+      return Uint8List.fromList(original);
     }
     return doc.encode(pretty: pretty);
   }
@@ -186,7 +187,8 @@ class _Entry {
   /// `callId \0 side`.
   final String source;
 
-  final Uint8List bytes;
+  /// The body; null when it did not parse, as nothing needs it then.
+  final Uint8List? bytes;
 
   /// Nodes charged to the budget for this document.
   int nodes;
@@ -216,11 +218,12 @@ class _JsonDocs {
   JsonDocument _doc(String docId) => _resources['json:$docId'] as JsonDocument;
 
   /// The open document for [source] if its bytes are still [bytes]; a
-  /// stale one is closed.
+  /// stale one, or one that did not parse, is closed.
   (String, JsonDocument)? reuse(String source, Uint8List bytes) {
     final docId = _bySource[source];
     if (docId == null) return null;
-    if (!_sameBytes(_open[docId]!.bytes, bytes)) {
+    final open = _open[docId]!.bytes;
+    if (open == null || !_sameBytes(open, bytes)) {
       remove(docId);
       return null;
     }
@@ -236,14 +239,14 @@ class _JsonDocs {
     }
     final id = '${_nextId++}';
     _resources['json:$id'] = doc;
-    _open[id] = _Entry(source, bytes, nodes);
+    _open[id] = _Entry(source, doc.parseError == null ? bytes : null, nodes);
     _bySource[source] = id;
     _nodes += nodes;
     return (id, doc);
   }
 
-  /// The body [docId] was opened from.
-  Uint8List bytes(String docId) => _open[docId]!.bytes;
+  /// The body [docId] was opened from; null when it did not parse.
+  Uint8List? bytes(String docId) => _open[docId]?.bytes;
 
   /// Charges the open document [docId] for nodes added since it was opened,
   /// evicting other documents (least recently used first) to stay within
