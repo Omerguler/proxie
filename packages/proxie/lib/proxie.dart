@@ -15,6 +15,9 @@ export 'src/model/body.dart';
 export 'src/model/call.dart';
 export 'src/model/request.dart' hide normalizeHeaders, copyHeaders;
 export 'src/model/response.dart';
+export 'src/storage/call_query.dart';
+export 'src/storage/memory_store.dart';
+export 'src/storage/store.dart';
 
 /// Current package version.
 const kProxieVersion = '0.1.0';
