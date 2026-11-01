@@ -124,9 +124,10 @@ ProxieBody streamedResponseBody(ResponseBody body, String? contentType) {
 /// (`responseType`, `responseDecoder`, JSON content types) with
 /// [transformer].
 ///
-/// Bytes that do not decode (for example invalid JSON under a JSON content
-/// type, edited at a breakpoint or mocked) are handed over as UTF-8 text
-/// instead of failing the call.
+/// Bytes that are not valid JSON under a JSON content type (edited at a
+/// breakpoint or mocked) are handed over as UTF-8 text instead of failing
+/// the call. Failures of an app-supplied `responseDecoder`, and anything
+/// other than a [FormatException], propagate as they would in Dio.
 Future<Object?> decodeResponseData(
   RequestOptions options,
   Transformer transformer,
@@ -134,16 +135,18 @@ Future<Object?> decodeResponseData(
   int statusCode,
   Map<String, List<String>> headers,
 ) async {
+  final decode = transformer.transformResponse(
+    options,
+    ResponseBody.fromBytes(
+      bytes,
+      statusCode,
+      headers: {for (final e in headers.entries) e.key: List.of(e.value)},
+    ),
+  );
+  if (options.responseDecoder != null) return await decode;
   try {
-    return await transformer.transformResponse(
-      options,
-      ResponseBody.fromBytes(
-        bytes,
-        statusCode,
-        headers: {for (final e in headers.entries) e.key: List.of(e.value)},
-      ),
-    );
-  } catch (_) {
+    return await decode;
+  } on FormatException {
     return utf8.decode(bytes, allowMalformed: true);
   }
 }

@@ -19,7 +19,8 @@ abstract final class ProxieDio {
   /// request side, and if it answers requests itself without calling the
   /// following interceptors (a cache, say) those calls stay pending.
   ///
-  /// Installing again is a no-op that returns the installed interceptor;
+  /// Installing again returns the installed interceptor, moved to the end
+  /// of the list if it is not there (for example one added by hand);
   /// passing a different [interceptor] then throws an [ArgumentError].
   /// Setting `dio.httpClientAdapter` afterwards removes the adapter wrapper;
   /// install again to restore it.
@@ -40,6 +41,12 @@ abstract final class ProxieDio {
           'interceptor',
           'This Dio already has a different ProxieDioInterceptor',
         );
+      }
+      // A hand-added interceptor moves to the end, where install puts it.
+      if (!identical(dio.interceptors.last, installed)) {
+        dio.interceptors
+          ..remove(installed)
+          ..add(installed);
       }
     }
     final observed = dio.interceptors.whereType<_ProxieDioObserver>().any(

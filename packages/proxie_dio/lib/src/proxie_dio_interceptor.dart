@@ -124,9 +124,11 @@ class ProxieDioInterceptor extends Interceptor implements ProxieCaptureAdapter {
       );
       decision = await engine.onRequest(callId, name, captured);
     } catch (e, st) {
-      // Capturing must never break the request: send it on unrecorded.
+      // Capturing must never break the request: the call is recorded as
+      // failed ('unknown') and the request is sent on unchanged.
       developer.log('Proxie capture failed', error: e, stackTrace: st);
-      engine.onError(
+      _safeOnError(
+        engine,
         callId,
         ProxieError(type: 'unknown', message: 'Proxie capture failed: $e'),
       );
@@ -151,7 +153,8 @@ class ProxieDioInterceptor extends Interceptor implements ProxieCaptureAdapter {
     } catch (e, st) {
       // Applying the decision failed (ignored when already recorded).
       developer.log('Proxie decision failed', error: e, stackTrace: st);
-      engine.onError(
+      _safeOnError(
+        engine,
         callId,
         ProxieError(type: 'unknown', message: 'Proxie failed: $e'),
       );
@@ -190,6 +193,10 @@ class ProxieDioInterceptor extends Interceptor implements ProxieCaptureAdapter {
     } on ProxieAbortedException catch (e) {
       _finish(options);
       return handler.reject(_aborted(options, e.error), true);
+    } on _DecodeFailure catch (f) {
+      _finish(options);
+      if (handler.isCompleted) return;
+      return handler.reject(f.toDioException(options), true);
     } catch (e, st) {
       developer.log('Proxie response capture failed', error: e, stackTrace: st);
       _finish(options);
@@ -231,6 +238,10 @@ class ProxieDioInterceptor extends Interceptor implements ProxieCaptureAdapter {
       } on ProxieAbortedException catch (e) {
         _finish(options);
         return handler.next(_aborted(options, e.error));
+      } on _DecodeFailure catch (f) {
+        _finish(options);
+        if (handler.isCompleted) return;
+        return handler.next(f.toDioException(options));
       } catch (e, st) {
         developer.log(
           'Proxie response capture failed',
@@ -465,13 +476,17 @@ class ProxieDioInterceptor extends Interceptor implements ProxieCaptureAdapter {
       response.headers = _dioHeaders(options, out.headers);
     }
     if (!sameBytes(captured.body.bytes, out.body.bytes)) {
-      response.data = await decodeResponseData(
-        options,
-        _transformer,
-        out.body.bytes,
-        out.statusCode,
-        out.headers,
-      );
+      try {
+        response.data = await decodeResponseData(
+          options,
+          _transformer,
+          out.body.bytes,
+          out.statusCode,
+          out.headers,
+        );
+      } catch (e, st) {
+        throw _DecodeFailure(e, st);
+      }
     }
   }
 }
@@ -484,7 +499,8 @@ class ProxieDioInterceptor extends Interceptor implements ProxieCaptureAdapter {
 /// the recorded body when only the content type changed (Dio would encode
 /// the app's data differently for the new type). Unchanged bytes keep the
 /// app's data (a [FormData] or stream behind a placeholder). Edits to a body
-/// stored truncated are refused: only part of it is known.
+/// stored truncated are refused, and so is a content-type change for it:
+/// only part of the body is known.
 void _applyRequest(
   RequestOptions options,
   ProxieRequest captured,
@@ -498,12 +514,27 @@ void _applyRequest(
   }
   const ct = Headers.contentTypeHeader;
   final typeChanged = !_sameValues(captured.headers[ct], proceeded.headers[ct]);
-  if (!sameHeaders(captured.headers, proceeded.headers)) {
+  var headers = proceeded.headers;
+  if (captured.body.truncated && typeChanged) {
+    // Dio would encode the app's data anew for the new type, into bytes the
+    // inspector never showed.
+    developer.log(
+      'Proxie: content-type edit on a truncated request body ignored; '
+      'the original content type is sent',
+    );
+    final original = captured.headers[ct];
+    headers = {
+      for (final e in proceeded.headers.entries)
+        if (e.key != ct) e.key: e.value,
+      ct: ?original,
+    };
+  }
+  if (!sameHeaders(captured.headers, headers)) {
     final names = {for (final k in options.headers.keys) k.toLowerCase(): k};
-    final contentType = proceeded.headers[ct];
+    final contentType = headers[ct];
     options
       ..headers = {
-        for (final e in proceeded.headers.entries)
+        for (final e in headers.entries)
           names[e.key] ?? e.key: e.value.length == 1 ? e.value.single : e.value,
       }
       // Clears Dio's default content type too when it was removed.
@@ -535,6 +566,31 @@ bool _sameValues(List<String>? a, List<String>? b) {
     if (a[i] != b[i]) return false;
   }
   return true;
+}
+
+/// A failure decoding an edited response body, handed to the app as Dio
+/// hands over its own decoding failures.
+class _DecodeFailure implements Exception {
+  _DecodeFailure(this.error, this.stackTrace);
+
+  final Object error;
+  final StackTrace stackTrace;
+
+  DioException toDioException(RequestOptions options) => DioException(
+    requestOptions: options,
+    error: error,
+    stackTrace: stackTrace,
+  );
+}
+
+/// [ProxieEngine.onError] that never throws: recording must not break the
+/// request.
+void _safeOnError(ProxieEngine engine, String callId, ProxieError error) {
+  try {
+    engine.onError(callId, error);
+  } catch (e, st) {
+    developer.log('Proxie could not record an error', error: e, stackTrace: st);
+  }
 }
 
 /// Marks the call behind [options] as finished, so later interceptor

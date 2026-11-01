@@ -41,6 +41,8 @@ Call `install` after adding your own interceptors. An interceptor added later
 runs after Proxie's request side; if it answers requests itself without
 calling the following interceptors (a cache interceptor serving from its
 cache, for example), those calls stay pending in the inspector.
+`install` on a Dio that already has a `ProxieDioInterceptor` (added by hand)
+reuses it and moves it to the end of the list.
 
 The returned interceptor implements `ProxieCaptureAdapter`: it captures once
 it is attached to a Proxie engine and passes everything through untouched

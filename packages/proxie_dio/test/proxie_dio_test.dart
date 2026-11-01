@@ -113,6 +113,22 @@ class _ThrowingEngine extends ProxieEngine {
   ) => throw StateError('broken');
 }
 
+/// An engine whose request handling and error recording both throw.
+class _BrokenEngine extends _ThrowingEngine {
+  _BrokenEngine(super.sink);
+
+  @override
+  void onError(String callId, ProxieError err, {ProxieResponse? response}) =>
+      throw StateError('broken too');
+}
+
+/// Throws [StateError] for every body it decodes.
+String? _throwingDecoder(
+  List<int> bytes,
+  RequestOptions options,
+  ResponseBody body,
+) => throw StateError('decoder failed');
+
 /// The overrides set globally, ignoring zone overrides.
 HttpOverrides? _globalOverrides() => Zone.root.run(() => HttpOverrides.current);
 
@@ -789,6 +805,81 @@ void main() {
     expect(server.hitsFor('/json'), 1);
   });
 
+  test('an engine whose onError throws never breaks the request', () async {
+    final broken = _BrokenEngine(sink);
+    addTearDown(broken.dispose);
+    interceptor.attach(broken);
+    final res = await dio
+        .get<dynamic>(url('/json'))
+        .timeout(const Duration(seconds: 2));
+    expect(res.data, {'hello': 'world'});
+  });
+
+  test('a throwing responseDecoder fails a mocked call as in Dio', () async {
+    engine.rules = RuleSet([
+      _mapLocal('*/json', MapLocalAction(response: _jsonRes(200, '{}'))),
+    ]);
+    final err = await dio
+        .get<dynamic>(
+          url('/json'),
+          options: Options(responseDecoder: _throwingDecoder),
+        )
+        .then<DioException>((_) => fail('expected an error'))
+        .catchError((Object e) => e as DioException);
+    expect(err.error, isA<StateError>());
+  });
+
+  test('a throwing responseDecoder fails an edited response', () async {
+    engine.rules = RuleSet([_bp('*/json', BreakpointPhase.response)]);
+    _onPause(
+      engine,
+      BreakpointPhase.response,
+      (p) => ExecuteResponse(p.response!.copyWith(body: _jsonBody('{"x":1}'))),
+    );
+    var decoded = 0;
+    final err = await dio
+        .get<dynamic>(
+          url('/json'),
+          options: Options(
+            responseDecoder: (bytes, options, body) {
+              // The real response decodes; the edited body does not.
+              if (decoded++ == 0) return '{"hello":"world"}';
+              throw StateError('decoder failed');
+            },
+          ),
+        )
+        .then<DioException>((_) => fail('expected an error'))
+        .catchError((Object e) => e as DioException);
+    expect(err.error, isA<StateError>());
+  });
+
+  test('content-type edit on a truncated body is refused', () async {
+    final small = ProxieEngine(
+      config: const ProxieConfig(teeCap: 4),
+      sink: sink,
+      breakpoints: BreakpointController(timeout: const Duration(seconds: 5)),
+    );
+    addTearDown(small.dispose);
+    interceptor.attach(small);
+    small.rules = RuleSet([_bp('*/echo', BreakpointPhase.request)]);
+    _onPause(small, BreakpointPhase.request, (p) {
+      return ExecuteRequest(
+        p.request.copyWith(
+          headers: {
+            ...p.request.headers,
+            'content-type': [Headers.formUrlEncodedContentType],
+            'x-kept': ['1'],
+          },
+        ),
+      );
+    });
+    final res = await dio.post<dynamic>(url('/echo'), data: {'a': '1'});
+    final echoed = res.data as Map;
+    expect((echoed['headers'] as Map)['content-type'], 'application/json');
+    expect((echoed['headers'] as Map)['x-kept'], '1');
+    expect(echoed['body'], '{"a":"1"}');
+  });
+
   test('a non-String-keyed map body is captured as Dio sends it', () async {
     final res = await dio.post<dynamic>(
       url('/echo'),
@@ -822,6 +913,19 @@ void main() {
         () => ProxieDio.install(d, interceptor: ProxieDioInterceptor()),
         throwsArgumentError,
       );
+      d.close();
+    });
+
+    test('moves a hand-added interceptor to the end', () {
+      final d = Dio();
+      final mine = ProxieDioInterceptor();
+      final other = InterceptorsWrapper();
+      d.interceptors
+        ..add(mine)
+        ..add(other);
+      expect(ProxieDio.install(d), same(mine));
+      expect(d.interceptors.last, same(mine));
+      expect(d.interceptors.whereType<ProxieDioInterceptor>(), [mine]);
       d.close();
     });
 
