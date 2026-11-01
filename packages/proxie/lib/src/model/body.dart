@@ -1,6 +1,11 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import '../core/body_classifier.dart';
+
+/// Default render/tee cap for captured bodies (5 MB).
+const int defaultBodyCap = 5 * 1024 * 1024;
+
 /// How a captured body should be presented.
 enum BodyKind { empty, json, text, binary, image }
 
@@ -13,6 +18,24 @@ class ProxieBody {
     this.truncated = false,
     int? originalLength,
   }) : originalLength = originalLength ?? bytes.length;
+
+  /// Classifies [bytes] and keeps at most [cap] of them.
+  factory ProxieBody.from(
+    Uint8List bytes,
+    String? contentType, {
+    int cap = defaultBodyCap,
+  }) {
+    // Classify the whole body so truncation cannot split a UTF-8 character.
+    final kind = classifyBody(bytes, contentType);
+    final truncated = bytes.length > cap;
+    return ProxieBody(
+      bytes: truncated ? Uint8List.sublistView(bytes, 0, cap) : bytes,
+      contentType: contentType,
+      kind: kind,
+      truncated: truncated,
+      originalLength: bytes.length,
+    );
+  }
 
   /// A body with no content.
   factory ProxieBody.empty() =>
