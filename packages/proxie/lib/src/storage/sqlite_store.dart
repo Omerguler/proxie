@@ -10,6 +10,8 @@ import '../core/rule.dart';
 import '../model/body.dart';
 import '../model/call.dart';
 import 'call_query.dart';
+import 'json_bytes.dart';
+import 'spill_names.dart';
 import 'sqlite_schema.dart';
 import 'store.dart';
 
@@ -26,6 +28,9 @@ class SqliteStore implements ProxieStore {
   SqliteStore._(this._db, this._spillDir, this._spillThreshold, this._now);
 
   /// Opens (creating or migrating) the database at [dbPath].
+  ///
+  /// [spillDir] must belong to this database alone: opening deletes spill
+  /// files in it that no row of this database refers to.
   ///
   /// Throws a [StateError] when the file was written by a newer schema.
   factory SqliteStore.open(
@@ -48,7 +53,26 @@ class SqliteStore implements ProxieStore {
       db.close();
       rethrow;
     }
-    return SqliteStore._(db, spillDir, spillThreshold, now ?? DateTime.now);
+    return SqliteStore._(db, spillDir, spillThreshold, now ?? DateTime.now)
+      .._sweepOrphans();
+  }
+
+  /// Deletes spill files no bodies row refers to, left behind by a crash
+  /// between writing a file and committing its row.
+  void _sweepOrphans() {
+    final referenced = _spillFilesWhere('1', const []);
+    try {
+      for (final f in Directory(_spillDir).listSync()) {
+        final name = f.uri.pathSegments.last;
+        if (f is File &&
+            spillFileNamePattern.hasMatch(name) &&
+            !referenced.contains(name)) {
+          _deleteSpillFiles([name]);
+        }
+      }
+    } on FileSystemException {
+      // An unreadable spill directory only means orphans stay for now.
+    }
   }
 
   final Database _db;
@@ -56,6 +80,15 @@ class SqliteStore implements ProxieStore {
   final int _spillThreshold;
   final DateTime Function() _now;
   bool _closed = false;
+
+  /// Source of the per-write part of spill file names; starting from the
+  /// clock keeps names from earlier runs out of the way.
+  int _spillSeq = DateTime.now().microsecondsSinceEpoch;
+
+  /// Test hook: runs inside [upsert] just before COMMIT, after spill files
+  /// were written; throwing from it forces a rollback.
+  @visibleForTesting
+  void Function()? debugBeforeCommit;
 
   @override
   Future<int> startSession() async {
@@ -82,16 +115,17 @@ class SqliteStore implements ProxieStore {
         '''
         INSERT INTO calls(id, session_id, method, url, host, status,
           duration_ms, req_size, res_size, kind, tags, adapter, started_at,
-          error_type, meta)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          started_utc, error_type, meta)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           session_id = excluded.session_id, method = excluded.method,
           url = excluded.url, host = excluded.host, status = excluded.status,
           duration_ms = excluded.duration_ms, req_size = excluded.req_size,
           res_size = excluded.res_size, kind = excluded.kind,
           tags = excluded.tags, adapter = excluded.adapter,
-          started_at = excluded.started_at, error_type = excluded.error_type,
-          meta = excluded.meta''',
+          started_at = excluded.started_at,
+          started_utc = excluded.started_utc,
+          error_type = excluded.error_type, meta = excluded.meta''',
         [
           c.id,
           c.sessionId,
@@ -106,38 +140,40 @@ class SqliteStore implements ProxieStore {
           [for (final t in c.tags) t.name].join(','),
           c.adapter,
           c.startedAt.microsecondsSinceEpoch,
+          c.startedAt.isUtc ? 1 : 0,
           c.error?.type,
           utf8.encode(jsonEncode(meta)),
         ],
       );
-      final rowId =
+      final seq =
           _db
-                  .select('SELECT rowid FROM calls WHERE id = ?', [c.id])
+                  .select('SELECT seq FROM calls WHERE id = ?', [c.id])
                   .single
                   .columnAt(0)
               as int;
       _db.execute('DELETE FROM bodies WHERE call_id = ?', [c.id]);
-      _insertBody(c.id, rowId, 'req', c.request.body, written);
-      if (resBody != null) _insertBody(c.id, rowId, 'res', resBody, written);
-      _db.execute('DELETE FROM calls_fts WHERE rowid = ?', [rowId]);
+      _insertBody(c.id, seq, 'req', c.request.body, written);
+      if (resBody != null) _insertBody(c.id, seq, 'res', resBody, written);
+      _db.execute('DELETE FROM calls_fts WHERE rowid = ?', [seq]);
       _db.execute(
         'INSERT INTO calls_fts(rowid, url, body_text) VALUES (?, ?, ?)',
-        [rowId, c.request.url.toString(), _searchableText(resBody)],
+        [seq, c.request.url.toString(), _searchableText(resBody)],
       );
+      debugBeforeCommit?.call();
       _db.execute('COMMIT');
     } catch (_) {
       _rollback();
-      // Files the rolled-back rows would have pointed to; ones the old rows
-      // still use were overwritten in place and are kept.
-      _deleteSpillFiles(written.difference(old));
+      // Every write goes to a fresh file name, so the old rows' files are
+      // untouched and only this attempt's files need to go.
+      _deleteSpillFiles(written);
       rethrow;
     }
-    _deleteSpillFiles(old.difference(written));
+    _deleteSpillFiles(old);
   }
 
   void _insertBody(
     String callId,
-    int rowId,
+    int seq,
     String which,
     ProxieBody body,
     Set<String> written,
@@ -145,9 +181,19 @@ class SqliteStore implements ProxieStore {
     String? fileName;
     Uint8List? bytes = body.bytes;
     if (body.bytes.length > _spillThreshold) {
-      fileName = _spillFileName(callId, rowId, which);
-      File(_spillPath(fileName)).writeAsBytesSync(body.bytes);
-      written.add(fileName);
+      String name;
+      do {
+        name = spillFileName(
+          callId,
+          seq,
+          which,
+          (_spillSeq++).toRadixString(36),
+        );
+      } while (File(_spillPath(name)).existsSync());
+      // Recorded before writing, so a rollback also removes a partial file.
+      written.add(name);
+      _writeSpill(name, body.bytes);
+      fileName = name;
       bytes = null;
     }
     _db.execute(
@@ -166,6 +212,18 @@ class SqliteStore implements ProxieStore {
         body.originalLength,
       ],
     );
+  }
+
+  void _writeSpill(String name, Uint8List bytes) {
+    final file = File(_spillPath(name));
+    try {
+      file.writeAsBytesSync(bytes);
+    } on FileSystemException {
+      // The spill directory may have been purged while running (cache
+      // cleanup); recreate it and retry once.
+      Directory(_spillDir).createSync(recursive: true);
+      file.writeAsBytesSync(bytes);
+    }
   }
 
   /// The response text that text search sees, or null when the body is not
@@ -214,16 +272,18 @@ class SqliteStore implements ProxieStore {
       if (text.runes.length >= 3) {
         // A trigram phrase query is a case-insensitive substring match.
         clauses.add(
-          'rowid IN (SELECT rowid FROM calls_fts WHERE calls_fts MATCH ?)',
+          'seq IN (SELECT rowid FROM calls_fts WHERE calls_fts MATCH ?)',
         );
         params.add('"${text.replaceAll('"', '""')}"');
       } else {
-        // Too short for trigrams. LIKE folds ASCII case only, so non-ASCII
-        // text is compared after Dart's Unicode-aware lowercasing.
+        // Too short for trigrams: a full scan. LIKE folds ASCII case only, so
+        // non-ASCII text is compared after Dart's Unicode-aware lowercasing.
+        // That calls back into Dart and lowercases every indexed URL and body
+        // (up to 1 MB each) per query, so it is kept to this rare case.
         final ascii = text.codeUnits.every((u) => u < 0x80);
         String col(String name) => ascii ? name : '$_lowerFn($name)';
         clauses.add(
-          'rowid IN (SELECT rowid FROM calls_fts WHERE '
+          'seq IN (SELECT rowid FROM calls_fts WHERE '
           "${col('url')} LIKE ? ESCAPE '\\' OR "
           "${col('body_text')} LIKE ? ESCAPE '\\')",
         );
@@ -251,32 +311,49 @@ class SqliteStore implements ProxieStore {
     final rows = _db.select(
       '''
       SELECT id, session_id, method, url, status, duration_ms, res_size, kind,
-        tags, started_at, adapter, error_type
+        tags, started_at, started_utc, adapter, error_type
       FROM calls $where
       ORDER BY started_at DESC, id DESC
       LIMIT ? OFFSET ?''',
       [...params, limit, offset < 0 ? 0 : offset],
     );
-    return List.unmodifiable([
-      for (final r in rows)
-        CallSummary(
-          id: r['id'] as String,
-          sessionId: r['session_id'] as int,
-          method: r['method'] as String,
-          url: r['url'] as String,
-          statusCode: r['status'] as int?,
-          durationMs: r['duration_ms'] as int?,
-          responseSize: r['res_size'] as int,
-          kind: BodyKind.values.byName(r['kind'] as String),
-          tags: Set.unmodifiable(_decodeTags(r['tags'] as String)),
-          startedAt: DateTime.fromMicrosecondsSinceEpoch(
-            r['started_at'] as int,
-            isUtc: true,
+    final out = <CallSummary>[];
+    for (final r in rows) {
+      try {
+        out.add(
+          CallSummary(
+            id: r['id'] as String,
+            sessionId: r['session_id'] as int,
+            method: r['method'] as String,
+            url: r['url'] as String,
+            statusCode: r['status'] as int?,
+            durationMs: r['duration_ms'] as int?,
+            responseSize: r['res_size'] as int,
+            kind: BodyKind.values.byName(r['kind'] as String),
+            tags: Set.unmodifiable(_decodeTags(r['tags'] as String)),
+            startedAt: _startedAt(r),
+            adapter: r['adapter'] as String,
+            hasError: r['error_type'] != null,
           ),
-          adapter: r['adapter'] as String,
-          hasError: r['error_type'] != null,
-        ),
-    ]);
+        );
+      } on Exception {
+        // Skip a row that no longer decodes rather than failing the page.
+      } on TypeError {
+        // A wrongly typed column.
+      } on ArgumentError {
+        // An unknown enum name (e.g. a kind written by a newer version).
+      }
+    }
+    return List.unmodifiable(out);
+  }
+
+  /// The stored instant, as a UTC or local DateTime like the original.
+  static DateTime _startedAt(Row r) {
+    final at = DateTime.fromMicrosecondsSinceEpoch(
+      r['started_at'] as int,
+      isUtc: true,
+    );
+    return r['started_utc'] == 1 ? at : at.toLocal();
   }
 
   static Set<CallTag> _decodeTags(String raw) => {
@@ -297,30 +374,30 @@ class SqliteStore implements ProxieStore {
 
   @override
   Future<ProxieCall?> get(String id) async {
-    final rows = _db.select('SELECT meta, started_at FROM calls WHERE id = ?', [
-      id,
-    ]);
+    final rows = _db.select(
+      'SELECT meta, started_at, started_utc FROM calls WHERE id = ?',
+      [id],
+    );
     if (rows.isEmpty) return null;
     final row = rows.single;
-    final map =
-        jsonDecode(utf8.decode(row['meta'] as Uint8List))
-            as Map<String, Object?>;
-    final bodies = {
-      for (final b in _db.select('SELECT * FROM bodies WHERE call_id = ?', [
-        id,
-      ]))
-        b['which'] as String: b,
-    };
-    (map['request']! as Map)['body'] = _bodyMap(bodies['req']);
-    (map['response'] as Map?)?['body'] = _bodyMap(bodies['res']);
-    final call = ProxieCall.fromMap(map);
-    // The column holds the exact instant; the ISO string in meta only tells
-    // whether it was a UTC or a local DateTime.
-    final at = DateTime.fromMicrosecondsSinceEpoch(
-      row['started_at'] as int,
-      isUtc: true,
-    );
-    return call.copyWith(startedAt: call.startedAt.isUtc ? at : at.toLocal());
+    final bodyRows = _db.select('SELECT * FROM bodies WHERE call_id = ?', [id]);
+    try {
+      final map =
+          jsonDecode(utf8.decode(row['meta'] as Uint8List))
+              as Map<String, Object?>;
+      final bodies = {for (final b in bodyRows) b['which'] as String: b};
+      (map['request']! as Map)['body'] = _bodyMap(bodies['req']);
+      (map['response'] as Map?)?['body'] = _bodyMap(bodies['res']);
+      final call = ProxieCall.fromMap(map);
+      // The columns hold the exact instant and whether it was UTC.
+      return call.copyWith(startedAt: _startedAt(row));
+    } on Exception {
+      return null; // A stored row that no longer decodes.
+    } on TypeError {
+      return null;
+    } on ArgumentError {
+      return null;
+    }
   }
 
   Map<String, Object?> _bodyMap(Row? row) {
@@ -368,7 +445,9 @@ class SqliteStore implements ProxieStore {
     final out = <ProxieRule>[];
     for (final r in _db.select('SELECT json FROM rules ORDER BY pos, rowid')) {
       try {
-        out.add(ProxieRule.fromMap(_decodeJson(r['json'] as String) as Map));
+        out.add(
+          ProxieRule.fromMap(decodeJsonBytes(r['json'] as String) as Map),
+        );
       } on Exception {
         // Skip rules that no longer decode (e.g. written by a newer version).
       } on TypeError {
@@ -380,7 +459,7 @@ class SqliteStore implements ProxieStore {
 
   @override
   Future<void> saveRules(List<ProxieRule> r) async {
-    final encoded = [for (final rule in r) _encodeJson(rule.toMap())];
+    final encoded = [for (final rule in r) encodeJsonBytes(rule.toMap())];
     _transaction(() {
       _db.execute('DELETE FROM rules');
       for (var i = 0; i < encoded.length; i++) {
@@ -400,7 +479,7 @@ class SqliteStore implements ProxieStore {
     )) {
       try {
         final action = MapLocalAction.fromMap(
-          _decodeJson(r['json'] as String) as Map,
+          decodeJsonBytes(r['json'] as String) as Map,
         );
         out.add(
           ResponsePreset(
@@ -423,7 +502,7 @@ class SqliteStore implements ProxieStore {
     String id,
     String label,
     MapLocalAction a,
-  ) async => _putPreset(id, label, _encodeJson(a.toMap()));
+  ) async => _putPreset(id, label, encodeJsonBytes(a.toMap()));
 
   // Updating in place keeps the rowid, and with it the listing position.
   void _putPreset(String id, String? label, String? json) => _db.execute(
@@ -530,62 +609,3 @@ const _lowerFn = 'proxie_lower';
 final _likeSpecial = RegExp(r'[%_\\]');
 
 String _marks(int n) => List.filled(n, '?').join(', ');
-
-final _reservedName = RegExp(
-  r'^(con|prn|aux|nul|com[0-9]|lpt[0-9])$',
-  caseSensitive: false,
-);
-
-/// A file name for a spilled body that is safe on every platform and
-/// distinct per (call, which).
-///
-/// Bytes other than ASCII letters, digits and `-` become `_XX` (hex), which
-/// keeps the mapping one-to-one. Overlong names fall back to `_r<rowid>`,
-/// which no escaped id can produce.
-String _spillFileName(String callId, int rowId, String which) {
-  String esc(int byte) =>
-      '_${byte.toRadixString(16).toUpperCase().padLeft(2, '0')}';
-  final bytes = utf8.encode(callId);
-  final b = StringBuffer();
-  for (final byte in bytes) {
-    final safe =
-        (byte >= 0x30 && byte <= 0x39) ||
-        (byte >= 0x41 && byte <= 0x5A) ||
-        (byte >= 0x61 && byte <= 0x7A) ||
-        byte == 0x2D;
-    b.write(safe ? String.fromCharCode(byte) : esc(byte));
-  }
-  var name = b.toString();
-  if (name.isEmpty) {
-    name = '_';
-  } else if (_reservedName.hasMatch(name)) {
-    // Windows device names (CON, NUL, ...) are reserved even with an
-    // extension; escaping the first letter keeps the name decodable.
-    name = '${esc(bytes.first)}${name.substring(1)}';
-  }
-  if (name.length > 120) name = '_r$rowId';
-  return '$name.$which';
-}
-
-const _bytesKey = r'$bytes';
-
-/// JSON with byte buffers stored as base64 instead of number arrays.
-String _encodeJson(Object? value) => jsonEncode(_packBytes(value));
-
-Object? _decodeJson(String json) => _unpackBytes(jsonDecode(json));
-
-Object? _packBytes(Object? v) => switch (v) {
-  Uint8List() => {_bytesKey: base64Encode(v)},
-  Map() => {for (final e in v.entries) e.key: _packBytes(e.value)},
-  List() => [for (final x in v) _packBytes(x)],
-  _ => v,
-};
-
-Object? _unpackBytes(Object? v) => switch (v) {
-  Map() when v.length == 1 && v[_bytesKey] is String => base64Decode(
-    v[_bytesKey] as String,
-  ),
-  Map() => {for (final e in v.entries) e.key: _unpackBytes(e.value)},
-  List() => [for (final x in v) _unpackBytes(x)],
-  _ => v,
-};

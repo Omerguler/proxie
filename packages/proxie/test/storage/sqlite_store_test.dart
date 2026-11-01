@@ -31,11 +31,24 @@ SqliteStore _open(Directory d, {DateTime Function()? now}) => SqliteStore.open(
   now: now,
 );
 
-List<String> _spillFiles(Directory d) {
+/// Full names of the files in the spill directory, sorted.
+List<String> _spillNames(Directory d) {
   final spill = Directory(_spillDir(d));
   if (!spill.existsSync()) return const [];
   return [for (final f in spill.listSync()) f.uri.pathSegments.last]..sort();
 }
+
+/// Spill file names without their per-write unique suffix
+/// (`<escaped id>.<which>`), sorted.
+List<String> _spillFiles(Directory d) =>
+    [for (final n in _spillNames(d)) n.substring(0, n.lastIndexOf('.'))]
+      ..sort();
+
+/// The spill file whose name without the unique suffix is [base].
+File _spillFile(Directory d, String base) => File(
+  '${_spillDir(d)}${Platform.pathSeparator}'
+  '${_spillNames(d).singleWhere((n) => n.startsWith('$base.'))}',
+);
 
 Uint8List _pattern(int length) =>
     Uint8List.fromList([for (var i = 0; i < length; i++) (i * 31 + 7) & 0xFF]);
@@ -123,10 +136,7 @@ void main() {
       );
       await store.upsert(c);
       expect(_spillFiles(dir), ['big.req', 'big.res']);
-      expect(
-        File('${_spillDir(dir)}/big.res').readAsBytesSync(),
-        orderedEquals(res),
-      );
+      expect(_spillFile(dir, 'big.res').readAsBytesSync(), orderedEquals(res));
       final got = (await store.get('big'))!;
       expect(got.response!.body.bytes, orderedEquals(res));
       expect(got.request.body.bytes, orderedEquals(req));
@@ -162,16 +172,22 @@ void main() {
 
     test('call ids are made safe and distinct as file names', () async {
       final body = ProxieBody.from(_pattern(_threshold + 1), null);
-      for (final id in ['a/b', 'a_b', 'con', r'..\x', 'ü']) {
+      const ids = ['a/b', 'a_b', 'con', 'CON', r'..\x', 'ü', 'Ab', 'ab', ''];
+      for (final id in ids) {
         await store.upsert(_call(id, responseBody: body));
       }
-      final files = _spillFiles(dir);
-      expect(files, hasLength(5));
-      expect(files.toSet(), hasLength(5));
+      final files = _spillNames(dir);
+      expect(files, hasLength(ids.length));
+      // Distinct even on case-insensitive file systems.
+      expect({for (final f in files) f.toLowerCase()}, hasLength(ids.length));
       for (final f in files) {
-        expect(f, matches(RegExp(r'^[A-Za-z0-9_-]+\.res$')));
+        expect(f, matches(RegExp(r'^[a-z0-9_-]+\.res\.[a-z0-9]+$')));
+        expect(
+          f.split('.').first,
+          isNot(matches(RegExp(r'^(con|nul|prn|aux)$', caseSensitive: false))),
+        );
       }
-      for (final id in ['a/b', 'a_b', 'con', r'..\x', 'ü']) {
+      for (final id in ids) {
         expect(
           (await store.get(id))!.response!.body.bytes,
           orderedEquals(body.bytes),
@@ -184,13 +200,19 @@ void main() {
       await store.upsert(_call('a', requestBody: big, responseBody: big));
       expect(_spillFiles(dir), ['a.req', 'a.res']);
 
-      // Still spilled: same file, new content.
+      // Still spilled: the new content goes to a new file and the old one is
+      // removed after commit.
+      final before = _spillNames(dir);
       final big2 = ProxieBody.from(
         Uint8List.fromList(_pattern(_threshold + 20).reversed.toList()),
         null,
       );
       await store.upsert(_call('a', requestBody: big, responseBody: big2));
       expect(_spillFiles(dir), ['a.req', 'a.res']);
+      expect(
+        _spillNames(dir).where((n) => n.startsWith('a.res.')),
+        isNot(anyElement(isIn(before))),
+      );
       expect(
         (await store.get('a'))!.response!.body.bytes,
         orderedEquals(big2.bytes),
@@ -241,7 +263,7 @@ void main() {
       () async {
         final big = ProxieBody.from(_pattern(_threshold + 1), null);
         await store.upsert(_call('a', responseBody: big));
-        File('${_spillDir(dir)}/a.res').deleteSync();
+        _spillFile(dir, 'a.res').deleteSync();
         final body = (await store.get('a'))!.response!.body;
         expect(body.bytes, isEmpty);
         expect(body.truncated, isTrue);
@@ -470,6 +492,234 @@ void main() {
       final again = sqlite3.open(_dbPath(dir));
       expect(again.userVersion, 2);
       again.close();
+    });
+  });
+
+  group('SqliteStore spill robustness', () {
+    late Directory dir;
+    late SqliteStore store;
+
+    setUp(() {
+      dir = _tempDir();
+      store = _open(dir);
+    });
+    tearDown(() => store.close());
+
+    ProxieBody big(int seed) => ProxieBody.from(
+      Uint8List.fromList([
+        for (var i = 0; i < _threshold + 1; i++) (i * seed + 3) & 0xFF,
+      ]),
+      null,
+    );
+
+    test('a failed upsert keeps the old body and leaves no file', () async {
+      final old = big(5);
+      await store.upsert(_call('a', responseBody: old));
+      final before = _spillNames(dir);
+      store.debugBeforeCommit = () => throw StateError('boom');
+      await expectLater(
+        store.upsert(_call('a', requestBody: big(7), responseBody: big(9))),
+        throwsStateError,
+      );
+      await expectLater(
+        store.upsert(_call('new', responseBody: big(11))),
+        throwsStateError,
+      );
+      store.debugBeforeCommit = null;
+      expect(_spillNames(dir), before);
+      expect(
+        (await store.get('a'))!.response!.body.bytes,
+        orderedEquals(old.bytes),
+      );
+      expect(await store.get('new'), isNull);
+      expect(await store.count(const CallQuery()), 1);
+      // The store still works after the rollback.
+      await store.upsert(_call('new', responseBody: big(11)));
+      expect(_spillFiles(dir), ['a.res', 'new.res']);
+    });
+
+    test('opening removes spill files no row refers to', () async {
+      await store.upsert(_call('a', responseBody: big(5)));
+      await store.close();
+      final spill = _spillDir(dir);
+      final sep = Platform.pathSeparator;
+      File('$spill${sep}orphan.res.zz').writeAsBytesSync([1]);
+      File('$spill${sep}a.req.0').writeAsBytesSync([2]);
+      File('$spill${sep}notes.txt').writeAsBytesSync([3]);
+      store = _open(dir);
+      expect(_spillFiles(dir), ['a.res', 'notes']);
+      expect(
+        (await store.get('a'))!.response!.body.bytes,
+        orderedEquals(big(5).bytes),
+      );
+    });
+
+    test('ids differing only in case keep separate bodies', () async {
+      await store.upsert(_call('Ab', responseBody: big(3), startedAt: _t0));
+      await store.upsert(
+        _call(
+          'ab',
+          responseBody: big(13),
+          startedAt: _t0.add(const Duration(seconds: 1)),
+        ),
+      );
+      expect(_spillNames(dir), hasLength(2));
+      expect(
+        (await store.get('Ab'))!.response!.body.bytes,
+        orderedEquals(big(3).bytes),
+      );
+      expect(
+        (await store.get('ab'))!.response!.body.bytes,
+        orderedEquals(big(13).bytes),
+      );
+      await store.trim(maxCalls: 1, maxAge: const Duration(days: 99999));
+      expect(await store.get('Ab'), isNull);
+      expect(_spillNames(dir), hasLength(1));
+      expect(
+        (await store.get('ab'))!.response!.body.bytes,
+        orderedEquals(big(13).bytes),
+      );
+    });
+
+    test('overlong ids use a short distinct fallback name', () async {
+      final long1 = 'x' * 121;
+      final long2 = '${'x' * 120}y';
+      await store.upsert(_call(long1, responseBody: big(3)));
+      await store.upsert(_call(long2, responseBody: big(13)));
+      final names = _spillNames(dir);
+      expect(names, hasLength(2));
+      for (final n in names) {
+        expect(n, matches(RegExp(r'^_r[0-9]+\.res\.[a-z0-9]+$')));
+      }
+      expect(
+        (await store.get(long1))!.response!.body.bytes,
+        orderedEquals(big(3).bytes),
+      );
+      expect(
+        (await store.get(long2))!.response!.body.bytes,
+        orderedEquals(big(13).bytes),
+      );
+    });
+
+    test('a spill directory removed at runtime is recreated', () async {
+      await store.upsert(_call('a', responseBody: _text('{}', 'text/plain')));
+      Directory(_spillDir(dir)).deleteSync(recursive: true);
+      await store.upsert(_call('b', responseBody: big(3)));
+      expect(
+        (await store.get('b'))!.response!.body.bytes,
+        orderedEquals(big(3).bytes),
+      );
+    });
+  });
+
+  group('SqliteStore schema robustness', () {
+    late Directory dir;
+    late SqliteStore store;
+
+    setUp(() {
+      dir = _tempDir();
+      store = _open(dir);
+    });
+    tearDown(() => store.close());
+
+    Database raw() {
+      final db = sqlite3.open(_dbPath(dir));
+      addTearDown(db.close);
+      return db;
+    }
+
+    test('summaries keep whether startedAt was UTC or local', () async {
+      final local = DateTime.fromMicrosecondsSinceEpoch(
+        _t0.microsecondsSinceEpoch + 1000,
+      );
+      await store.upsert(_call('utc', startedAt: _t0));
+      await store.upsert(_call('local', startedAt: local));
+      Future<void> check() async {
+        final rows = {
+          for (final s in await store.query(
+            const CallQuery(),
+            offset: 0,
+            limit: 10,
+          ))
+            s.id: s.startedAt,
+        };
+        expect(rows['utc'], _t0);
+        expect(rows['utc']!.isUtc, isTrue);
+        expect(rows['local'], local);
+        expect(rows['local']!.isUtc, isFalse);
+      }
+
+      await check();
+      await store.close();
+      store = _open(dir);
+      await check();
+    });
+
+    test('search stays correct after VACUUM renumbers rows', () async {
+      for (final (id, word) in [
+        ('a', 'alphaword'),
+        ('b', 'bravoword'),
+        ('c', 'charlieword'),
+      ]) {
+        await store.upsert(
+          _call(
+            id,
+            responseBody: _text(word, 'text/plain'),
+            startedAt: _t0.add(Duration(seconds: id.codeUnitAt(0))),
+          ),
+        );
+      }
+      await store.trim(maxCalls: 2, maxAge: const Duration(days: 99999));
+      raw().execute('VACUUM');
+      expect(await _ids(store, const CallQuery(text: 'bravoword')), ['b']);
+      expect(await _ids(store, const CallQuery(text: 'charlieword')), ['c']);
+      await store.upsert(
+        _call('d', responseBody: _text('deltaword', 'text/plain')),
+      );
+      expect(await _ids(store, const CallQuery(text: 'deltaword')), ['d']);
+      expect(await _ids(store, const CallQuery(text: 'bravoword')), ['b']);
+    });
+
+    test('has an index for the newest-first listing', () async {
+      final indexes = <String>[];
+      final db = raw();
+      for (final l in db.select(
+        "SELECT name FROM pragma_index_list('calls')",
+      )) {
+        final cols = db
+            .select('SELECT name FROM pragma_index_info(?) ORDER BY seqno', [
+              l['name'],
+            ])
+            .map((r) => r['name'])
+            .join(',');
+        indexes.add(cols);
+      }
+      expect(indexes, contains('started_at,id'));
+    });
+
+    test('a corrupt calls row is skipped by query and null from get', () async {
+      for (final id in ['a', 'b', 'c', 'd']) {
+        await store.upsert(_call(id));
+      }
+      final db = raw();
+      db.execute("UPDATE calls SET kind = 'future' WHERE id = 'b'");
+      db.execute("UPDATE calls SET meta = x'7b' WHERE id = 'c'");
+      db.execute("UPDATE bodies SET kind = 'future' WHERE call_id = 'd'");
+      expect(await _ids(store, const CallQuery()), ['d', 'c', 'a']);
+      expect(await store.get('a'), isNotNull);
+      expect(await store.get('c'), isNull);
+      expect(await store.get('d'), isNull);
+    });
+
+    test('an in-memory database (no WAL) still works', () async {
+      final mem = SqliteStore.open(
+        ':memory:',
+        spillDir: _spillDir(_tempDir()),
+        spillThreshold: _threshold,
+      );
+      addTearDown(mem.close);
+      await mem.upsert(_call('a'));
+      expect(await mem.count(const CallQuery()), 1);
     });
   });
 
