@@ -2,6 +2,7 @@
 library;
 
 export 'src/core/body_classifier.dart' show classifyBody;
+export 'src/core/masking.dart';
 export 'src/model/body.dart';
 export 'src/model/call.dart';
 export 'src/model/request.dart' hide normalizeHeaders;

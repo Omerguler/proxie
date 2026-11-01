@@ -1,0 +1,88 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
+import '../model/body.dart';
+import '../model/request.dart';
+import '../model/response.dart';
+
+/// Replacement for masked values.
+const kMask = '••••••';
+
+/// Masks sensitive headers and JSON keys on stored/displayed copies.
+class ProxieMasking {
+  const ProxieMasking({
+    this.headers = _defaultHeaders,
+    this.jsonKeys = _defaultJsonKeys,
+  });
+
+  static const _defaultHeaders = {
+    'Authorization',
+    'Cookie',
+    'Set-Cookie',
+    'Proxy-Authorization',
+  };
+  static const _defaultJsonKeys = {
+    'password',
+    'token',
+    'access_token',
+    'refresh_token',
+    'secret',
+  };
+
+  static const defaults = ProxieMasking();
+
+  /// Header names to mask (case-insensitive).
+  final Set<String> headers;
+
+  /// JSON object keys to mask at any depth (case-insensitive).
+  final Set<String> jsonKeys;
+
+  ProxieRequest maskRequest(ProxieRequest r) =>
+      r.copyWith(headers: _maskHeaders(r.headers), body: _maskBody(r.body));
+
+  ProxieResponse maskResponse(ProxieResponse r) =>
+      r.copyWith(headers: _maskHeaders(r.headers), body: _maskBody(r.body));
+
+  Map<String, List<String>> _maskHeaders(Map<String, List<String>> input) {
+    final names = {for (final h in headers) h.toLowerCase()};
+    return {
+      for (final e in input.entries)
+        e.key: names.contains(e.key.toLowerCase())
+            ? [for (final _ in e.value) kMask]
+            : List<String>.of(e.value),
+    };
+  }
+
+  ProxieBody _maskBody(ProxieBody body) {
+    if (body.kind != BodyKind.json || body.bytes.length > defaultBodyCap) {
+      return body;
+    }
+    final text = body.text;
+    if (text == null) return body;
+    final Object? decoded;
+    try {
+      decoded = jsonDecode(text);
+    } on FormatException {
+      return body;
+    }
+    final keys = {for (final k in jsonKeys) k.toLowerCase()};
+    final masked = _walk(decoded, keys);
+    return ProxieBody.from(
+      Uint8List.fromList(utf8.encode(jsonEncode(masked))),
+      body.contentType,
+    );
+  }
+
+  Object? _walk(Object? node, Set<String> keys) {
+    if (node is Map) {
+      return {
+        for (final e in node.entries)
+          e.key as String: keys.contains((e.key as String).toLowerCase())
+              ? kMask
+              : _walk(e.value, keys),
+      };
+    }
+    if (node is List) return [for (final v in node) _walk(v, keys)];
+    return node;
+  }
+}
