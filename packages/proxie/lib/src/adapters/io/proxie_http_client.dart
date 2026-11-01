@@ -18,8 +18,9 @@ import 'http_tokens.dart';
 /// promise that requests opened before it still complete: a non-forced
 /// close stops new requests at once but closes [inner] only after every
 /// pending buffered request has opened its inner request (or ended). A
-/// forced close aborts pending buffered requests (recorded as cancelled)
-/// and force-closes [inner].
+/// forced close aborts every buffered request still awaiting its response,
+/// including ones paused at a breakpoint (recorded as cancelled), and
+/// force-closes [inner].
 class ProxieIoHttpClient implements HttpClient {
   ProxieIoHttpClient(
     this.inner, {
@@ -37,6 +38,10 @@ class ProxieIoHttpClient implements HttpClient {
 
   /// Buffered requests that may still open a request on [inner].
   final _pending = <BufferedHttpClientRequest>{};
+
+  /// Buffered requests whose response has not been delivered yet, including
+  /// ones paused at a response breakpoint.
+  final _active = <BufferedHttpClientRequest>{};
   bool _hasConnectionFactory = false;
 
   bool get _passThrough => _engineOf() == null || isProxieCaptured();
@@ -125,7 +130,7 @@ class ProxieIoHttpClient implements HttpClient {
   void close({bool force = false}) {
     _closing = true;
     if (force) {
-      for (final request in _pending.toList()) {
+      for (final request in _active.toList()) {
         request.abort(
           HttpException('Client closed forcefully', uri: request.uri),
         );
@@ -256,6 +261,8 @@ class ProxieIoHttpClient implements HttpClient {
       onSettled: _settled,
     );
     _pending.add(request);
+    _active.add(request);
+    request.done.whenComplete(() => _active.remove(request)).ignore();
     return Future.value(request);
   }
 }

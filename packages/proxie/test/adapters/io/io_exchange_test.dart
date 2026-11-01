@@ -369,4 +369,29 @@ void main() {
     final second = await h.send('GET', '/json');
     expect(await readText(second), '{"a":1}');
   });
+
+  test('mock with a still-gzipped body keeps content-encoding', () async {
+    final zipped = Uint8List.fromList(gzip.encode(utf8.encode('{"z":1}')));
+    h.engine.rules = RuleSet([
+      mapLocalRule(
+        '*/json',
+        MapLocalAction(
+          response: ProxieResponse(
+            statusCode: 200,
+            headers: {
+              'content-type': ['application/json'],
+              'content-encoding': ['gzip'],
+            },
+            body: ProxieBody.from(zipped, 'application/json'),
+          ),
+        ),
+      ),
+    ]);
+    final res = await h.send('GET', '/json');
+    expect(res.headers.value('content-encoding'), 'gzip');
+    expect(res.compressionState, HttpClientResponseCompressionState.compressed);
+    final bytes = await res.fold<List<int>>([], (a, c) => a..addAll(c));
+    expect(bytes, zipped);
+    expect(res.contentLength, zipped.length);
+  });
 }

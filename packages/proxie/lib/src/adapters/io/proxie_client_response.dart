@@ -22,8 +22,12 @@ class ProxieClientResponse extends Stream<List<int>>
   ///
   /// [response]'s headers are kept with every value separate (checked as
   /// received headers), except that `content-length` is set to the delivered
-  /// length and `transfer-encoding` is dropped; for a mock (no [real]),
-  /// `content-encoding` is dropped too, since the body is delivered as is.
+  /// length and `transfer-encoding` is dropped. When [real]'s body was
+  /// decompressed by `dart:io`, the length is reported unknown (-1, no
+  /// `content-length`) as `dart:io` does. For a mock (no [real]),
+  /// `content-encoding` is dropped since the body is delivered as is, unless
+  /// it declares gzip and the bytes are still gzip data: then it is kept and
+  /// the response reports [HttpClientResponseCompressionState.compressed].
   ///
   /// The reason phrase is [response]'s, unless the status was edited and
   /// the phrase was not, in which case it is the standard one for the new
@@ -41,13 +45,26 @@ class ProxieClientResponse extends Stream<List<int>>
     bool owned = false,
   }) {
     final body = owned ? bytes : Uint8List.fromList(bytes);
+    final decompressed =
+        real?.compressionState ==
+        HttpClientResponseCompressionState.decompressed;
+    final stillGzipped =
+        real == null &&
+        body.length >= 2 &&
+        body[0] == 0x1f &&
+        body[1] == 0x8b &&
+        (response.headers[HttpHeaders.contentEncodingHeader] ?? const []).any(
+          (v) => v.toLowerCase().contains('gzip'),
+        );
     final headers = ProxieHttpHeaders.received({
       for (final e in response.headers.entries)
         if (e.key != HttpHeaders.contentLengthHeader &&
             e.key != HttpHeaders.transferEncodingHeader &&
-            (real != null || e.key != HttpHeaders.contentEncodingHeader))
+            (real != null ||
+                stillGzipped ||
+                e.key != HttpHeaders.contentEncodingHeader))
           e.key: e.value,
-      HttpHeaders.contentLengthHeader: ['${body.length}'],
+      if (!decompressed) HttpHeaders.contentLengthHeader: ['${body.length}'],
     });
     final status = response.statusCode;
     var phrase = response.reasonPhrase;
@@ -63,11 +80,13 @@ class ProxieClientResponse extends Stream<List<int>>
       Stream.fromIterable([if (body.isNotEmpty) body]),
       statusCode: status,
       reasonPhrase: phrase,
-      contentLength: body.length,
+      contentLength: decompressed ? -1 : body.length,
       headers: headers,
       compressionState:
           real?.compressionState ??
-          HttpClientResponseCompressionState.notCompressed,
+          (stillGzipped
+              ? HttpClientResponseCompressionState.compressed
+              : HttpClientResponseCompressionState.notCompressed),
       persistentConnection:
           real?.persistentConnection ?? headers.persistentConnection,
       isRedirect: isRedirectStatus(method, status),

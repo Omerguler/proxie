@@ -321,10 +321,61 @@ void main() {
       res.compressionState,
       HttpClientResponseCompressionState.decompressed,
     );
-    final text = await readText(res);
-    expect(text, '{"zipped":true}');
-    expect(res.contentLength, text.length);
+    // Like dart:io for a decompressed body: length unknown.
+    expect(res.contentLength, -1);
+    expect(res.headers.value('content-length'), isNull);
+    expect(await readText(res), '{"zipped":true}');
     await pumpEventQueue();
     expect(h.sink.last.response!.body.text, '{"zipped":true}');
+  });
+
+  test(
+    'close(force: true) fails a call paused at a response breakpoint',
+    () async {
+      h.engine.rules = RuleSet([
+        breakpointRule('*/json', BreakpointPhase.response),
+      ]);
+      final client = HttpClient();
+      final req = await client.getUrl(h.server.url('/json'));
+      final f = req.close();
+      while (h.engine.breakpoints.pending.isEmpty) {
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+      }
+      client.close(force: true);
+      await expectLater(
+        f,
+        throwsA(
+          isA<HttpException>()
+              .having((e) => e.message, 'message', 'Client closed forcefully')
+              .having((e) => e.uri, 'uri', h.server.url('/json')),
+        ),
+      );
+      await pumpEventQueue();
+      expect(h.engine.breakpoints.pending, isEmpty);
+      expect(h.sink.last.error!.type, 'cancelled');
+    },
+  );
+
+  test('an edited lowercase method still gets redirect detection', () async {
+    h.engine.rules = RuleSet([
+      breakpointRule('*/json', BreakpointPhase.request),
+      breakpointRule('*/echo', BreakpointPhase.response),
+    ]);
+    onPause(
+      h.engine,
+      BreakpointPhase.request,
+      (p) => ExecuteRequest(
+        p.request.copyWith(method: 'get', url: h.server.url('/echo')),
+      ),
+    );
+    onPause(
+      h.engine,
+      BreakpointPhase.response,
+      (p) => ExecuteResponse(p.response!.copyWith(statusCode: 302)),
+    );
+    final res = await h.send('POST', '/json');
+    expect(res.statusCode, 302);
+    expect(res.isRedirect, isTrue);
+    await res.drain<void>();
   });
 }

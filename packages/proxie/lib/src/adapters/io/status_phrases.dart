@@ -48,6 +48,7 @@ const _phrases = <int, String>{
 /// Whether a [statusCode] answer to [method] is a redirect, as `dart:io`'s
 /// `HttpClientResponse.isRedirect` decides.
 bool isRedirectStatus(String method, int statusCode) {
+  method = method.toUpperCase();
   if (method == 'GET' || method == 'HEAD') {
     return const {301, 302, 303, 307, 308}.contains(statusCode);
   }
