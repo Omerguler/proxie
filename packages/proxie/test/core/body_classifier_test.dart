@@ -196,4 +196,12 @@ void main() {
       expect(b.text, 'hello');
     });
   });
+
+  test('cap smaller than the first character yields an empty text body', () {
+    final b = ProxieBody.from(_s('€'), 'text/plain', cap: 1);
+    expect(b.bytes, isEmpty);
+    expect(b.truncated, isTrue);
+    expect(b.originalLength, 3);
+    expect(b.text, '');
+  });
 }

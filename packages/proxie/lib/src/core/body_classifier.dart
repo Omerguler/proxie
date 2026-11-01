@@ -5,7 +5,6 @@ import '../model/body.dart';
 
 const _sniffLength = 512;
 
-/// Whether [contentType] is `text/*` declaring a Latin-1 charset.
 String? _mimeOf(String? contentType) =>
     contentType?.split(';').first.trim().toLowerCase();
 
@@ -27,6 +26,7 @@ bool isDeclaredTextual(String? contentType) {
   return mime != null && (_isDeclaredJson(mime) || _isDeclaredText(mime));
 }
 
+/// Whether [contentType] is `text/*` declaring a Latin-1 charset.
 bool isLatin1Text(String? contentType) {
   if (contentType == null) return false;
   final parts = contentType.split(';');

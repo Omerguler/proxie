@@ -98,11 +98,18 @@ class ProxieMasking {
     );
   }
 
-  static final _newlineIndent = RegExp(r'\n\s');
-
-  /// Whether [text] has line breaks inside its structure (not just a trailing
-  /// newline).
-  static bool _isPretty(String text) => _newlineIndent.hasMatch(text.trim());
+  /// Whether [text] has a line break before its last non-whitespace
+  /// character (a trailing newline alone does not count).
+  static bool _isPretty(String text) {
+    var last = text.length - 1;
+    while (last >= 0) {
+      final u = text.codeUnitAt(last);
+      if (u != 0x20 && u != 0x09 && u != 0x0a && u != 0x0d) break;
+      last--;
+    }
+    final nl = text.indexOf(String.fromCharCode(10));
+    return nl >= 0 && nl < last;
+  }
 
   /// Replaces values of sensitive keys without parsing, for bodies that are
   /// truncated, oversized, or not valid JSON.

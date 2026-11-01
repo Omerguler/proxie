@@ -260,4 +260,11 @@ void main() {
     );
     expect(pretty.body.text, contains('$nl  "password"'));
   });
+
+  test('json with a newline only between tokens stays multi-line', () {
+    final nl = String.fromCharCode(10);
+    final out = masking.maskRequest(_req(body: _json('{$nl"a":1$nl}')));
+    expect(out.body.text, contains(nl));
+    expect(jsonDecode(out.body.text!), {'a': 1});
+  });
 }
