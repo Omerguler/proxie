@@ -141,7 +141,19 @@ void main() {
     },
   );
 
-  test('handles and rows cross the isolate boundary', () async {
+  test('JsonSchema infers the schema of an array node', () async {
+    await store.upsert(
+      _call('c1', response: _body('{"l":[{"a":1},{"a":2,"b":"x"}],"n":1}')),
+    );
+    final h = await open('c1', 'response');
+    final rows = await JsonRows(h.docId, 0, 2).execute(ctx);
+    final schema = await JsonSchema(h.docId, rows[0].nodeId).execute(ctx);
+    expect(schema!.describe(), '{a: number, b?: string}');
+    expect(await JsonSchema(h.docId, rows[1].nodeId).execute(ctx), isNull);
+    expect(() => JsonSchema('x', 0).execute(ctx), throwsStateError);
+  });
+
+  test('handles, rows and schemas cross the isolate boundary', () async {
     final worker = await IsolateWorker.spawn(
       const ProxieConfig(persistHistory: false),
       MemoryStore.new,
@@ -152,6 +164,9 @@ void main() {
     final rows = await worker.run(JsonRows(h.docId, 0, 5));
     expect(rows.single.key, 'a');
     expect(await worker.run(JsonToggle(h.docId, rows.single.nodeId)), 2);
+    final list = await worker.run(OpenJson('c1', 'request'));
+    final schema = await worker.run(JsonSchema(list.docId, 0));
+    expect(schema, isNull); // {"q":[1,2,3]} root is an object
     await worker.run(CloseJson(h.docId));
     await expectLater(
       worker.run(JsonRows(h.docId, 0, 5)),

@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'json_row.dart';
+import 'json_schema.dart';
 
 /// Longest [JsonRow.preview].
 const int _previewLimit = 120;
@@ -65,6 +66,9 @@ class JsonDocument {
 
   /// Child ids and prefix sums of their visible sizes, per container.
   final Map<int, _Children> _children = {};
+
+  /// Inferred schemas per array node; a null value means "no objects".
+  final Map<int, ArraySchema?> _schemas = {};
 
   int get _nodeCount => _parent.length;
 
@@ -227,7 +231,50 @@ class JsonDocument {
     preview: _preview(id),
     childCount: _childCount[id],
     expanded: id != 0 && _expanded[id],
+    missingKeys: _missingKeys(id),
   );
+
+  /// The shape of the objects in array [arrayNodeId]; null when it is not an
+  /// array or holds no objects. Cached until [invalidateSchema].
+  ArraySchema? schemaOf(int arrayNodeId) {
+    _checkId(arrayNodeId);
+    if (_kind[arrayNodeId] != JsonKind.array) return null;
+    if (_schemas.containsKey(arrayNodeId)) return _schemas[arrayNodeId];
+    final builder = ArraySchemaBuilder();
+    for (var item = _firstChild[arrayNodeId]; item != -1;) {
+      if (_kind[item] == JsonKind.object) {
+        builder.addObject();
+        for (var m = _firstChild[item]; m != -1; m = _nextSibling[m]) {
+          builder.addMember(_key[m]!, _kind[m]);
+        }
+      }
+      item = _nextSibling[item];
+    }
+    return _schemas[arrayNodeId] = builder.build();
+  }
+
+  /// Drops the cached schema of [arrayNodeId]. Internal: for edits that
+  /// change the array's items.
+  void invalidateSchema(int arrayNodeId) => _schemas.remove(arrayNodeId);
+
+  /// Optional schema fields that object [id] lacks, in schema order.
+  List<String> _missingKeys(int id) {
+    final parent = _parent[id];
+    if (_kind[id] != JsonKind.object ||
+        parent == -1 ||
+        _kind[parent] != JsonKind.array) {
+      return const [];
+    }
+    final optional = schemaOf(parent)!.fields.where((f) => f.optional);
+    if (optional.isEmpty) return const [];
+    final keys = {
+      for (var m = _firstChild[id]; m != -1; m = _nextSibling[m]) _key[m],
+    };
+    return List.unmodifiable([
+      for (final f in optional)
+        if (!keys.contains(f.key)) f.key,
+    ]);
+  }
 
   /// Expands or collapses container [nodeId]; scalars and the root are left
   /// as they are. Nodes under a collapsed ancestor keep their new state for

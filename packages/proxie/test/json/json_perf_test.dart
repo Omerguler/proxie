@@ -80,9 +80,27 @@ void main() {
       'expanded (${doc.visibleCount} rows) rows($mid,60): ${_ms(deep)}, '
       'next window: ${_ms(deepWarm)}',
     );
+    // The first page also infers the root array's schema (for missingKeys).
+    expect(first, lessThan(50 * 1000));
     expect(jump, lessThan(5 * 1000));
     expect(deep, lessThan(5 * 1000));
     expect(deepWarm, lessThan(5 * 1000));
+  });
+
+  test('schemaOf a 40k-object array', () {
+    final doc = JsonDocument.tryParse(bytes);
+    late ArraySchema? schema;
+    final cold = _time(() => schema = doc.schemaOf(0));
+    final cached = _time(() => doc.schemaOf(0));
+    // ignore: avoid_print
+    print('schemaOf(40k objects): ${_ms(cold)}; cached: ${_ms(cached)}');
+    expect(
+      schema!.describe(),
+      '{id: number, name: string, email: string, active: boolean, '
+      'score: number, tags: array, address: object, avatar?: null, '
+      'bio: string}',
+    );
+    expect(cold, lessThan(50 * 1000));
   });
 
   test('toggle on a 40k-child array < 50 ms', () {

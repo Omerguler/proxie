@@ -19,6 +19,7 @@ export 'src/core/url_matcher.dart';
 export 'src/json/json_commands.dart';
 export 'src/json/json_document.dart';
 export 'src/json/json_row.dart';
+export 'src/json/json_schema.dart' hide ArraySchemaBuilder;
 export 'src/model/body.dart';
 export 'src/model/call.dart';
 export 'src/model/request.dart' hide normalizeHeaders, copyHeaders;

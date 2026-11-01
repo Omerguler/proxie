@@ -2,6 +2,7 @@ import '../model/body.dart';
 import '../worker/worker.dart';
 import 'json_document.dart';
 import 'json_row.dart';
+import 'json_schema.dart';
 
 /// Documents kept open per worker; opening more evicts the least recently
 /// used one.
@@ -97,6 +98,19 @@ class JsonToggle extends WorkerCommand<int> {
     doc.toggle(nodeId);
     return doc.visibleCount;
   }
+}
+
+/// The schema of array node [nodeId]; null when it is not an array or holds
+/// no objects.
+class JsonSchema extends WorkerCommand<ArraySchema?> {
+  const JsonSchema(this.docId, this.nodeId);
+
+  final String docId;
+  final int nodeId;
+
+  @override
+  Future<ArraySchema?> execute(WorkerContext ctx) async =>
+      _JsonDocs.of(ctx).get(docId).schemaOf(nodeId);
 }
 
 /// Releases a document; unknown ids are ignored.
