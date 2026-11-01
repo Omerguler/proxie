@@ -4,6 +4,8 @@ library;
 export 'src/core/body_classifier.dart' show classifyBody;
 export 'src/core/curl.dart';
 export 'src/core/masking.dart';
+export 'src/core/rule.dart';
+export 'src/core/url_matcher.dart';
 export 'src/model/body.dart';
 export 'src/model/call.dart';
 export 'src/model/request.dart' hide normalizeHeaders;
