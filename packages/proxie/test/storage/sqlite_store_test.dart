@@ -64,12 +64,13 @@ ProxieCall _call(
   String? url,
   DateTime? startedAt,
   int session = 1,
+  String method = 'POST',
 }) => ProxieCall(
   id: id,
   sessionId: session,
   adapter: 'dio',
   request: ProxieRequest(
-    method: 'POST',
+    method: method,
     url: Uri.parse(url ?? 'https://api.test/$id'),
     headers: {
       'X-A': ['1', '2'],
@@ -701,13 +702,30 @@ void main() {
       for (final id in ['a', 'b', 'c', 'd']) {
         await store.upsert(_call(id));
       }
+      await store.upsert(_call('g', method: 'GET'));
+      await store.upsert(_call('h', method: 'GET'));
       final db = raw();
       db.execute("UPDATE calls SET kind = 'future' WHERE id = 'b'");
       db.execute("UPDATE calls SET meta = x'7b' WHERE id = 'c'");
       db.execute("UPDATE bodies SET kind = 'future' WHERE call_id = 'd'");
-      expect(await _ids(store, const CallQuery()), ['d', 'c', 'a']);
-      expect(await store.count(const CallQuery()), 3);
+      db.execute("UPDATE calls SET kind = 'future' WHERE id = 'h'");
+      expect(await _ids(store, const CallQuery()), ['g', 'd', 'c', 'a']);
+      expect(await _ids(store, const CallQuery(methods: {'POST'})), [
+        'd',
+        'c',
+        'a',
+      ]);
+      for (final q in [
+        const CallQuery(),
+        const CallQuery(methods: {'POST'}),
+        const CallQuery(methods: {'GET'}),
+      ]) {
+        final listed = await store.query(q, offset: 0, limit: 1000);
+        expect(await store.count(q), listed.length);
+      }
+      expect(await store.count(const CallQuery()), 4);
       expect(await store.count(const CallQuery(methods: {'POST'})), 3);
+      expect(await store.count(const CallQuery(methods: {'GET'})), 1);
       expect(await store.get('a'), isNotNull);
       expect(await store.get('c'), isNull);
       expect(await store.get('d'), isNull);

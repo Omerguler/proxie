@@ -370,6 +370,8 @@ class SqliteStore implements ProxieStore {
         if (t.name == name) t,
   };
 
+  /// O(N) over the matching rows (bounded by retention), since each row is
+  /// decoded to skip corrupt ones exactly like [query].
   @override
   Future<int> count(CallQuery q) async {
     final (where, params) = _where(q);
