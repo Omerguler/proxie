@@ -79,21 +79,55 @@ void main() {
     expect(identical(out.body, body), isTrue);
   });
 
-  test('invalid json body is untouched', () {
-    final body = _json('{"password": ');
+  test('malformed json still masks sensitive values', () {
+    final body = _json('{"Token": 12345, "a": ');
     final out = masking.maskRequest(_req(body: body));
-    expect(out.body.text, '{"password": ');
+    expect(out.body.text, '{"Token": "$kMask", "a": ');
   });
 
-  test('json body over render cap is untouched', () {
-    final big = '{"password":"${'a' * (defaultBodyCap + 10)}"}';
+  test('truncated json masks values and keeps truncation metadata', () {
+    final full =
+        '{"user":{"password":"hunter2","name":"a"},"pad":"${'x' * 50}"}';
+    final bytes = Uint8List.fromList(utf8.encode(full));
+    final body = ProxieBody.from(bytes, 'application/json', cap: 40);
+    expect(body.truncated, isTrue);
+    final out = masking.maskRequest(_req(body: body));
+    expect(out.body.text, contains('"password":"$kMask"'));
+    expect(out.body.text, isNot(contains('hunter2')));
+    expect(out.body.truncated, isTrue);
+    expect(out.body.originalLength, bytes.length);
+  });
+
+  test('truncation mid-value still masks the partial value', () {
+    final bytes = Uint8List.fromList(utf8.encode('{"password":"hunt'));
+    final body = ProxieBody.from(bytes, 'application/json', cap: 1000);
+    final cut = ProxieBody(
+      bytes: bytes,
+      contentType: 'application/json',
+      kind: body.kind,
+      truncated: true,
+      originalLength: 5000,
+    );
+    final out = masking.maskRequest(_req(body: cut));
+    expect(out.body.text, '{"password":"$kMask"');
+  });
+
+  test('escaped quote inside masked string value is fully masked', () {
+    final body = _json(r'{"secret":"a\"b","next":"keep" ');
+    final out = masking.maskRequest(_req(body: body));
+    expect(out.body.text, '{"secret":"$kMask","next":"keep" ');
+  });
+
+  test('json body over render cap is masked via text fallback', () {
+    final big = '{"password":"s3cret","pad":"${'a' * (defaultBodyCap + 10)}"}';
     final body = ProxieBody.from(
       Uint8List.fromList(utf8.encode(big)),
       'application/json',
       cap: defaultBodyCap + 100,
     );
     final out = masking.maskRequest(_req(body: body));
-    expect(identical(out.body, body), isTrue);
+    expect(out.body.text, contains('"password":"$kMask"'));
+    expect(out.body.text, isNot(contains('s3cret')));
   });
 
   test('returns new objects and leaves originals unchanged', () {

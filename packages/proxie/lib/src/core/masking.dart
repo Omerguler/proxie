@@ -54,23 +54,46 @@ class ProxieMasking {
   }
 
   ProxieBody _maskBody(ProxieBody body) {
-    if (body.kind != BodyKind.json || body.bytes.length > defaultBodyCap) {
-      return body;
-    }
+    final isJson =
+        body.kind == BodyKind.json ||
+        (body.contentType?.toLowerCase().contains('json') ?? false);
+    if (!isJson || body.bytes.isEmpty) return body;
     final text = body.text;
     if (text == null) return body;
-    final Object? decoded;
-    try {
-      decoded = jsonDecode(text);
-    } on FormatException {
-      return body;
-    }
     final keys = {for (final k in jsonKeys) k.toLowerCase()};
-    final masked = _walk(decoded, keys);
-    return ProxieBody.from(
-      Uint8List.fromList(utf8.encode(jsonEncode(masked))),
-      body.contentType,
+    if (!body.truncated && body.bytes.length <= defaultBodyCap) {
+      try {
+        final masked = _walk(jsonDecode(text), keys);
+        return ProxieBody.from(
+          Uint8List.fromList(utf8.encode(jsonEncode(masked))),
+          body.contentType,
+        );
+      } on FormatException {
+        // Fall through to the text-level fallback (fail closed).
+      }
+    }
+    final masked = _maskText(text);
+    if (masked == text) return body;
+    return ProxieBody(
+      bytes: Uint8List.fromList(utf8.encode(masked)),
+      contentType: body.contentType,
+      kind: body.kind,
+      truncated: body.truncated,
+      originalLength: body.originalLength,
     );
+  }
+
+  /// Replaces values of sensitive keys without parsing, for bodies that are
+  /// truncated, oversized, or not valid JSON.
+  String _maskText(String text) {
+    if (jsonKeys.isEmpty) return text;
+    final alt = jsonKeys.map(RegExp.escape).join('|');
+    final re = RegExp(
+      '("(?:$alt)"\\s*:\\s*)'
+      r'("(?:[^"\\]|\\.)*\\?"?|-?\d[\d.eE+-]*|true|false|null)',
+      caseSensitive: false,
+    );
+    return text.replaceAllMapped(re, (m) => '${m[1]}"$kMask"');
   }
 
   Object? _walk(Object? node, Set<String> keys) {
