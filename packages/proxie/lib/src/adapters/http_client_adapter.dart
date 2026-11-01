@@ -10,6 +10,7 @@ import '../model/body.dart';
 import '../model/call.dart';
 import '../model/request.dart';
 import '../model/response.dart';
+import 'body_capture.dart';
 import 'capture_adapter.dart';
 import 'capture_marker.dart';
 
@@ -178,7 +179,7 @@ class ProxieHttpClient extends http.BaseClient implements ProxieCaptureAdapter {
     final out = await _respond(engine, callId, request.url, received);
     return _streamed(
       out,
-      _keepsFull(received.body, out.body) ? body : out.body.bytes,
+      keepsFull(received.body, out.body) ? body : out.body.bytes,
       request,
       url: _finalUrl(res, request),
       isRedirect: res.isRedirect,
@@ -210,7 +211,7 @@ class ProxieHttpClient extends http.BaseClient implements ProxieCaptureAdapter {
       out.headers.addAll(_toHttpHeaders(proceeded.headers));
     }
     // The body length defines content-length.
-    out.bodyBytes = _keepsFull(captured.body, proceeded.body)
+    out.bodyBytes = keepsFull(captured.body, proceeded.body)
         ? bytes
         : proceeded.body.bytes;
     return out;
@@ -225,82 +226,38 @@ class ProxieHttpClient extends http.BaseClient implements ProxieCaptureAdapter {
     http.StreamedResponse res,
   ) {
     final cap = engine.config.teeCap;
-    // One byte past the cap marks the copy as truncated and lets
-    // ProxieBody.from back the cut up to a character boundary.
-    final keepLimit = cap + 1;
-    final kept = BytesBuilder();
-    var total = 0;
-    var finished = false;
-    StreamSubscription<List<int>>? upstream;
-
-    // A partial snapshot (stream failed or cancelled) is marked truncated:
-    // it holds only the bytes received so far.
-    ProxieResponse snapshot({bool partial = false}) {
-      final b = ProxieBody.from(
-        kept.toBytes(),
+    ProxieResponse snapshot(
+      Uint8List kept,
+      int total, {
+      bool partial = false,
+    }) => ProxieResponse(
+      statusCode: res.statusCode,
+      reasonPhrase: res.reasonPhrase,
+      headers: _responseHeaders(res),
+      body: teedBody(
+        kept,
+        total,
         _header(res.headers, 'content-type'),
         cap: cap,
-      );
-      return ProxieResponse(
-        statusCode: res.statusCode,
-        reasonPhrase: res.reasonPhrase,
-        headers: _responseHeaders(res),
-        body: ProxieBody(
-          bytes: b.bytes,
-          contentType: b.contentType,
-          kind: b.kind,
-          truncated: b.truncated || partial,
-          originalLength: total,
-        ),
-      );
-    }
+        partial: partial,
+      ),
+    );
 
-    void fail(String type, String message) {
-      if (finished) return;
-      finished = true;
-      engine.onError(
+    final stream = teeStream(
+      res.stream,
+      cap: cap,
+      // The app already has the bytes: record without breakpoints.
+      onDone: (kept, total) =>
+          engine.recordResponse(callId, snapshot(kept, total)),
+      onFail: (type, message, kept, total) => engine.onError(
         callId,
         ProxieError(type: type, message: message),
-        response: snapshot(partial: true),
-      );
-    }
-
-    late final StreamController<List<int>> controller;
-    controller = StreamController<List<int>>(
-      onListen: () {
-        upstream = res.stream.listen(
-          (chunk) {
-            total += chunk.length;
-            final room = keepLimit - kept.length;
-            if (room > 0) {
-              kept.add(chunk.length <= room ? chunk : chunk.sublist(0, room));
-            }
-            controller.add(chunk);
-          },
-          onError: (Object e, StackTrace st) {
-            fail('stream_error', '$e');
-            controller.addError(e, st);
-          },
-          onDone: () {
-            if (!finished) {
-              finished = true;
-              // The app already has the bytes: record without breakpoints.
-              engine.recordResponse(callId, snapshot());
-            }
-            controller.close();
-          },
-        );
-      },
-      onPause: () => upstream?.pause(),
-      onResume: () => upstream?.resume(),
-      onCancel: () {
-        fail('cancelled', 'Response stream cancelled by the app');
-        return upstream?.cancel();
-      },
+        response: snapshot(kept, total, partial: true),
+      ),
     );
 
     return _ProxieStreamedResponse(
-      controller.stream,
+      stream,
       res.statusCode,
       url: _finalUrl(res, request),
       contentLength: res.contentLength,
@@ -357,18 +314,6 @@ http.StreamedResponse _streamed(
   persistentConnection: persistentConnection,
   reasonPhrase: res.reasonPhrase,
 );
-
-/// Whether [after] is still the capped copy [before] of a body that was
-/// longer, so the full original bytes should be sent instead.
-bool _keepsFull(ProxieBody before, ProxieBody after) {
-  if (identical(before, after)) return true;
-  if (!before.truncated || !after.truncated) return false;
-  if (before.bytes.length != after.bytes.length) return false;
-  for (var i = 0; i < before.bytes.length; i++) {
-    if (before.bytes[i] != after.bytes[i]) return false;
-  }
-  return true;
-}
 
 String? _header(Map<String, String> headers, String name) {
   for (final e in headers.entries) {
