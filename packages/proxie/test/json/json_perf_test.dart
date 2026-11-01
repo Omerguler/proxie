@@ -6,6 +6,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:proxie/proxie.dart';
+import 'package:proxie/src/json/json_nodes.dart' show jsonBytesPerNode;
 
 const _items = 40000;
 const _targetBytes = 10 * 1024 * 1024;
@@ -42,6 +43,61 @@ int _time(void Function() body) {
 
 String _ms(int micros) => '${(micros / 1000).toStringAsFixed(2)} ms';
 
+String _mb(int bytes) => '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+
+/// Node storage estimate plus the retained source bytes.
+String _memory(JsonDocument doc, int sourceBytes) =>
+    '${doc.nodeCount} nodes ≈ ${_mb(doc.nodeCount * jsonBytesPerNode)} '
+    'nodes + ${_mb(sourceBytes)} source';
+
+Uint8List _utf8(String s) => Uint8List.fromList(utf8.encode(s));
+
+/// ~10 MB array of small numbers.
+String _denseNumbers() {
+  final b = StringBuffer('[');
+  var i = 0;
+  while (b.length < _targetBytes) {
+    if (i > 0) b.write(',');
+    b.write(i % 100);
+    i++;
+  }
+  b.write(']');
+  return b.toString();
+}
+
+/// GraphQL-style response: 8 levels of small objects and arrays.
+String _graphql() {
+  Map<String, Object?> label(int i) => {'name': 'l$i', 'color': '#a$i'};
+  Map<String, Object?> issue(int i) => {
+    'node': {
+      'id': 'I_$i',
+      'title': 'Issue $i',
+      'labels': {
+        'nodes': [label(i), label(i + 1)],
+      },
+    },
+  };
+  Map<String, Object?> repo(int r) => {
+    'node': {
+      'name': 'repo$r',
+      'issues': {
+        'totalCount': 20,
+        'edges': [for (var i = 0; i < 20; i++) issue(i)],
+      },
+    },
+  };
+  return jsonEncode({
+    'data': {
+      'viewer': {
+        'login': 'me',
+        'repositories': {
+          'edges': [for (var r = 0; r < 2000; r++) repo(r)],
+        },
+      },
+    },
+  });
+}
+
 void main() {
   late Uint8List bytes;
 
@@ -54,7 +110,9 @@ void main() {
     late JsonDocument doc;
     final t = _time(() => doc = JsonDocument.tryParse(bytes));
     // ignore: avoid_print
-    print('tryParse ${bytes.length} bytes: ${_ms(t)}');
+    print(
+      'tryParse ${bytes.length} bytes: ${_ms(t)}; ${_memory(doc, bytes.length)}',
+    );
     expect(doc.parseError, isNull);
     expect(doc.visibleCount, _items);
     expect(t, lessThan(1500 * 1000));
@@ -101,6 +159,68 @@ void main() {
       'bio: string}',
     );
     expect(cold, lessThan(50 * 1000));
+  });
+
+  test('dense numeric 10 MB array parses < 2000 ms', () {
+    final dense = _utf8(_denseNumbers());
+    late JsonDocument doc;
+    final t = _time(() => doc = JsonDocument.tryParse(dense));
+    expect(doc.parseError, isNull);
+    late List<JsonRow> rows;
+    final page = _time(() => rows = doc.rows(doc.visibleCount ~/ 2, 60));
+    expect(rows, hasLength(60));
+    // ignore: avoid_print
+    print(
+      'dense tryParse ${dense.length} bytes: ${_ms(t)}; '
+      '${_memory(doc, dense.length)}; rows(mid,60): ${_ms(page)}',
+    );
+    expect(doc.nodeCount, greaterThan(3000000));
+    expect(t, lessThan(2000 * 1000));
+    expect(page, lessThan(50 * 1000));
+  });
+
+  test('GraphQL-style nesting', () {
+    final src = _utf8(_graphql());
+    late JsonDocument doc;
+    final t = _time(() => doc = JsonDocument.tryParse(src));
+    expect(doc.parseError, isNull);
+    final expand = _time(doc.expandAll);
+    final mid = doc.visibleCount ~/ 2;
+    late List<JsonRow> rows;
+    final page = _time(() => rows = doc.rows(mid, 60));
+    expect(rows, hasLength(60));
+    final encode = _time(doc.encode);
+    // ignore: avoid_print
+    print(
+      'graphql tryParse ${src.length} bytes: ${_ms(t)}; '
+      '${_memory(doc, src.length)}; expandAll: ${_ms(expand)} '
+      '(${doc.visibleCount} rows); rows($mid,60): ${_ms(page)}; '
+      'encode: ${_ms(encode)}',
+    );
+    expect(t, lessThan(1500 * 1000));
+    expect(page, lessThan(5 * 1000));
+  });
+
+  test('1 MB base64 string', () {
+    final b64 = base64.encode(
+      List.generate(768 * 1024, (i) => (i * 31) & 0xFF),
+    );
+    final src = _utf8(jsonEncode({'file': b64, 'name': 'x.bin'}));
+    late JsonDocument doc;
+    final t = _time(() => doc = JsonDocument.tryParse(src));
+    late List<JsonRow> rows;
+    final page = _time(() => rows = doc.rows(0, 2));
+    late Uint8List out;
+    final encode = _time(() => out = doc.encode());
+    // ignore: avoid_print
+    print(
+      'base64 tryParse ${src.length} bytes: ${_ms(t)}; rows: ${_ms(page)}; '
+      'encode: ${_ms(encode)}',
+    );
+    expect(rows.first.preview, hasLength(120));
+    expect(out, src);
+    expect(t, lessThan(200 * 1000));
+    expect(page, lessThan(5 * 1000));
   });
 
   test('toggle on a 40k-child array < 50 ms', () {

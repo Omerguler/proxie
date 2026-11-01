@@ -96,18 +96,58 @@ void main() {
       expect(doc.rows(0, 10), isEmpty);
     });
 
-    test('compact encode of an untouched doc matches jsonEncode', () {
-      final doc = _doc(input);
-      expect(
-        utf8.decode(doc.encode(pretty: false)),
-        jsonEncode(jsonDecode(input)),
-      );
+    test('compact encode of an untouched doc is the input', () {
+      expect(utf8.decode(_doc(input).encode(pretty: false)), input);
     });
   });
 
   group('parsing', () {
     test('invalid JSON gives a parse error', () {
-      for (final s in ['', '{', '{"a":}', '[1,]', 'nul', '1 2']) {
+      for (final s in [
+        '',
+        '   ',
+        '{',
+        '[',
+        '{"a":}',
+        '{"a" 1}',
+        '{1:1}',
+        '{"a":1,}',
+        '[1,]',
+        '[,1]',
+        '[1 2]',
+        '[1,,2]',
+        '{"a":1 "b":2}',
+        '}',
+        'nul',
+        'tru',
+        'True',
+        '1 2',
+        '01',
+        '-01',
+        '00',
+        '-',
+        '1.',
+        '.5',
+        '+1',
+        '1e',
+        '1e+',
+        '1.e5',
+        'NaN',
+        'Infinity',
+        '-Infinity',
+        '"abc',
+        '"a\nb"',
+        '"a\tb"',
+        '"\u0000"',
+        r'"\x"',
+        r'"\u12"',
+        r'"\u12G4"',
+        r'"\',
+        "'a'",
+        '[1]]',
+        '{"a":1}}',
+        '/* c */ 1',
+      ]) {
         final doc = _doc(s);
         expect(doc.parseError, startsWith('Invalid JSON: '), reason: s);
         expect(doc.visibleCount, 0, reason: s);
@@ -115,6 +155,144 @@ void main() {
         expect(() => doc.encode(), throwsStateError, reason: s);
         expect(() => doc.toggle(0), throwsRangeError, reason: s);
       }
+    });
+
+    test('errors name the problem and its byte offset', () {
+      expect(
+        _doc('[1,]').parseError,
+        'Invalid JSON: Unexpected character (at offset 3)',
+      );
+      expect(
+        _doc('{"a":1').parseError,
+        'Invalid JSON: Unexpected end of input (at offset 6)',
+      );
+      expect(
+        _doc('"abc').parseError,
+        'Invalid JSON: Unterminated string (at offset 0)',
+      );
+      expect(
+        _doc('["a\u0001"]').parseError,
+        'Invalid JSON: Control character in string (at offset 3)',
+      );
+      expect(
+        JsonDocument.tryParse(
+          Uint8List.fromList([0x22, 0xC3, 0x28, 0x22]),
+        ).parseError,
+        'Invalid JSON: Invalid UTF-8 (at offset 1)',
+      );
+    });
+
+    test('UTF-8 is validated strictly', () {
+      List<int> str(List<int> inner) => [0x22, ...inner, 0x22];
+      final invalid = {
+        'lone continuation': [0x80],
+        'overlong 2-byte': [0xC0, 0xAF],
+        'overlong C1': [0xC1, 0xBF],
+        'overlong 3-byte': [0xE0, 0x80, 0xAF],
+        'encoded surrogate': [0xED, 0xA0, 0x80],
+        'overlong 4-byte': [0xF0, 0x80, 0x80, 0xAF],
+        'above U+10FFFF': [0xF4, 0x90, 0x80, 0x80],
+        'F5 lead': [0xF5, 0x80, 0x80, 0x80],
+        'cut 3-byte': [0xE2, 0x82],
+        'cut 4-byte': [0xF0, 0x9F, 0x98],
+        'bad continuation': [0xE2, 0x28, 0xA1],
+        'FF': [0xFF],
+      };
+      for (final MapEntry(:key, :value) in invalid.entries) {
+        final doc = JsonDocument.tryParse(Uint8List.fromList(str(value)));
+        expect(doc.parseError, contains('Invalid UTF-8'), reason: key);
+      }
+      // Valid boundaries: U+0080, U+07FF, U+0800, U+D7FF, U+E000, U+FFFF,
+      // U+10000, U+10FFFF.
+      const valid = '\u0080߿ࠀ퟿￿\u{10000}\u{10FFFF}';
+      final doc = JsonDocument.tryParse(
+        Uint8List.fromList(utf8.encode(jsonEncode(valid))),
+      );
+      expect(doc.parseError, isNull);
+      expect(jsonDecode(utf8.decode(doc.encode())), valid);
+      // Non-ASCII outside strings is an unexpected character.
+      expect(
+        JsonDocument.tryParse(
+          Uint8List.fromList([0x5B, 0xC3, 0xA9, 0x5D]),
+        ).parseError,
+        'Invalid JSON: Unexpected character (at offset 1)',
+      );
+    });
+
+    test('accepts a leading BOM, whitespace and lone surrogate escapes', () {
+      final bom = JsonDocument.tryParse(
+        Uint8List.fromList([0xEF, 0xBB, 0xBF, ...utf8.encode('[1]')]),
+      );
+      expect(bom.parseError, isNull);
+      expect(bom.visibleCount, 1);
+      expect(_doc(' \t\r\n[ 1 , 2 ]\n').visibleCount, 2);
+      final lone = _doc(r'["\ud800","\uDC00x"]');
+      expect(lone.parseError, isNull);
+      expect(
+        [for (final r in lone.rows(0, 2)) r.preview],
+        [r'"\ud800"', r'"\udc00x"'],
+      );
+    });
+
+    test('accepts exactly what jsonDecode accepts', () {
+      // Random inputs over a JSON-ish alphabet; validity must match.
+      final rnd = Random(3);
+      const alphabet = [
+        '[',
+        ']',
+        '{',
+        '}',
+        ',',
+        ':',
+        '"',
+        r'\',
+        'u',
+        '0',
+        '1',
+        '9',
+        '-',
+        '+',
+        '.',
+        'e',
+        'E',
+        ' ',
+        'a',
+        'true',
+        'false',
+        'null',
+        '"k"',
+        '\n',
+        r'\n',
+        r'é',
+        'é',
+      ];
+      var valid = 0;
+      for (var i = 0; i < 20000; i++) {
+        final s = [
+          for (var j = 0; j < 1 + rnd.nextInt(10); j++)
+            alphabet[rnd.nextInt(alphabet.length)],
+        ].join();
+        Object? expected;
+        var ok = true;
+        try {
+          expected = jsonDecode(s);
+        } on FormatException {
+          ok = false;
+        }
+        final doc = _doc(s);
+        expect(doc.parseError == null, ok, reason: s);
+        if (ok) {
+          valid++;
+          expect(jsonDecode(utf8.decode(doc.encode())), expected, reason: s);
+        }
+      }
+      expect(valid, greaterThan(500));
+    });
+
+    test('nodeCount counts every value', () {
+      expect(_doc('{"a":[1,2],"b":{}}').nodeCount, 5);
+      expect(_doc('1').nodeCount, 1);
+      expect(_doc('[').nodeCount, 0);
     });
 
     test('scalar roots show one row for the root itself', () {
@@ -190,6 +368,21 @@ void main() {
       expect(doc.rows(1, 1).single.preview, '"${'a' * 117}…');
     });
 
+    test('long numbers are cut to 120 chars with an ellipsis', () {
+      final digits = '1' * 200;
+      final doc = _doc('[$digits, ${'2' * 120}]');
+      expect(doc.rows(0, 1).single.preview, '${'1' * 119}…');
+      expect(doc.rows(1, 1).single.preview, '2' * 120);
+      expect(utf8.decode(doc.encode()), '[$digits,${'2' * 120}]');
+    });
+
+    test('long strings are decoded only as far as the preview needs', () {
+      final big = 'é' * 300000;
+      final doc = _doc(jsonEncode([big, '${'a' * 200}\\n']));
+      expect(doc.rows(0, 1).single.preview, '"${'é' * 118}…');
+      expect(doc.rows(1, 1).single.preview, '"${'a' * 118}…');
+    });
+
     test('containers summarize their size', () {
       final doc = _doc('[{"a":1},{"a":1,"b":2},[0],[0,1],1e21,false,null]');
       expect(
@@ -199,7 +392,7 @@ void main() {
           '{2 keys}',
           '[1 item]',
           '[2 items]',
-          '1e+21',
+          '1e21',
           'false',
           'null',
         ],
@@ -353,38 +546,132 @@ void main() {
     });
   });
 
+  group('fidelity', () {
+    test('numbers keep their source text', () {
+      for (final n in [
+        '12345678901234567890',
+        '9007199254740993',
+        '0.10',
+        '1e2',
+        '1E+2',
+        '1e400',
+        '-1e400',
+        '-0',
+        '-0.0e-0',
+        '123.4560',
+      ]) {
+        final doc = _doc('[$n]');
+        expect(doc.rows(0, 1).single.preview, n);
+        expect(utf8.decode(doc.encode()), '[$n]');
+        expect(utf8.decode(doc.encode(pretty: true)), '[\n  $n\n]');
+        final root = _doc(n);
+        expect(root.rows(0, 1).single.preview, n);
+        expect(utf8.decode(root.encode()), n);
+      }
+    });
+
+    test('duplicate keys are kept as separate members', () {
+      final doc = _doc('{"a":1,"a":2}');
+      expect(doc.visibleCount, 2);
+      expect(_labels(doc), ['0 a number 1', '0 a number 2']);
+      expect(utf8.decode(doc.encode()), '{"a":1,"a":2}');
+    });
+
+    test('strings keep their source escapes', () {
+      const src = r'["é\/\"",{"ké":"\ud800"}]';
+      final doc = _doc(src);
+      expect(doc.rows(0, 1).single.preview, '"é/\\""');
+      // Keys are re-encoded from their decoded text; values verbatim.
+      expect(utf8.decode(doc.encode()), r'["é\/\"",{"ké":"\ud800"}]');
+    });
+  });
+
   group('encode', () {
-    const input =
-        '{"s":"a\\"\\n\\u0001é😀","n":[1,-2.5,1e21,0.1,12345678901234],'
-        '"e":{},"l":[],"o":{"x":null,"y":true,"z":false,"w":[[],[{}]]}}';
+    /// [s] without whitespace outside strings.
+    String minify(String s) {
+      final out = StringBuffer();
+      var inString = false;
+      for (var i = 0; i < s.length; i++) {
+        final c = s[i];
+        if (inString) {
+          out.write(c);
+          if (c == r'\') {
+            out.write(s[++i]);
+          } else if (c == '"') {
+            inString = false;
+          }
+        } else if (c == '"') {
+          inString = true;
+          out.write(c);
+        } else if (!' \t\r\n'.contains(c)) {
+          out.write(c);
+        }
+      }
+      return out.toString();
+    }
 
-    test('lone surrogates are escaped like jsonEncode', () {
-      const src = r'["\ud800","a\udc00b","😀"]';
-      expect(utf8.decode(_doc(src).encode()), jsonEncode(jsonDecode(src)));
+    const plain = '''
+{
+  "id": 12345678901234567890, "ratio": 0.10, "exp": 1e2, "big": 1e400,
+  "neg": -0, "s": "a b é 😀 /", "e": {}, "l": [ ],
+  "o": {"x": null, "y": true, "z": false, "w": [[], [{}], [1, [2, [3]]]]},
+  "dup": 1, "dup": 2
+}
+''';
+    const fixtures = [
+      plain,
+      r'{"s":"a\"\n\u0001é😀\t\\","n":[1,-2.5,1e21,0.1,12345678901234]}',
+      r'["\ud800","a\udc00b","😀"]',
+      '[[[[[]]]],{"a":{"b":{"c":{}}}}]',
+      '"just a string"',
+      'null',
+    ];
+
+    test('compact output is the input without insignificant whitespace', () {
+      expect(utf8.decode(_doc(plain).encode()), minify(plain));
     });
 
-    test('numbers too large for a double stay valid JSON', () {
-      final doc = _doc('[1e400,-1e400]');
-      expect(utf8.decode(doc.encode()), '[1e999,-1e999]');
-      expect([for (final r in doc.rows(0, 2)) r.preview], ['1e999', '-1e999']);
+    test('output decodes to the same value', () {
+      for (final f in fixtures) {
+        for (final pretty in [false, true]) {
+          expect(
+            jsonDecode(utf8.decode(_doc(f).encode(pretty: pretty))),
+            jsonDecode(f),
+            reason: '$f pretty: $pretty',
+          );
+        }
+      }
     });
 
-    test('compact matches jsonEncode', () {
-      expect(utf8.decode(_doc(input).encode()), jsonEncode(jsonDecode(input)));
-    });
-
-    test('pretty matches JsonEncoder.withIndent', () {
+    test('pretty matches JsonEncoder.withIndent for canonical input', () {
+      final value = {
+        's': 'a"\n\u0001é😀',
+        'n': [1, -2.5, 0.1, 12345678901234],
+        'e': <String, Object?>{},
+        'l': <Object?>[],
+        'o': {
+          'x': null,
+          'y': true,
+          'z': false,
+          'w': [
+            <Object?>[],
+            [<String, Object?>{}],
+          ],
+        },
+      };
+      final canonical = jsonEncode(value);
+      expect(utf8.decode(_doc(canonical).encode()), canonical);
       expect(
-        utf8.decode(_doc(input).encode(pretty: true)),
-        const JsonEncoder.withIndent('  ').convert(jsonDecode(input)),
+        utf8.decode(_doc(canonical).encode(pretty: true)),
+        const JsonEncoder.withIndent('  ').convert(value),
       );
       expect(utf8.decode(_doc('[]').encode(pretty: true)), '[]');
     });
 
     test('expansion state does not affect the output', () {
-      final doc = _doc(input);
+      final doc = _doc(plain);
       doc.expandAll();
-      expect(utf8.decode(doc.encode()), jsonEncode(jsonDecode(input)));
+      expect(utf8.decode(doc.encode()), minify(plain));
     });
   });
 }

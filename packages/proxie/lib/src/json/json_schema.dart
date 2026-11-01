@@ -50,17 +50,25 @@ String _kindName(JsonKind kind) =>
 
 /// Accumulates an [ArraySchema] from an array's objects, member by member.
 class ArraySchemaBuilder {
-  final Map<String, _Field> _fields = {};
+  /// [keyNames] maps the key ids given to [addMember] to member names.
+  ArraySchemaBuilder(this._keyNames);
+
+  final List<String> _keyNames;
+  final Map<int, _Field> _fields = {};
   int _objects = 0;
 
   /// Starts the next object.
   void addObject() => _objects++;
 
-  /// A member of the current object.
-  void addMember(String key, JsonKind kind) {
-    final f = _fields[key] ??= _Field();
+  /// A member of the current object. A name repeated within one object
+  /// counts once towards [InferredField.presentIn].
+  void addMember(int keyId, JsonKind kind) {
+    final f = _fields[keyId] ??= _Field();
     f.kinds.add(kind);
-    f.presentIn++;
+    if (f.lastObject != _objects) {
+      f.lastObject = _objects;
+      f.presentIn++;
+    }
   }
 
   /// Null when no objects were added.
@@ -69,7 +77,7 @@ class ArraySchemaBuilder {
     return ArraySchema([
       for (final MapEntry(:key, :value) in _fields.entries)
         InferredField(
-          key: key,
+          key: _keyNames[key],
           kinds: value.kinds,
           presentIn: value.presentIn,
           total: _objects,
@@ -81,4 +89,7 @@ class ArraySchemaBuilder {
 class _Field {
   final Set<JsonKind> kinds = {};
   int presentIn = 0;
+
+  /// The object (1-based count) that last contributed to [presentIn].
+  int lastObject = 0;
 }

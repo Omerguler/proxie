@@ -2,18 +2,20 @@ import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'json_nodes.dart';
+import 'json_parser.dart';
 import 'json_row.dart';
 import 'json_schema.dart';
 
 /// Longest [JsonRow.preview].
 const int _previewLimit = 120;
 
-final Converter<List<int>, Object?> _decoder = const Utf8Decoder().fuse(
-  const JsonDecoder(),
-);
-
-/// A parsed JSON body flattened into parallel lists, with a windowed view of
-/// its visible rows for a virtualized tree.
+/// A parsed JSON body in typed parallel arrays, with a windowed view of its
+/// visible rows for a virtualized tree.
+///
+/// Scalars are not converted: they point into the retained source bytes,
+/// so previews and [encode] keep numbers exactly as written (no int64 or
+/// double rounding) and duplicate member names stay separate members.
 ///
 /// Node 0 is the root. It is not a row itself and is always expanded, so its
 /// children are the initial rows; a scalar root is shown as a single row.
@@ -24,45 +26,33 @@ final Converter<List<int>, Object?> _decoder = const Utf8Decoder().fuse(
 /// container caches prefix sums of its children's visible sizes (rebuilt
 /// lazily once invalidated), so [rows] is O(count + depth · log(children)).
 class JsonDocument {
-  JsonDocument._(this.parseError);
+  JsonDocument._(this.parseError, this._source, this._n);
 
-  /// Parses UTF-8 JSON [bytes]. Never throws: invalid input yields a
-  /// document with [parseError] set and no rows.
+  /// Parses UTF-8 JSON [bytes], which are retained and must not be modified
+  /// afterwards. Never throws: invalid input yields a document with
+  /// [parseError] set and no rows.
   static JsonDocument tryParse(Uint8List bytes) {
     try {
-      final doc = JsonDocument._(null);
-      doc._build(_decoder.convert(bytes));
-      return doc;
+      return JsonDocument._(null, bytes, parseJson(bytes));
     } on FormatException catch (e) {
       final at = e.offset == null ? '' : ' (at offset ${e.offset})';
-      return JsonDocument._('Invalid JSON: ${e.message}$at');
-    } catch (e) {
-      return JsonDocument._('Could not parse JSON: $e');
+      return JsonDocument._('Invalid JSON: ${e.message}$at', null, JsonNodes());
+    } catch (e, st) {
+      // Only a bug (or running out of memory) gets here; surface it in debug.
+      assert(false, 'JsonDocument.tryParse failed: $e\n$st');
+      return JsonDocument._(
+        'Could not parse JSON (${e.runtimeType}): $e',
+        null,
+        JsonNodes(),
+      );
     }
   }
 
   /// Why the body could not be parsed; null for a valid document.
   final String? parseError;
 
-  // Per-node parallel lists, indexed by node id; -1 means "none".
-  final List<int> _parent = [];
-  final List<int> _firstChild = [];
-  final List<int> _nextSibling = [];
-  final List<JsonKind> _kind = [];
-  final List<String?> _key = [];
-  final List<int?> _index = [];
-
-  /// Scalar values; null for containers.
-  final List<Object?> _value = [];
-  final List<int> _childCount = [];
-
-  /// Distance from the root (root = 0).
-  final List<int> _depth = [];
-  final List<bool> _expanded = [];
-
-  /// Rows the node's subtree shows below it while it is expanded, kept
-  /// current whether or not it is expanded.
-  final List<int> _inner = [];
+  final Uint8List? _source;
+  final JsonNodes _n;
 
   /// Child ids and prefix sums of their visible sizes, per container.
   final Map<int, _Children> _children = {};
@@ -70,87 +60,18 @@ class JsonDocument {
   /// Inferred schemas per array node; a null value means "no objects".
   final Map<int, ArraySchema?> _schemas = {};
 
-  int get _nodeCount => _parent.length;
+  /// Quoted UTF-8 member names, per key id, built on first [encode].
+  List<Uint8List>? _encodedKeys;
 
-  bool _isContainer(int id) =>
-      _kind[id] == JsonKind.object || _kind[id] == JsonKind.array;
+  /// Number of values in the document (0 when it did not parse).
+  int get nodeCount => _n.length;
 
-  bool get _scalarRoot => _nodeCount > 0 && !_isContainer(0);
+  bool get _scalarRoot => _n.length > 0 && !_n.isContainer(0);
 
   /// Number of rows currently shown.
   int get visibleCount {
-    if (_nodeCount == 0) return 0;
-    return _scalarRoot ? 1 : _inner[0];
-  }
-
-  void _build(Object? root) {
-    _add(-1, root, null, null, 0);
-    final ids = <int>[0];
-    final values = <Object?>[root];
-    while (ids.isNotEmpty) {
-      final id = ids.removeLast();
-      final value = values.removeLast();
-      final depth = _depth[id] + 1;
-      var prev = -1;
-      void link(int child, Object? childValue) {
-        if (prev == -1) {
-          _firstChild[id] = child;
-        } else {
-          _nextSibling[prev] = child;
-        }
-        prev = child;
-        if (_childCount[child] > 0) {
-          ids.add(child);
-          values.add(childValue);
-        }
-      }
-
-      if (value is Map) {
-        for (final e in value.entries) {
-          link(_add(id, e.value, e.key as String, null, depth), e.value);
-        }
-      } else if (value is List) {
-        for (var i = 0; i < value.length; i++) {
-          link(_add(id, value[i], null, i, depth), value[i]);
-        }
-      }
-    }
-    _expanded[0] = _isContainer(0);
-  }
-
-  int _add(int parent, Object? value, String? key, int? index, int depth) {
-    final id = _nodeCount;
-    final JsonKind kind;
-    var count = 0;
-    switch (value) {
-      case Map():
-        kind = JsonKind.object;
-        count = value.length;
-      case List():
-        kind = JsonKind.array;
-        count = value.length;
-      case String():
-        kind = JsonKind.string;
-      case num():
-        kind = JsonKind.number;
-      case bool():
-        kind = JsonKind.boolean;
-      default:
-        kind = JsonKind.nullValue;
-    }
-    _parent.add(parent);
-    _firstChild.add(-1);
-    _nextSibling.add(-1);
-    _kind.add(kind);
-    _key.add(key);
-    _index.add(index);
-    _value.add(kind.index > JsonKind.array.index ? value : null);
-    _childCount.add(count);
-    _depth.add(depth);
-    _expanded.add(false);
-    // Children start collapsed: one row each.
-    _inner.add(count);
-    return id;
+    if (_n.length == 0) return 0;
+    return _scalarRoot ? 1 : _n.inner[0];
   }
 
   /// Up to [count] visible rows starting at row [start]; fewer at the end.
@@ -159,13 +80,28 @@ class JsonDocument {
     RangeError.checkNotNegative(count, 'count');
     final total = visibleCount;
     if (start >= total || count == 0) return const [];
-    if (_scalarRoot) return [_row(0)];
+    if (_scalarRoot) return [_row(0, 0)];
     final end = math.min(total, start + count);
     final out = <JsonRow>[];
     var id = _locate(start);
+    var depth = -1;
+    for (var a = id; a > 0; a = _n.parent[a]) {
+      depth++;
+    }
     for (var i = start; i < end; i++) {
-      out.add(_row(id));
-      id = _next(id);
+      out.add(_row(id, depth));
+      // Next row in preorder.
+      if (_n.expanded(id) && _n.firstChild[id] != -1) {
+        id = _n.firstChild[id];
+        depth++;
+        continue;
+      }
+      while (id > 0 && _n.nextSibling[id] == -1) {
+        id = _n.parent[id];
+        depth--;
+      }
+      if (id <= 0) break;
+      id = _n.nextSibling[id];
     }
     return out;
   }
@@ -196,59 +132,56 @@ class JsonDocument {
     }
   }
 
-  /// The visible row after [id] in preorder, or -1.
-  int _next(int id) {
-    if (_expanded[id] && _firstChild[id] != -1) return _firstChild[id];
-    var n = id;
-    while (n > 0) {
-      final s = _nextSibling[n];
-      if (s != -1) return s;
-      n = _parent[n];
-    }
-    return -1;
-  }
-
   _Children _childrenOf(int id) => _children[id] ??= _buildChildren(id);
 
   _Children _buildChildren(int id) {
-    final ids = Int32List(_childCount[id]);
+    final ids = Int32List(_n.childCount[id]);
     final prefix = Int32List(ids.length + 1);
-    var c = _firstChild[id];
+    var c = _n.firstChild[id];
     for (var i = 0; i < ids.length; i++) {
       ids[i] = c;
-      prefix[i + 1] = prefix[i] + 1 + (_expanded[c] ? _inner[c] : 0);
-      c = _nextSibling[c];
+      prefix[i + 1] = prefix[i] + 1 + (_n.expanded(c) ? _n.inner[c] : 0);
+      c = _n.nextSibling[c];
     }
     return _Children(ids, prefix);
   }
 
-  JsonRow _row(int id) => JsonRow(
-    nodeId: id,
-    depth: id == 0 ? 0 : _depth[id] - 1,
-    key: _key[id],
-    index: _index[id],
-    kind: _kind[id],
-    preview: _preview(id),
-    childCount: _childCount[id],
-    expanded: id != 0 && _expanded[id],
-    missingKeys: _missingKeys(id),
-  );
+  bool _inObject(int id) {
+    final p = _n.parent[id];
+    return p != -1 && _n.kind(p) == JsonKind.object;
+  }
+
+  JsonRow _row(int id, int depth) {
+    final inObject = _inObject(id);
+    final hasParent = _n.parent[id] != -1;
+    return JsonRow(
+      nodeId: id,
+      depth: depth,
+      key: inObject ? _n.keys[_n.keyOrIndex[id]] : null,
+      index: hasParent && !inObject ? _n.keyOrIndex[id] : null,
+      kind: _n.kind(id),
+      preview: _preview(id),
+      childCount: _n.childCount[id],
+      expanded: id != 0 && _n.expanded(id),
+      missingKeys: _missingKeys(id),
+    );
+  }
 
   /// The shape of the objects in array [arrayNodeId]; null when it is not an
   /// array or holds no objects. Cached until [invalidateSchema].
   ArraySchema? schemaOf(int arrayNodeId) {
     _checkId(arrayNodeId);
-    if (_kind[arrayNodeId] != JsonKind.array) return null;
+    if (_n.kind(arrayNodeId) != JsonKind.array) return null;
     if (_schemas.containsKey(arrayNodeId)) return _schemas[arrayNodeId];
-    final builder = ArraySchemaBuilder();
-    for (var item = _firstChild[arrayNodeId]; item != -1;) {
-      if (_kind[item] == JsonKind.object) {
+    final builder = ArraySchemaBuilder(_n.keys);
+    for (var item = _n.firstChild[arrayNodeId]; item != -1;) {
+      if (_n.kind(item) == JsonKind.object) {
         builder.addObject();
-        for (var m = _firstChild[item]; m != -1; m = _nextSibling[m]) {
-          builder.addMember(_key[m]!, _kind[m]);
+        for (var m = _n.firstChild[item]; m != -1; m = _n.nextSibling[m]) {
+          builder.addMember(_n.keyOrIndex[m], _n.kind(m));
         }
       }
-      item = _nextSibling[item];
+      item = _n.nextSibling[item];
     }
     return _schemas[arrayNodeId] = builder.build();
   }
@@ -259,16 +192,17 @@ class JsonDocument {
 
   /// Optional schema fields that object [id] lacks, in schema order.
   List<String> _missingKeys(int id) {
-    final parent = _parent[id];
-    if (_kind[id] != JsonKind.object ||
+    final parent = _n.parent[id];
+    if (_n.kind(id) != JsonKind.object ||
         parent == -1 ||
-        _kind[parent] != JsonKind.array) {
+        _n.kind(parent) != JsonKind.array) {
       return const [];
     }
     final optional = schemaOf(parent)!.fields.where((f) => f.optional);
     if (optional.isEmpty) return const [];
     final keys = {
-      for (var m = _firstChild[id]; m != -1; m = _nextSibling[m]) _key[m],
+      for (var m = _n.firstChild[id]; m != -1; m = _n.nextSibling[m])
+        _n.keys[_n.keyOrIndex[m]],
     };
     return List.unmodifiable([
       for (final f in optional)
@@ -281,43 +215,49 @@ class JsonDocument {
   /// when the ancestor opens.
   void toggle(int nodeId) {
     _checkId(nodeId);
-    if (nodeId == 0 || !_isContainer(nodeId)) return;
-    final wasExpanded = _expanded[nodeId];
-    _expanded[nodeId] = !wasExpanded;
-    final delta = wasExpanded ? -_inner[nodeId] : _inner[nodeId];
+    if (nodeId == 0 || !_n.isContainer(nodeId)) return;
+    final wasExpanded = _n.expanded(nodeId);
+    _n.setExpanded(nodeId, !wasExpanded);
+    final delta = wasExpanded ? -_n.inner[nodeId] : _n.inner[nodeId];
     if (delta == 0) return;
-    var a = _parent[nodeId];
+    var a = _n.parent[nodeId];
     while (a != -1) {
-      _inner[a] += delta;
+      _n.inner[a] += delta;
       _children.remove(a);
       // A collapsed ancestor's own size is unchanged, so the rest is too.
-      if (!_expanded[a]) break;
-      a = _parent[a];
+      if (!_n.expanded(a)) break;
+      a = _n.parent[a];
     }
   }
 
   /// Sets every container row at depth below [maxDepth] expanded and every
   /// deeper one collapsed (`maxDepth: 1` opens just the top-level rows).
   void expandAll({int maxDepth = 1 << 30}) {
-    for (var id = 1; id < _nodeCount; id++) {
-      _expanded[id] = _isContainer(id) && _depth[id] - 1 < maxDepth;
+    // Row depth of each node, filled in id order (parents come first).
+    final depth = Int32List(_n.length);
+    for (var id = 1; id < _n.length; id++) {
+      final p = _n.parent[id];
+      depth[id] = p == 0 ? 0 : depth[p] + 1;
+      _n.setExpanded(id, _n.isContainer(id) && depth[id] < maxDepth);
     }
     _recount();
   }
 
   /// Collapses every row; the root stays expanded.
   void collapseAll() {
-    for (var id = 1; id < _nodeCount; id++) {
-      _expanded[id] = false;
+    for (var id = 1; id < _n.length; id++) {
+      _n.setExpanded(id, false);
     }
     _recount();
   }
 
-  /// Recomputes [_inner] bottom-up; relies on children having larger ids.
+  /// Recomputes [JsonNodes.inner] bottom-up; relies on children having
+  /// larger ids.
   void _recount() {
-    _inner.fillRange(0, _nodeCount, 0);
-    for (var id = _nodeCount - 1; id > 0; id--) {
-      _inner[_parent[id]] += 1 + (_expanded[id] ? _inner[id] : 0);
+    final inner = _n.inner;
+    inner.fillRange(0, _n.length, 0);
+    for (var id = _n.length - 1; id > 0; id--) {
+      inner[_n.parent[id]] += 1 + (_n.expanded(id) ? inner[id] : 0);
     }
     _children.clear();
   }
@@ -326,43 +266,57 @@ class JsonDocument {
   List<Object> pathOf(int nodeId) {
     _checkId(nodeId);
     final path = <Object>[];
-    for (var id = nodeId; id > 0; id = _parent[id]) {
-      path.add(_key[id] ?? _index[id]!);
+    for (var id = nodeId; id > 0; id = _n.parent[id]) {
+      final k = _n.keyOrIndex[id];
+      path.add(_inObject(id) ? _n.keys[k] : k);
     }
     return path.reversed.toList();
   }
 
-  /// The document as UTF-8 JSON, compact or indented by two spaces (the
-  /// same output as [JsonEncoder]). Throws a [StateError] when there is a
-  /// [parseError].
-  ///
-  /// Written iteratively from the flat model: [JsonEncoder] recurses and
-  /// overflows the stack on deeply nested documents that parse fine.
+  /// The document as UTF-8 JSON, compact or indented by two spaces like
+  /// `JsonEncoder.withIndent('  ')`. Scalars are copied from the source as
+  /// written; member names are re-encoded from their decoded text. Throws a
+  /// [StateError] when there is a [parseError].
   Uint8List encode({bool pretty = false}) {
-    if (parseError != null) {
+    final source = _source;
+    if (parseError != null || source == null) {
       throw StateError('Document has no JSON: $parseError');
     }
-    final out = StringBuffer();
+    final keys = _encodedKeys ??= [for (final k in _n.keys) _quotedUtf8(k)];
+    final out = _ByteSink(source.length + 16);
     final open = <int>[]; // containers being written
     final cursor = <int>[]; // next child to write in each of them
 
     void indent(int depth) {
-      out.write('\n');
+      out.addByte(0x0A);
       for (var i = 0; i < depth; i++) {
-        out.write('  ');
+        out
+          ..addByte(0x20)
+          ..addByte(0x20);
       }
     }
 
     void write(int id) {
-      final kind = _kind[id];
-      if (kind != JsonKind.object && kind != JsonKind.array) {
-        _writeScalar(out, id);
-      } else if (_childCount[id] == 0) {
-        out.write(kind == JsonKind.object ? '{}' : '[]');
-      } else {
-        out.write(kind == JsonKind.object ? '{' : '[');
-        open.add(id);
-        cursor.add(_firstChild[id]);
+      final kind = _n.kind(id);
+      final start = _n.valueStart[id];
+      switch (kind) {
+        case JsonKind.object || JsonKind.array:
+          final isObject = kind == JsonKind.object;
+          if (_n.childCount[id] == 0) {
+            out.addAscii(isObject ? '{}' : '[]');
+          } else {
+            out.addByte(isObject ? 0x7B : 0x5B);
+            open.add(id);
+            cursor.add(_n.firstChild[id]);
+          }
+        case JsonKind.string:
+          out.addRange(source, start, jsonStringEnd(source, start));
+        case JsonKind.number:
+          out.addRange(source, start, jsonNumberEnd(source, start));
+        case JsonKind.boolean:
+          out.addAscii(source[start] == 0x74 ? 'true' : 'false');
+        case JsonKind.nullValue:
+          out.addAscii('null');
       }
     }
 
@@ -370,58 +324,63 @@ class JsonDocument {
     while (open.isNotEmpty) {
       final parent = open.last;
       final child = cursor.last;
+      final isObject = _n.kind(parent) == JsonKind.object;
       if (child == -1) {
         open.removeLast();
         cursor.removeLast();
         if (pretty) indent(open.length);
-        out.write(_kind[parent] == JsonKind.object ? '}' : ']');
+        out.addByte(isObject ? 0x7D : 0x5D);
         continue;
       }
-      if (child != _firstChild[parent]) out.write(',');
+      if (child != _n.firstChild[parent]) out.addByte(0x2C);
       if (pretty) indent(open.length);
-      final key = _key[child];
-      if (key != null) {
-        _writeQuoted(out, key);
-        out.write(pretty ? ': ' : ':');
+      if (isObject) {
+        final k = keys[_n.keyOrIndex[child]];
+        out
+          ..addRange(k, 0, k.length)
+          ..addByte(0x3A);
+        if (pretty) out.addByte(0x20);
       }
-      cursor[cursor.length - 1] = _nextSibling[child];
+      cursor[cursor.length - 1] = _n.nextSibling[child];
       write(child);
     }
-    return utf8.encode(out.toString());
-  }
-
-  void _writeScalar(StringBuffer out, int id) {
-    final v = _value[id];
-    if (v is String) {
-      _writeQuoted(out, v);
-    } else if (v is double) {
-      out.write(_doubleText(v));
-    } else {
-      out.write(v); // num, bool or null print as JSON
-    }
+    return out.takeBytes();
   }
 
   String _preview(int id) {
-    switch (_kind[id]) {
+    final start = _n.valueStart[id];
+    switch (_n.kind(id)) {
       case JsonKind.object:
-        final n = _childCount[id];
+        final n = _n.childCount[id];
         return '{$n ${n == 1 ? 'key' : 'keys'}}';
       case JsonKind.array:
-        final n = _childCount[id];
+        final n = _n.childCount[id];
         return '[$n ${n == 1 ? 'item' : 'items'}]';
       case JsonKind.string:
-        return _quotedPreview(_value[id] as String);
+        return _quotedPreview(
+          decodeJsonString(
+            _source!,
+            start,
+            maxUnits: _previewLimit,
+            escaped: _n.flags[id] & escapedFlag != 0,
+          ),
+        );
       case JsonKind.number:
-        final v = _value[id];
-        return v is double ? _doubleText(v) : '$v';
+        final source = _source!;
+        final end = jsonNumberEnd(source, start);
+        if (end - start <= _previewLimit) {
+          return String.fromCharCodes(source, start, end);
+        }
+        return '${String.fromCharCodes(source, start, start + _previewLimit - 1)}…';
       case JsonKind.boolean:
+        return _source![start] == 0x74 ? 'true' : 'false';
       case JsonKind.nullValue:
-        return '${_value[id]}';
+        return 'null';
     }
   }
 
   void _checkId(int nodeId) =>
-      RangeError.checkValueInInterval(nodeId, 0, _nodeCount - 1, 'nodeId');
+      RangeError.checkValueInInterval(nodeId, 0, _n.length - 1, 'nodeId');
 }
 
 class _Children {
@@ -432,6 +391,43 @@ class _Children {
   /// `prefix[i]` = rows shown by children before `ids[i]` (each child counts
   /// itself plus its visible descendants); length `ids.length + 1`.
   final Int32List prefix;
+}
+
+/// A growable byte buffer.
+class _ByteSink {
+  _ByteSink(int capacity) : _buf = Uint8List(capacity);
+
+  Uint8List _buf;
+  int _length = 0;
+
+  void _reserve(int n) {
+    if (_length + n <= _buf.length) return;
+    var size = _buf.length * 2;
+    while (size < _length + n) {
+      size *= 2;
+    }
+    _buf = Uint8List(size)..setRange(0, _length, _buf);
+  }
+
+  void addByte(int b) {
+    _reserve(1);
+    _buf[_length++] = b;
+  }
+
+  void addRange(Uint8List src, int start, int end) {
+    _reserve(end - start);
+    _buf.setRange(_length, _length + end - start, src, start);
+    _length += end - start;
+  }
+
+  void addAscii(String s) {
+    _reserve(s.length);
+    for (var i = 0; i < s.length; i++) {
+      _buf[_length++] = s.codeUnitAt(i);
+    }
+  }
+
+  Uint8List takeBytes() => Uint8List.sublistView(_buf, 0, _length);
 }
 
 /// [s] JSON-quoted, cut to [_previewLimit] characters with a trailing '…'
@@ -467,9 +463,9 @@ String _quotedPreview(String s) {
   return out.toString();
 }
 
-/// Writes [s] as a JSON string literal, escaped exactly like [JsonEncoder].
-void _writeQuoted(StringBuffer out, String s) {
-  out.write('"');
+/// [s] as a UTF-8 JSON string literal, escaped like `JsonEncoder`.
+Uint8List _quotedUtf8(String s) {
+  final out = StringBuffer('"');
   var runStart = 0;
   for (var i = 0; i < s.length; i++) {
     final cu = s.codeUnitAt(i);
@@ -488,12 +484,8 @@ void _writeQuoted(StringBuffer out, String s) {
     out.write(runStart == 0 ? s : s.substring(runStart));
   }
   out.write('"');
+  return utf8.encode(out.toString());
 }
-
-/// [v] as a JSON number. Literals too large for a double (e.g. `1e400`)
-/// decode to infinity, which JSON cannot spell; `1e999` decodes back to it.
-String _doubleText(double v) =>
-    v.isFinite ? '$v' : (v.isNegative ? '-1e999' : '1e999');
 
 bool _isHighSurrogate(int cu) => cu >= 0xD800 && cu <= 0xDBFF;
 

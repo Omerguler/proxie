@@ -79,6 +79,14 @@ void main() {
     );
   });
 
+  test('a duplicate key counts once per object', () {
+    final doc = _doc('[{"a":1,"a":"x"},{"b":1}]');
+    final schema = doc.schemaOf(0)!;
+    expect(schema.describe(), '{a?: number|string, b?: number}');
+    expect(schema.fields.first.presentIn, 1);
+    expect(doc.rows(0, 1).single.missingKeys, ['b']);
+  });
+
   test('empty objects give an empty schema', () {
     final schema = _rootSchema('[{},{}]')!;
     expect(schema.fields, isEmpty);

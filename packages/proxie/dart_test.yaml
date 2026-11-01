@@ -1,3 +1,7 @@
+# Timing-sensitive tests are skipped by default. `flutter test` has no
+# presets (-P), and a configured `exclude_tags` cannot be overridden from the
+# command line (`--tags perf` then matches nothing), so they are opted in with:
+#   flutter test --tags perf --run-skipped
 tags:
-  # Timing-sensitive tests; run alone with `flutter test --tags perf`.
   perf:
+    skip: "Perf test; run with: flutter test --tags perf --run-skipped"
