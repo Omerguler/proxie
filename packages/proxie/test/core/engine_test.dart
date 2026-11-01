@@ -358,6 +358,49 @@ void main() {
     );
     expect(sink.last.tags, contains(CallTag.truncated));
   });
+
+  test('throwing sink still emits on the calls stream', () async {
+    final e = ProxieEngine(config: const ProxieConfig(), sink: _ThrowingSink());
+    final seen = <ProxieCall>[];
+    e.calls.listen(seen.add);
+    await e.onRequest('c1', 'http', _req());
+    await Future<void>.delayed(Duration.zero);
+    expect(seen, hasLength(1));
+    e.dispose();
+  });
+
+  test(
+    'dispose with injected controller resolves this engine pauses',
+    () async {
+      engine.rules = RuleSet([_bp(BreakpointPhase.request)]);
+      final f = engine.onRequest('c1', 'http', _req());
+      await Future<void>.delayed(Duration.zero);
+      expect(bps.pending, hasLength(1));
+      final n = sink.calls.length;
+      engine.dispose();
+      expect(await f, isA<Proceed>());
+      expect(bps.pending, isEmpty);
+      expect(sink.calls.length, n);
+    },
+  );
+
+  test(
+    'response-phase Abort keeps the response in the recorded call',
+    () async {
+      engine.rules = RuleSet([_bp(BreakpointPhase.response)]);
+      await engine.onRequest('c1', 'http', _req());
+      final f = engine.onResponse('c1', _res(200));
+      final expectation = expectLater(
+        f,
+        throwsA(isA<ProxieAbortedException>()),
+      );
+      await Future<void>.delayed(Duration.zero);
+      bps.resolve('c1', const Abort());
+      await expectation;
+      expect(sink.last.error, isNotNull);
+      expect(sink.last.response!.statusCode, 200);
+    },
+  );
 }
 
 class _ThrowingSink implements CallSink {

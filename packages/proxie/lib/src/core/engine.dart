@@ -51,6 +51,7 @@ class ProxieEngine {
   final _states = <String, _CallState>{};
   final _calls = StreamController<ProxieCall>.broadcast();
   int _counter = 0;
+  bool _disposed = false;
 
   Stream<ProxieCall> get calls => _calls.stream;
 
@@ -60,6 +61,11 @@ class ProxieEngine {
 
   /// Releases pending breakpoints and closes streams.
   void dispose() {
+    _disposed = true;
+    for (final id in _states.keys.toList()) {
+      breakpoints.resolve(id, const ContinueUnchanged());
+    }
+    _states.clear();
     if (_ownsBreakpoints) breakpoints.dispose();
     _calls.close();
   }
@@ -141,7 +147,7 @@ class ProxieEngine {
           type: 'aborted',
           message: 'Aborted at response breakpoint',
         );
-        onError(callId, error);
+        _fail(callId, error, response: res);
         throw const ProxieAbortedException(error);
       }
       assert(
@@ -158,11 +164,13 @@ class ProxieEngine {
     return current;
   }
 
-  void onError(String callId, ProxieError err) {
+  void onError(String callId, ProxieError err) => _fail(callId, err);
+
+  void _fail(String callId, ProxieError err, {ProxieResponse? response}) {
     final state = _states.remove(callId);
     if (state == null) return;
     breakpoints.resolve(callId, const ContinueUnchanged());
-    _emit(callId, state, error: err);
+    _emit(callId, state, response: response, error: err);
   }
 
   T? _guard<T>(T Function() f) {
@@ -189,25 +197,31 @@ class ProxieEngine {
     ProxieResponse? response,
     ProxieError? error,
   }) {
+    if (_disposed) return;
+    final done = response != null || error != null;
+    final tags = {...s.tags};
+    if (s.request.body.truncated || (response?.body.truncated ?? false)) {
+      tags.add(CallTag.truncated);
+    }
+    final duration = done ? DateTime.now().difference(s.startedAt) : null;
+    ProxieCall build(ProxieRequest rq, ProxieResponse? rs) => ProxieCall(
+      id: callId,
+      sessionId: sessionId,
+      adapter: s.adapter,
+      request: rq,
+      response: rs,
+      error: error,
+      startedAt: s.startedAt,
+      duration: duration,
+      tags: tags,
+    );
     try {
-      final done = response != null || error != null;
-      final tags = {...s.tags};
-      if (s.request.body.truncated || (response?.body.truncated ?? false)) {
-        tags.add(CallTag.truncated);
-      }
-      final duration = done ? DateTime.now().difference(s.startedAt) : null;
-      ProxieCall build(ProxieRequest rq, ProxieResponse? rs) => ProxieCall(
-        id: callId,
-        sessionId: sessionId,
-        adapter: s.adapter,
-        request: rq,
-        response: rs,
-        error: error,
-        startedAt: s.startedAt,
-        duration: duration,
-        tags: tags,
-      );
       sink.upsert(build(s.request, response));
+    } catch (e, st) {
+      developer.log('Proxie sink failed', error: e, stackTrace: st);
+    }
+    try {
+      if (_calls.isClosed) return;
       final masking = config.masking;
       _calls.add(
         build(
@@ -222,7 +236,7 @@ class ProxieEngine {
         ),
       );
     } catch (e, st) {
-      developer.log('Proxie recording failed', error: e, stackTrace: st);
+      developer.log('Proxie stream failed', error: e, stackTrace: st);
     }
   }
 }
