@@ -153,4 +153,88 @@ void main() {
         jsonDecode(masking.maskResponse(r).body.text!) as Map<String, dynamic>;
     expect(decoded, {'access_token': kMask, 'ok': true});
   });
+
+  test('pretty-printed json stays pretty-printed after masking', () {
+    final pretty = [
+      '{',
+      '  "password": "x",',
+      '  "a": [1, 2]',
+      '}',
+    ].join(String.fromCharCode(10));
+    final out = masking.maskRequest(_req(body: _json(pretty)));
+    expect(
+      out.body.text,
+      const JsonEncoder.withIndent('  ').convert({
+        'password': kMask,
+        'a': [1, 2],
+      }),
+    );
+    final compact = masking.maskRequest(_req(body: _json('{"password":"x"}')));
+    expect(compact.body.text, '{"password":"$kMask"}');
+  });
+
+  test('structural path preserves body metadata', () {
+    final src = ProxieBody(
+      bytes: Uint8List.fromList(utf8.encode('{"password":"x"}')),
+      contentType: 'application/vnd.x+json',
+      kind: BodyKind.json,
+      originalLength: 4242,
+    );
+    final out = masking.maskRequest(_req(body: src)).body;
+    expect(out.kind, BodyKind.json);
+    expect(out.contentType, 'application/vnd.x+json');
+    expect(out.originalLength, 4242);
+    expect(out.truncated, isFalse);
+    expect(out.text, '{"password":"$kMask"}');
+  });
+
+  test('fallback masks object and array values under sensitive keys', () {
+    final obj = masking.maskRequest(
+      _req(body: _json('{"token": {"a": "}", "b": [1, {"c": 2}]}, "k": 1 ')),
+    );
+    expect(obj.body.text, '{"token": "$kMask", "k": 1 ');
+    final arr = masking.maskRequest(
+      _req(body: _json(r'{"secret":["a\"]","b"],"keep":true ')),
+    );
+    expect(arr.body.text, '{"secret":"$kMask","keep":true ');
+    final truncated = masking.maskRequest(
+      _req(body: _json('{"password":{"a":"b",')),
+    );
+    expect(truncated.body.text, '{"password":"$kMask"');
+  });
+
+  test('masking a 6 MB malformed body completes quickly', () {
+    final chunk = '{"token":"abc","x":{"y":[1,2,3]},"password":{"p":"q"},';
+    final sb = StringBuffer();
+    while (sb.length < 6 * 1024 * 1024) {
+      sb.write(chunk);
+    }
+    final body = ProxieBody(
+      bytes: Uint8List.fromList(utf8.encode(sb.toString())),
+      contentType: 'application/json',
+      kind: BodyKind.json,
+    );
+    final sw = Stopwatch()..start();
+    final out = masking.maskRequest(_req(body: body));
+    sw.stop();
+    expect(sw.elapsed, lessThan(const Duration(seconds: 2)));
+    expect(out.body.text, isNot(contains('abc')));
+    expect(out.body.text, contains('"token":"$kMask"'));
+    expect(out.body.text, contains('"password":"$kMask"'));
+  });
+
+  test('const ProxieMasking keeps working and defaults are usable', () {
+    const a = ProxieMasking(headers: {'X-Key'}, jsonKeys: {'pin'});
+    final out = a.maskRequest(
+      _req(
+        headers: {
+          'x-key': ['1'],
+        },
+        body: _json('{"PIN":"1","password":"keep"}'),
+      ),
+    );
+    expect(out.headers['x-key'], [kMask]);
+    expect(out.body.text, '{"PIN":"$kMask","password":"keep"}');
+    expect(identical(ProxieMasking.defaults, masking), isTrue);
+  });
 }
