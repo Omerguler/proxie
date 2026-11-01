@@ -6,6 +6,27 @@ import '../model/body.dart';
 const _sniffLength = 512;
 
 /// Whether [contentType] is `text/*` declaring a Latin-1 charset.
+String? _mimeOf(String? contentType) =>
+    contentType?.split(';').first.trim().toLowerCase();
+
+bool _isDeclaredJson(String mime) =>
+    mime == 'application/json' || mime.endsWith('+json');
+
+bool _isDeclaredText(String mime) =>
+    mime.startsWith('text/') ||
+    mime == 'image/svg+xml' ||
+    mime == 'application/xml' ||
+    mime == 'application/javascript' ||
+    mime == 'application/x-www-form-urlencoded' ||
+    mime.endsWith('+xml');
+
+/// Whether [contentType] names a text or JSON type that [classifyBody]
+/// validates in full (rather than sniffing).
+bool isDeclaredTextual(String? contentType) {
+  final mime = _mimeOf(contentType);
+  return mime != null && (_isDeclaredJson(mime) || _isDeclaredText(mime));
+}
+
 bool isLatin1Text(String? contentType) {
   if (contentType == null) return false;
   final parts = contentType.split(';');
@@ -35,23 +56,15 @@ BodyKind classifyBody(
   if (bytes.isEmpty) return BodyKind.empty;
   if (_isImage(bytes)) return BodyKind.image;
 
-  final mime = contentType?.split(';').first.trim().toLowerCase();
+  final mime = _mimeOf(contentType);
   if (mime != null && mime.isNotEmpty) {
     if (mime.startsWith('image/') && mime != 'image/svg+xml') {
       return BodyKind.binary;
     }
-    final isJson = mime == 'application/json' || mime.endsWith('+json');
-    final isText =
-        mime.startsWith('text/') ||
-        mime == 'image/svg+xml' ||
-        mime == 'application/xml' ||
-        mime == 'application/javascript' ||
-        mime == 'application/x-www-form-urlencoded' ||
-        mime.endsWith('+xml');
-    if (isJson || isText) {
+    if (_isDeclaredJson(mime) || _isDeclaredText(mime)) {
       if (isLatin1Text(contentType)) return BodyKind.text;
       if (!_isUtf8(bytes, mayBeCut: mayBeCut)) return BodyKind.binary;
-      return isJson ? BodyKind.json : BodyKind.text;
+      return _isDeclaredJson(mime) ? BodyKind.json : BodyKind.text;
     }
   }
 
@@ -61,7 +74,7 @@ BodyKind classifyBody(
     bytes.length < _sniffLength ? bytes.length : _sniffLength,
   );
   if (head.contains(0)) return BodyKind.binary;
-  if (!_isUtf8(head, mayBeCut: bytes.length > head.length)) {
+  if (!_isUtf8(head, mayBeCut: mayBeCut || bytes.length > head.length)) {
     return BodyKind.binary;
   }
   for (final b in head) {

@@ -27,8 +27,10 @@ class UrlMatcher {
 
   /// Whether [url] matches. An invalid regular expression never matches.
   ///
-  /// Wildcard patterns are case-insensitive. Those without `://` are matched against the URL with its
-  /// scheme removed (`host/path?query`) as well as the full URL.
+  /// Wildcard patterns are case-insensitive, path and query included; regex
+  /// patterns are matched exactly as written. Wildcards without `://` are
+  /// matched against the URL with its scheme removed (`host/path?query`) as
+  /// well as the full URL.
   bool matches(Uri url) {
     final regex = _regex;
     if (regex == null) return false;

@@ -4,11 +4,15 @@ import 'dart:typed_data';
 import '../model/body.dart';
 import '../model/request.dart';
 import '../model/response.dart';
+import 'body_classifier.dart' show isLatin1Text;
 
 /// Replacement for masked values.
 const kMask = '••••••';
 
 /// Masks sensitive headers and JSON keys on stored/displayed copies.
+///
+/// The [headers] and [jsonKeys] sets must not be mutated after construction:
+/// their lowercased forms are computed once and cached.
 class ProxieMasking {
   const ProxieMasking({
     this.headers = _defaultHeaders,
@@ -70,7 +74,7 @@ class ProxieMasking {
     if (!body.truncated && body.bytes.length <= defaultBodyCap) {
       try {
         final tree = _walk(jsonDecode(text), _compiled.keys);
-        masked = text.contains('\n')
+        masked = _isPretty(text)
             ? const JsonEncoder.withIndent('  ').convert(tree)
             : jsonEncode(tree);
       } on FormatException {
@@ -79,14 +83,26 @@ class ProxieMasking {
     }
     masked ??= _maskText(text);
     if (masked == text) return body;
+    // The wire length is kept in originalLength; it is not recomputed.
+    // The mask text is not representable in Latin-1, so those bodies get
+    // asterisks instead.
+    final encoded = isLatin1Text(body.contentType)
+        ? latin1.encode(masked.replaceAll(kMask, '******'))
+        : utf8.encode(masked);
     return ProxieBody(
-      bytes: Uint8List.fromList(utf8.encode(masked)),
+      bytes: Uint8List.fromList(encoded),
       contentType: body.contentType,
       kind: body.kind,
       truncated: body.truncated,
       originalLength: body.originalLength,
     );
   }
+
+  static final _newlineIndent = RegExp(r'\n\s');
+
+  /// Whether [text] has line breaks inside its structure (not just a trailing
+  /// newline).
+  static bool _isPretty(String text) => _newlineIndent.hasMatch(text.trim());
 
   /// Replaces values of sensitive keys without parsing, for bodies that are
   /// truncated, oversized, or not valid JSON.

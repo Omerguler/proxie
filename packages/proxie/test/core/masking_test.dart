@@ -237,4 +237,27 @@ void main() {
     expect(out.body.text, '{"PIN":"$kMask","password":"keep"}');
     expect(identical(ProxieMasking.defaults, masking), isTrue);
   });
+
+  test('latin1 json is re-encoded as latin1, keeping other characters', () {
+    final src = ProxieBody.from(
+      Uint8List.fromList(latin1.encode('{"name":"café","password":"x"}')),
+      'text/json; charset=latin1',
+    );
+    final out = masking.maskRequest(_req(body: src)).body;
+    expect(out.text, '{"name":"café","password":"******"}');
+    expect(out.bytes.contains(0xe9), isTrue);
+    expect(out.originalLength, src.originalLength);
+  });
+
+  test('minified json with a trailing newline stays minified', () {
+    final nl = String.fromCharCode(10);
+    final out = masking.maskRequest(
+      _req(body: _json('{"password":"x","a":1}$nl')),
+    );
+    expect(out.body.text, '{"password":"$kMask","a":1}');
+    final pretty = masking.maskRequest(
+      _req(body: _json('{$nl  "password": "x"$nl}')),
+    );
+    expect(pretty.body.text, contains('$nl  "password"'));
+  });
 }

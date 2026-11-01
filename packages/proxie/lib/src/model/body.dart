@@ -33,7 +33,9 @@ class ProxieBody {
     // first 512 bytes, so the decode check further down covers the rest.
     var kind = classifyBody(window, contentType, mayBeCut: truncated);
     var end = window.length;
-    if (truncated && (kind == BodyKind.text || kind == BodyKind.json)) {
+    if (truncated &&
+        (kind == BodyKind.text || kind == BodyKind.json) &&
+        !isLatin1Text(contentType)) {
       // Back the cut up to a character boundary (skip continuation bytes
       // 10xxxxxx) to keep `text` decodable.
       while (end > 0 && (bytes[end] & 0xC0) == 0x80) {
@@ -41,15 +43,19 @@ class ProxieBody {
       }
     }
     var body = ProxieBody(
-      bytes: Uint8List.sublistView(bytes, 0, end),
+      // An owned copy, so later changes to the caller's buffer do not leak in.
+      bytes: Uint8List.fromList(Uint8List.sublistView(bytes, 0, end)),
       contentType: contentType,
       kind: kind,
       truncated: truncated,
       originalLength: bytes.length,
     );
     // Sniffed bodies are only checked in their first 512 bytes; a text/json
-    // body that still does not decode is presented as binary.
-    if ((kind == BodyKind.text || kind == BodyKind.json) && body.text == null) {
+    // body that still does not decode is presented as binary. Declared types
+    // were already validated in full by classifyBody.
+    if (!isDeclaredTextual(contentType) &&
+        (kind == BodyKind.text || kind == BodyKind.json) &&
+        body.text == null) {
       kind = BodyKind.binary;
       body = ProxieBody(
         bytes: body.bytes,
@@ -83,6 +89,9 @@ class ProxieBody {
   final String? contentType;
   final BodyKind kind;
   final bool truncated;
+
+  /// Length on the wire before any capping. Masking and other rewrites keep
+  /// this value; it is not recomputed from [bytes].
   final int originalLength;
 
   /// The body decoded as UTF-8 (Latin-1 for `text/*` declaring that charset),
@@ -97,7 +106,7 @@ class ProxieBody {
   }
 
   Map<String, Object?> toMap() => {
-    'bytes': bytes,
+    'bytes': Uint8List.fromList(bytes),
     'contentType': contentType,
     'kind': kind.name,
     'truncated': truncated,

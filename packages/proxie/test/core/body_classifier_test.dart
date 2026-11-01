@@ -161,4 +161,39 @@ void main() {
       expect(b.kind, BodyKind.json);
     });
   });
+
+  group('follow-ups', () {
+    test('latin1 truncation keeps 0x80-0xBF characters', () {
+      // 0xA9 (copyright sign) is valid latin1 and looks like a continuation.
+      final bytes = _u([0x61, 0x62, 0xa9, 0xa9, 0xa9, 0x63]);
+      final b = ProxieBody.from(bytes, 'text/plain; charset=latin1', cap: 4);
+      expect(b.bytes.length, 4);
+      expect(b.text, 'ab©©');
+    });
+
+    test('sniff honours the caller mayBeCut flag', () {
+      // Whole input shorter than the window, but known to be a prefix.
+      final cut = _u([0x61, 0xe2, 0x82]);
+      expect(classifyBody(cut, null), BodyKind.binary);
+      expect(classifyBody(cut, null, mayBeCut: true), BodyKind.text);
+      // Through ProxieBody.from with a tiny cap.
+      final bytes = _u([0x61, 0xe2, 0x82, 0xac, 0x62]);
+      final b = ProxieBody.from(bytes, null, cap: 3);
+      expect(b.kind, BodyKind.text);
+      expect(b.text, 'a');
+    });
+
+    test('from stores an owned copy of the bytes', () {
+      final src = _s('hello');
+      final b = ProxieBody.from(src, 'text/plain');
+      src[0] = 0x58;
+      expect(b.text, 'hello');
+    });
+
+    test('toMap returns a copy of the bytes', () {
+      final b = ProxieBody.from(_s('hello'), 'text/plain');
+      (b.toMap()['bytes'] as Uint8List)[0] = 0x58;
+      expect(b.text, 'hello');
+    });
+  });
 }

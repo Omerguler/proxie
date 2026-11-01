@@ -13,7 +13,7 @@ export 'src/core/rule.dart';
 export 'src/core/url_matcher.dart';
 export 'src/model/body.dart';
 export 'src/model/call.dart';
-export 'src/model/request.dart' hide normalizeHeaders;
+export 'src/model/request.dart' hide normalizeHeaders, copyHeaders;
 export 'src/model/response.dart';
 
 /// Current package version.
