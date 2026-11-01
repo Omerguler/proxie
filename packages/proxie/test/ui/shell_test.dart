@@ -1,0 +1,603 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:proxie/proxie.dart';
+
+// Widget tests run the real worker isolate (in-memory store, no files) via
+// `tester.runAsync`: isolate spawn and its messages need real async, while
+// the UI stays on the fake clock.
+
+const _phone = Size(390, 844);
+const _tablet = Size(1024, 768);
+const _memory = ProxieConfig(persistHistory: false);
+
+void _setSize(WidgetTester tester, Size size) {
+  tester.view.physicalSize = size;
+  tester.view.devicePixelRatio = 1;
+}
+
+Future<void> _init(
+  WidgetTester tester, {
+  ProxieNavigation navigation = const ProxieNavigation.overlay(),
+  ProxieConfig config = _memory,
+}) async {
+  await tester.runAsync(
+    () => Proxie.init(navigation: navigation, config: config),
+  );
+  expect(Proxie.isActive, isTrue);
+}
+
+ProxieRequest _req(String path) => ProxieRequest(
+  method: 'GET',
+  url: Uri.parse('https://api.test$path'),
+  headers: const {},
+  body: ProxieBody.empty(),
+);
+
+ProxieResponse _res() => ProxieResponse(
+  statusCode: 200,
+  headers: const {},
+  body: ProxieBody.empty(),
+);
+
+Widget _hostApp({
+  GlobalKey<NavigatorState>? navigatorKey,
+  ThemeData? theme,
+  Widget? home,
+}) => MaterialApp(
+  navigatorKey: navigatorKey,
+  theme: theme,
+  builder: Proxie.wrap,
+  home: home ?? const Scaffold(body: Center(child: Text('host home'))),
+);
+
+final _bubble = find.byType(ProxieBubble);
+// The button itself; the bubble widget fills the screen.
+final _button = find.descendant(
+  of: _bubble,
+  matching: find.byType(ScaleTransition),
+);
+final _shell = find.byType(InspectorShell);
+
+ProxieInspectorController _controllerIn(WidgetTester tester) =>
+    ProxieInspectorController.of(tester.element(find.text('No requests yet')));
+
+void main() {
+  tearDown(() async {
+    await Proxie.shutdown();
+  });
+
+  group('InspectorShell', () {
+    late ProxieInspectorController controller;
+
+    setUp(() => controller = ProxieInspectorController());
+
+    Widget shell({double splitWidth = 700}) => MaterialApp(
+      home: InspectorShell(
+        controller: controller,
+        splitWidth: splitWidth,
+        listBuilder: (context) => Container(
+          key: const ValueKey('list'),
+          child: const Text('the list'),
+        ),
+        detailBuilder: (context, id) => Text('detail $id'),
+      ),
+    );
+
+    testWidgets('default placeholders', (tester) async {
+      addTearDown(tester.view.reset);
+      _setSize(tester, _tablet);
+      await tester.pumpWidget(
+        MaterialApp(home: InspectorShell(controller: controller)),
+      );
+      expect(find.text('No requests yet'), findsOneWidget);
+      expect(find.text('Select a request'), findsOneWidget);
+    });
+
+    testWidgets('tablet shows list and detail side by side', (tester) async {
+      addTearDown(tester.view.reset);
+      _setSize(tester, _tablet);
+      await tester.pumpWidget(shell());
+      expect(find.text('the list'), findsOneWidget);
+      expect(find.text('Select a request'), findsOneWidget);
+      // List takes 40% of the width.
+      expect(tester.getSize(find.byKey(const ValueKey('list'))).width, 409.6);
+
+      controller.select('a');
+      await tester.pumpAndSettle();
+      expect(find.text('the list'), findsOneWidget);
+      expect(find.text('detail a'), findsOneWidget);
+    });
+
+    testWidgets('the list pane is at least 320 wide', (tester) async {
+      addTearDown(tester.view.reset);
+      _setSize(tester, const Size(760, 600));
+      await tester.pumpWidget(shell());
+      expect(find.text('Select a request'), findsOneWidget);
+      expect(tester.getSize(find.byKey(const ValueKey('list'))).width, 320);
+    });
+
+    testWidgets('the split threshold is configurable', (tester) async {
+      addTearDown(tester.view.reset);
+      _setSize(tester, _tablet);
+      await tester.pumpWidget(shell(splitWidth: 1100));
+      expect(find.text('the list'), findsOneWidget);
+      expect(find.text('Select a request'), findsNothing);
+    });
+
+    testWidgets('phone shows the list only; selecting pushes the detail and '
+        'back pops it', (tester) async {
+      addTearDown(tester.view.reset);
+      _setSize(tester, _phone);
+      await tester.pumpWidget(shell());
+      expect(find.text('the list'), findsOneWidget);
+      expect(find.text('Select a request'), findsNothing);
+
+      controller.select('a');
+      await tester.pumpAndSettle();
+      expect(find.text('detail a'), findsOneWidget);
+      expect(find.text('the list'), findsNothing);
+
+      await tester.tap(find.byType(BackButton));
+      await tester.pumpAndSettle();
+      expect(controller.selectedCallId, isNull);
+      expect(find.text('the list'), findsOneWidget);
+      expect(find.text('detail a'), findsNothing);
+    });
+
+    testWidgets('phone: the system back pops the detail, not the host '
+        'route', (tester) async {
+      addTearDown(tester.view.reset);
+      _setSize(tester, _phone);
+      await tester.pumpWidget(shell());
+      controller.select('a');
+      await tester.pumpAndSettle();
+
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(controller.selectedCallId, isNull);
+      expect(find.text('the list'), findsOneWidget);
+    });
+
+    testWidgets('phone: selecting another call replaces the detail', (
+      tester,
+    ) async {
+      addTearDown(tester.view.reset);
+      _setSize(tester, _phone);
+      await tester.pumpWidget(shell());
+      controller.select('a');
+      await tester.pumpAndSettle();
+      controller.select('b');
+      await tester.pumpAndSettle();
+      expect(controller.selectedCallId, 'b');
+      expect(find.text('detail b'), findsOneWidget);
+      expect(find.text('detail a'), findsNothing);
+    });
+
+    testWidgets('resizing switches layouts live and keeps the selection', (
+      tester,
+    ) async {
+      addTearDown(tester.view.reset);
+      _setSize(tester, _phone);
+      await tester.pumpWidget(shell());
+      controller.select('a');
+      await tester.pumpAndSettle();
+
+      _setSize(tester, _tablet);
+      await tester.pumpAndSettle();
+      expect(find.text('the list'), findsOneWidget);
+      expect(find.text('detail a'), findsOneWidget);
+
+      _setSize(tester, _phone);
+      await tester.pumpAndSettle();
+      expect(find.text('detail a'), findsOneWidget);
+      expect(find.text('the list'), findsNothing);
+      expect(controller.selectedCallId, 'a');
+    });
+
+    testWidgets('the close button closes the controller', (tester) async {
+      addTearDown(tester.view.reset);
+      _setSize(tester, _phone);
+      controller.open();
+      await tester.pumpWidget(shell());
+      await tester.tap(find.byTooltip('Close'));
+      expect(controller.isOpen, isFalse);
+    });
+  });
+
+  group('ProxieInspectorController', () {
+    test('notifies only on change', () {
+      final c = ProxieInspectorController();
+      var n = 0;
+      c.addListener(() => n++);
+      c.open();
+      c.open();
+      expect(c.isOpen, isTrue);
+      c.select('a');
+      c.select('a');
+      expect(c.selectedCallId, 'a');
+      c.close();
+      c.close();
+      expect(c.isOpen, isFalse);
+      expect(n, 3);
+    });
+  });
+
+  group('overlay navigation', () {
+    testWidgets('bubble is visible after init and wrap', (tester) async {
+      addTearDown(tester.view.reset);
+      _setSize(tester, _phone);
+      await _init(tester);
+      await tester.pumpWidget(_hostApp());
+      expect(_bubble, findsOneWidget);
+      expect(find.text('host home'), findsOneWidget);
+      expect(_shell, findsNothing);
+      await tester.runAsync(Proxie.shutdown);
+      await tester.pump();
+      expect(_bubble, findsNothing);
+      expect(find.text('host home'), findsOneWidget);
+    });
+
+    testWidgets('wrap before init shows the bubble once ready', (tester) async {
+      addTearDown(tester.view.reset);
+      _setSize(tester, _phone);
+      await tester.pumpWidget(_hostApp());
+      expect(_bubble, findsNothing);
+      await tester.runAsync(() => Proxie.init(config: _memory));
+      await tester.pump();
+      expect(_bubble, findsOneWidget);
+      await tester.runAsync(Proxie.shutdown);
+    });
+
+    testWidgets('bubble has a semantics label', (tester) async {
+      addTearDown(tester.view.reset);
+      _setSize(tester, _phone);
+      final semantics = tester.ensureSemantics();
+      await _init(tester);
+      await tester.pumpWidget(_hostApp());
+      expect(find.bySemanticsLabel('Open Proxie inspector'), findsOneWidget);
+      semantics.dispose();
+      await tester.runAsync(Proxie.shutdown);
+    });
+
+    testWidgets('tapping the bubble opens the inspector; back closes it and '
+        'leaves the host route alone', (tester) async {
+      addTearDown(tester.view.reset);
+      _setSize(tester, _phone);
+      final key = GlobalKey<NavigatorState>();
+      await _init(tester);
+      await tester.pumpWidget(_hostApp(navigatorKey: key));
+      key.currentState!.push(
+        MaterialPageRoute<void>(
+          builder: (_) => const Scaffold(body: Text('host second')),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(_button);
+      await tester.pumpAndSettle();
+      expect(_shell, findsOneWidget);
+      expect(_bubble, findsNothing, reason: 'hidden while open');
+
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(_shell, findsNothing);
+      expect(_bubble, findsOneWidget);
+      expect(find.text('host second'), findsOneWidget);
+
+      // Closed: back goes to the host again.
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.text('host home'), findsOneWidget);
+      await tester.runAsync(Proxie.shutdown);
+    });
+
+    testWidgets('Proxie.open opens and the close button closes', (
+      tester,
+    ) async {
+      addTearDown(tester.view.reset);
+      _setSize(tester, _phone);
+      await _init(tester);
+      await tester.pumpWidget(_hostApp());
+      Proxie.open();
+      await tester.pumpAndSettle();
+      expect(_shell, findsOneWidget);
+      await tester.tap(find.byTooltip('Close'));
+      await tester.pumpAndSettle();
+      expect(_shell, findsNothing);
+      expect(_bubble, findsOneWidget);
+      await tester.runAsync(Proxie.shutdown);
+    });
+
+    testWidgets('phone: back pops the detail first, then closes', (
+      tester,
+    ) async {
+      addTearDown(tester.view.reset);
+      _setSize(tester, _phone);
+      await _init(tester);
+      await tester.pumpWidget(_hostApp());
+      Proxie.open();
+      await tester.pumpAndSettle();
+      final controller = _controllerIn(tester);
+      controller.select('a');
+      await tester.pumpAndSettle();
+      expect(find.text('No requests yet'), findsNothing);
+
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(_shell, findsOneWidget);
+      expect(controller.selectedCallId, isNull);
+      expect(find.text('No requests yet'), findsOneWidget);
+
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(_shell, findsNothing);
+      await tester.runAsync(Proxie.shutdown);
+    });
+
+    testWidgets('tablet: the inspector shows both panes', (tester) async {
+      addTearDown(tester.view.reset);
+      _setSize(tester, _tablet);
+      await _init(tester);
+      await tester.pumpWidget(_hostApp());
+      Proxie.open();
+      await tester.pumpAndSettle();
+      expect(find.text('No requests yet'), findsOneWidget);
+      expect(find.text('Select a request'), findsOneWidget);
+      await tester.runAsync(Proxie.shutdown);
+    });
+
+    testWidgets('the split width comes from the config', (tester) async {
+      addTearDown(tester.view.reset);
+      _setSize(tester, _tablet);
+      await _init(
+        tester,
+        config: const ProxieConfig(persistHistory: false, splitWidth: 1100),
+      );
+      await tester.pumpWidget(_hostApp());
+      Proxie.open();
+      await tester.pumpAndSettle();
+      expect(find.text('No requests yet'), findsOneWidget);
+      expect(find.text('Select a request'), findsNothing);
+      await tester.runAsync(Proxie.shutdown);
+    });
+
+    testWidgets('the host theme is unchanged; Proxie uses its own', (
+      tester,
+    ) async {
+      addTearDown(tester.view.reset);
+      _setSize(tester, _phone);
+      final hostTheme = ThemeData(
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.red),
+      );
+      await _init(tester);
+      await tester.pumpWidget(
+        _hostApp(
+          theme: hostTheme,
+          home: const Scaffold(body: Text('host')),
+        ),
+      );
+      Proxie.open();
+      await tester.pumpAndSettle();
+
+      final host = Theme.of(tester.element(find.text('host')));
+      expect(host.brightness, Brightness.light);
+      expect(host.colorScheme.primary, hostTheme.colorScheme.primary);
+      expect(host.extension<ProxieColors>(), isNull);
+
+      final proxie = Theme.of(tester.element(find.text('No requests yet')));
+      expect(proxie.brightness, Brightness.dark);
+      expect(
+        proxie.colorScheme.primary,
+        ProxieTheme.dark().colorScheme.primary,
+      );
+      expect(proxie.extension<ProxieColors>(), isNotNull);
+      await tester.runAsync(Proxie.shutdown);
+    });
+
+    testWidgets('the badge counts distinct calls of the session', (
+      tester,
+    ) async {
+      addTearDown(tester.view.reset);
+      _setSize(tester, _phone);
+      await _init(tester);
+      await tester.pumpWidget(_hostApp());
+      Finder badge(String text) =>
+          find.descendant(of: _bubble, matching: find.text(text));
+      expect(badge('0'), findsNothing, reason: 'no badge without calls');
+
+      final engine = Proxie.engine!;
+      await engine.onRequest('c1', 'test', _req('/1'));
+      await tester.pump();
+      expect(badge('1'), findsOneWidget);
+
+      await engine.onResponse('c1', _res());
+      await tester.pump();
+      expect(badge('1'), findsOneWidget, reason: 'same call, new snapshot');
+
+      await engine.onRequest('c2', 'test', _req('/2'));
+      engine.onError(
+        'c2',
+        const ProxieError(type: 'socket', message: 'failed'),
+      );
+      await tester.pump();
+      expect(badge('2'), findsOneWidget);
+      await tester.runAsync(Proxie.shutdown);
+    });
+
+    testWidgets('the bubble pulses while a breakpoint is pending', (
+      tester,
+    ) async {
+      addTearDown(tester.view.reset);
+      _setSize(tester, _phone);
+      await _init(tester);
+      await tester.pumpWidget(_hostApp());
+      double scale() => tester.widget<ScaleTransition>(_button).scale.value;
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(scale(), 1.0);
+
+      final breakpoints = Proxie.engine!.breakpoints;
+      final paused = breakpoints.pause(
+        PausedCall(
+          callId: 'p1',
+          phase: BreakpointPhase.request,
+          request: _req('/p'),
+          pausedAt: DateTime.now(),
+        ),
+      );
+      await tester.pump();
+      // The first frame starts the ticker; the next one advances it.
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(scale(), greaterThan(1.0));
+
+      breakpoints.resolve('p1', const ContinueUnchanged());
+      await paused;
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(scale(), 1.0);
+      await tester.runAsync(Proxie.shutdown);
+    });
+
+    testWidgets('dragging the bubble snaps it to the nearest edge inside the '
+        'safe area', (tester) async {
+      addTearDown(tester.view.reset);
+      _setSize(tester, _phone);
+      tester.view.padding = const FakeViewPadding(left: 30, right: 30);
+      addTearDown(tester.view.resetPadding);
+      await _init(tester);
+      await tester.pumpWidget(_hostApp());
+      final start = tester.getCenter(_button);
+      expect(start.dx, greaterThan(195), reason: 'starts on the right');
+
+      // Drag past the middle towards the left, then release.
+      await tester.drag(_button, Offset(-(start.dx - 120), -100));
+      await tester.pumpAndSettle();
+      final left = tester.getTopLeft(_button);
+      expect(left.dx, greaterThanOrEqualTo(30));
+      expect(left.dx, lessThan(60));
+
+      // Dragging far off-screen stays inside the screen.
+      await tester.drag(_button, const Offset(600, -2000));
+      await tester.pumpAndSettle();
+      final right = tester.getTopLeft(_button);
+      expect(right.dx + 52, lessThanOrEqualTo(390 - 30));
+      expect(right.dx + 52, greaterThan(390 - 60));
+      expect(right.dy, greaterThanOrEqualTo(0));
+      await tester.runAsync(Proxie.shutdown);
+    });
+  });
+
+  group('navigatorKey navigation', () {
+    testWidgets('open pushes the inspector onto the given navigator; close '
+        'pops it', (tester) async {
+      addTearDown(tester.view.reset);
+      _setSize(tester, _phone);
+      final key = GlobalKey<NavigatorState>();
+      await _init(tester, navigation: ProxieNavigation.navigatorKey(key));
+      await tester.pumpWidget(_hostApp(navigatorKey: key));
+      expect(key.currentState!.canPop(), isFalse);
+
+      await tester.tap(_button);
+      await tester.pumpAndSettle();
+      expect(_shell, findsOneWidget);
+      expect(key.currentState!.canPop(), isTrue);
+      final route = ModalRoute.of(tester.element(_shell))!;
+      expect(route.navigator, same(key.currentState));
+      expect(route, isA<MaterialPageRoute<void>>());
+      expect((route as MaterialPageRoute<void>).fullscreenDialog, isTrue);
+      expect(_bubble, findsNothing);
+      // Themed with Proxie's theme, not the host's.
+      expect(
+        Theme.of(tester.element(find.text('No requests yet'))).brightness,
+        Brightness.dark,
+      );
+
+      await tester.tap(find.byTooltip('Close'));
+      await tester.pumpAndSettle();
+      expect(_shell, findsNothing);
+      expect(key.currentState!.canPop(), isFalse);
+      expect(_bubble, findsOneWidget);
+      await tester.runAsync(Proxie.shutdown);
+    });
+
+    testWidgets('the system back pops the route and Proxie notices', (
+      tester,
+    ) async {
+      addTearDown(tester.view.reset);
+      _setSize(tester, _phone);
+      final key = GlobalKey<NavigatorState>();
+      await _init(tester, navigation: ProxieNavigation.navigatorKey(key));
+      await tester.pumpWidget(_hostApp(navigatorKey: key));
+      Proxie.open();
+      await tester.pumpAndSettle();
+      expect(_shell, findsOneWidget);
+
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(_shell, findsNothing);
+      expect(_bubble, findsOneWidget);
+      expect(find.text('host home'), findsOneWidget);
+
+      Proxie.open();
+      await tester.pumpAndSettle();
+      expect(_shell, findsOneWidget);
+      await tester.runAsync(Proxie.shutdown);
+      await tester.pumpAndSettle();
+      expect(_shell, findsNothing, reason: 'shutdown hides the inspector');
+    });
+  });
+
+  group('custom navigation', () {
+    testWidgets('push and pop callbacks are invoked', (tester) async {
+      addTearDown(tester.view.reset);
+      _setSize(tester, _phone);
+      final pushed = <Widget>[];
+      var pops = 0;
+      await _init(
+        tester,
+        navigation: ProxieNavigation.custom(
+          push: pushed.add,
+          pop: () => pops++,
+        ),
+      );
+      Proxie.open();
+      Proxie.open();
+      expect(pushed, hasLength(1));
+
+      // The host shows the page somewhere; closing calls pop.
+      await tester.pumpWidget(MaterialApp(home: pushed.single));
+      expect(_shell, findsOneWidget);
+      await tester.tap(find.byTooltip('Close'));
+      await tester.pump();
+      expect(pops, 1);
+
+      Proxie.open();
+      expect(pushed, hasLength(2));
+      await tester.runAsync(Proxie.shutdown);
+      expect(pops, 2, reason: 'shutdown hides the inspector');
+    });
+
+    testWidgets('a page the host removed counts as closed', (tester) async {
+      addTearDown(tester.view.reset);
+      _setSize(tester, _phone);
+      final pushed = <Widget>[];
+      var pops = 0;
+      await _init(
+        tester,
+        navigation: ProxieNavigation.custom(
+          push: pushed.add,
+          pop: () => pops++,
+        ),
+      );
+      Proxie.open();
+      await tester.pumpWidget(MaterialApp(home: pushed.single));
+      // The host's router dropped the page (e.g. its own back handling).
+      await tester.pumpWidget(const MaterialApp(home: Text('elsewhere')));
+      expect(pops, 0);
+
+      Proxie.open();
+      expect(pushed, hasLength(2));
+      await tester.runAsync(Proxie.shutdown);
+    });
+  });
+}

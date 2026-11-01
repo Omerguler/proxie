@@ -16,6 +16,7 @@ export 'src/core/masking.dart';
 export 'src/core/presets.dart';
 export 'src/core/rule.dart';
 export 'src/core/url_matcher.dart';
+export 'src/enablement.dart';
 export 'src/json/json_commands.dart';
 export 'src/json/json_document.dart';
 export 'src/json/json_row.dart';
@@ -24,9 +25,21 @@ export 'src/model/body.dart';
 export 'src/model/call.dart';
 export 'src/model/request.dart' hide normalizeHeaders, copyHeaders;
 export 'src/model/response.dart';
+export 'src/navigation/navigation_adapter.dart'
+    show
+        ProxieNavigation,
+        ProxieNavigationAdapter,
+        OverlayNavigation,
+        NavigatorKeyNavigation,
+        CustomNavigation;
+export 'src/proxie.dart';
 export 'src/storage/call_query.dart';
 export 'src/storage/memory_store.dart';
 export 'src/storage/store.dart';
+export 'src/ui/bubble.dart' show ProxieBubble;
+export 'src/ui/inspector_shell.dart';
+export 'src/ui/sections.dart';
+export 'src/ui/theme.dart';
 export 'src/worker/commands.dart';
 export 'src/worker/worker.dart';
 export 'src/worker/worker_factory.dart';
