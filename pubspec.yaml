@@ -1,0 +1,8 @@
+name: proxie_workspace
+publish_to: none
+environment:
+  sdk: ^3.10.0
+workspace:
+  - packages/proxie
+  - packages/proxie_dio
+  - example
