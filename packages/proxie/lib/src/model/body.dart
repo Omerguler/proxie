@@ -25,11 +25,19 @@ class ProxieBody {
     String? contentType, {
     int cap = defaultBodyCap,
   }) {
-    // Classify the whole body so truncation cannot split a UTF-8 character.
     final kind = classifyBody(bytes, contentType);
     final truncated = bytes.length > cap;
+    var end = truncated ? cap : bytes.length;
+    if (truncated && (kind == BodyKind.text || kind == BodyKind.json)) {
+      // The body was classified as valid UTF-8 in full, so back the cut up to
+      // a character boundary (skip continuation bytes 10xxxxxx) to keep `text`
+      // decodable.
+      while (end > 0 && (bytes[end] & 0xC0) == 0x80) {
+        end--;
+      }
+    }
     return ProxieBody(
-      bytes: truncated ? Uint8List.sublistView(bytes, 0, cap) : bytes,
+      bytes: Uint8List.sublistView(bytes, 0, end),
       contentType: contentType,
       kind: kind,
       truncated: truncated,

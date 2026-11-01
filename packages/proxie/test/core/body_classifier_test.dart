@@ -71,6 +71,17 @@ void main() {
       expect(b.contentType, 'text/plain');
     });
 
+    test('truncation keeps text on a UTF-8 character boundary', () {
+      // 3-byte characters; cap 10 falls inside the fourth one.
+      final bytes = _s('€' * 10);
+      final b = ProxieBody.from(bytes, 'text/plain', cap: 10);
+      expect(b.truncated, isTrue);
+      expect(b.originalLength, 30);
+      expect(b.bytes.length <= 10 && b.bytes.length > 10 - 4, isTrue);
+      expect(b.text, '€€€');
+      expect(b.kind, BodyKind.text);
+    });
+
     test('under the cap is untouched', () {
       final b = ProxieBody.from(_s('{"a":1}'), 'application/json');
       expect(b.truncated, isFalse);
