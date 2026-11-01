@@ -161,6 +161,60 @@ void main() {
     expect(cold, lessThan(50 * 1000));
   });
 
+  test('search a 10 MB array of 40k objects < 300 ms', () {
+    final doc = JsonDocument.tryParse(bytes);
+    late List<int> hits;
+    // Worst cases scan the whole document.
+    final none = _time(() => hits = doc.search('no such text'));
+    expect(hits, isEmpty);
+    final last = _time(() => hits = doc.search('USER 39999'));
+    expect(hits, hasLength(1));
+    final unicode = _time(() => doc.search('é'));
+    final many = _time(() => hits = doc.search('city'));
+    expect(hits, hasLength(500));
+    late int row;
+    final reveal = _time(
+      () => row = doc.reveal(doc.search('49999', limit: 1 << 20).last),
+    );
+    expect(doc.pathOf(doc.rows(row, 1).single.nodeId), [
+      39999,
+      'address',
+      'zip',
+    ]);
+    // ignore: avoid_print
+    print(
+      'search no match: ${_ms(none)}; last item: ${_ms(last)}; '
+      'non-ASCII: ${_ms(unicode)}; 500 hits: ${_ms(many)}; '
+      'search + reveal: ${_ms(reveal)}',
+    );
+    expect(none, lessThan(300 * 1000));
+    expect(last, lessThan(300 * 1000));
+    expect(unicode, lessThan(300 * 1000));
+    expect(many, lessThan(300 * 1000));
+  });
+
+  test('edits on a 40k-item array < 100 ms', () {
+    final doc = JsonDocument.tryParse(bytes);
+    final first = doc.rows(0, 1).single.nodeId;
+    final dup = _time(() => doc.apply(DuplicateItem(first)));
+    final add = _time(() => doc.apply(const AddItem(0, {'id': -1})));
+    final all = _time(() => doc.apply(const AddKeyToAll(0, 'flag', false)));
+    final remove = _time(() => doc.apply(const RemoveKeyFromAll(0, 'bio')));
+    late Uint8List out;
+    final encode = _time(() => out = doc.encode());
+    expect((jsonDecode(utf8.decode(out)) as List).length, _items + 2);
+    // ignore: avoid_print
+    print(
+      'DuplicateItem(first): ${_ms(dup)}; AddItem: ${_ms(add)}; '
+      'AddKeyToAll: ${_ms(all)}; RemoveKeyFromAll: ${_ms(remove)}; '
+      'encode after edits: ${_ms(encode)}',
+    );
+    expect(dup, lessThan(100 * 1000));
+    expect(add, lessThan(100 * 1000));
+    expect(all, lessThan(100 * 1000));
+    expect(remove, lessThan(100 * 1000));
+  });
+
   test('dense numeric 10 MB array parses < 2000 ms', () {
     final dense = _utf8(_denseNumbers());
     late JsonDocument doc;

@@ -170,6 +170,32 @@ class JsonEncode extends WorkerCommand<Uint8List> {
   }
 }
 
+/// Ids of up to [limit] nodes matching [query]; see [JsonDocument.search].
+class JsonSearch extends WorkerCommand<List<int>> {
+  const JsonSearch(this.docId, this.query, {this.limit = 500});
+
+  final String docId;
+  final String query;
+  final int limit;
+
+  @override
+  Future<List<int>> execute(WorkerContext ctx) async =>
+      _JsonDocs.of(ctx).get(docId).search(query, limit: limit);
+}
+
+/// Expands the ancestors of [nodeId]; returns its visible row index. See
+/// [JsonDocument.reveal].
+class JsonReveal extends WorkerCommand<int> {
+  const JsonReveal(this.docId, this.nodeId);
+
+  final String docId;
+  final int nodeId;
+
+  @override
+  Future<int> execute(WorkerContext ctx) async =>
+      _JsonDocs.of(ctx).get(docId).reveal(nodeId);
+}
+
 /// Releases a document; unknown ids are ignored.
 class CloseJson extends WorkerCommand<void> {
   const CloseJson(this.docId);
