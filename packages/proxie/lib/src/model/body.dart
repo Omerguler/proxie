@@ -25,24 +25,41 @@ class ProxieBody {
     String? contentType, {
     int cap = defaultBodyCap,
   }) {
-    final kind = classifyBody(bytes, contentType);
     final truncated = bytes.length > cap;
-    var end = truncated ? cap : bytes.length;
+    final window = truncated ? Uint8List.sublistView(bytes, 0, cap) : bytes;
+    // Declared text/json types are validated in full over the kept bytes
+    // (a cut at the cap may land inside a multi-byte character, which is
+    // tolerated here and trimmed below); anything else is only sniffed in its
+    // first 512 bytes, so the decode check further down covers the rest.
+    var kind = classifyBody(window, contentType, mayBeCut: truncated);
+    var end = window.length;
     if (truncated && (kind == BodyKind.text || kind == BodyKind.json)) {
-      // The body was classified as valid UTF-8 in full, so back the cut up to
-      // a character boundary (skip continuation bytes 10xxxxxx) to keep `text`
-      // decodable.
+      // Back the cut up to a character boundary (skip continuation bytes
+      // 10xxxxxx) to keep `text` decodable.
       while (end > 0 && (bytes[end] & 0xC0) == 0x80) {
         end--;
       }
     }
-    return ProxieBody(
+    var body = ProxieBody(
       bytes: Uint8List.sublistView(bytes, 0, end),
       contentType: contentType,
       kind: kind,
       truncated: truncated,
       originalLength: bytes.length,
     );
+    // Sniffed bodies are only checked in their first 512 bytes; a text/json
+    // body that still does not decode is presented as binary.
+    if ((kind == BodyKind.text || kind == BodyKind.json) && body.text == null) {
+      kind = BodyKind.binary;
+      body = ProxieBody(
+        bytes: body.bytes,
+        contentType: contentType,
+        kind: kind,
+        truncated: truncated,
+        originalLength: bytes.length,
+      );
+    }
+    return body;
   }
 
   /// A body with no content.
@@ -68,9 +85,11 @@ class ProxieBody {
   final bool truncated;
   final int originalLength;
 
-  /// The body decoded as UTF-8, or null when it is not valid UTF-8.
+  /// The body decoded as UTF-8 (Latin-1 for `text/*` declaring that charset),
+  /// or null when it is not valid in that encoding.
   String? get text {
     try {
+      if (isLatin1Text(contentType)) return latin1.decode(bytes);
       return utf8.decode(bytes, allowMalformed: false);
     } on FormatException {
       return null;

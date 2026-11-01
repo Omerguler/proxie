@@ -21,7 +21,7 @@ class ProxieError {
 
 /// One captured request/response exchange.
 class ProxieCall {
-  const ProxieCall({
+  ProxieCall({
     required this.id,
     required this.sessionId,
     required this.adapter,
@@ -30,8 +30,8 @@ class ProxieCall {
     this.error,
     required this.startedAt,
     this.duration,
-    this.tags = const {},
-  });
+    Set<CallTag> tags = const {},
+  }) : tags = Set.unmodifiable(tags);
 
   factory ProxieCall.fromMap(Map<dynamic, dynamic> map) {
     final response = map['response'] as Map?;
@@ -63,7 +63,34 @@ class ProxieCall {
 
   /// Time from start to completion; includes time spent paused at breakpoints.
   final Duration? duration;
+
+  /// Unmodifiable.
   final Set<CallTag> tags;
+
+  ProxieCall copyWith({
+    String? id,
+    int? sessionId,
+    String? adapter,
+    ProxieRequest? request,
+    ProxieResponse? response,
+    bool clearResponse = false,
+    ProxieError? error,
+    bool clearError = false,
+    DateTime? startedAt,
+    Duration? duration,
+    bool clearDuration = false,
+    Set<CallTag>? tags,
+  }) => ProxieCall(
+    id: id ?? this.id,
+    sessionId: sessionId ?? this.sessionId,
+    adapter: adapter ?? this.adapter,
+    request: request ?? this.request,
+    response: clearResponse ? null : (response ?? this.response),
+    error: clearError ? null : (error ?? this.error),
+    startedAt: startedAt ?? this.startedAt,
+    duration: clearDuration ? null : (duration ?? this.duration),
+    tags: tags ?? this.tags,
+  );
 
   Map<String, Object?> toMap() => {
     'id': id,

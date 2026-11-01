@@ -1,11 +1,17 @@
 import 'body.dart';
 
-/// Lowercases header names, copying the value lists.
-Map<String, List<String>> normalizeHeaders(Map<dynamic, dynamic> headers) => {
-  for (final e in headers.entries)
-    (e.key as String).toLowerCase(): List<String>.of(
-      (e.value as List).cast<String>(),
-    ),
+/// Lowercases header names and returns an unmodifiable deep copy.
+Map<String, List<String>> normalizeHeaders(Map<dynamic, dynamic> headers) =>
+    Map.unmodifiable({
+      for (final e in headers.entries)
+        (e.key as String).toLowerCase(): List<String>.unmodifiable(
+          (e.value as List).cast<String>(),
+        ),
+    });
+
+/// A mutable deep copy of [headers] for handing out in maps.
+Map<String, List<String>> copyHeaders(Map<String, List<String>> headers) => {
+  for (final e in headers.entries) e.key: List<String>.of(e.value),
 };
 
 /// A captured HTTP request.
@@ -17,17 +23,20 @@ class ProxieRequest {
     required this.body,
   }) : headers = normalizeHeaders(headers);
 
-  factory ProxieRequest.fromMap(Map<dynamic, dynamic> map) => ProxieRequest(
-    method: map['method'] as String,
-    url: Uri.parse(map['url'] as String),
-    headers: normalizeHeaders(map['headers'] as Map),
-    body: ProxieBody.fromMap(map['body'] as Map),
+  factory ProxieRequest.fromMap(Map<dynamic, dynamic> map) => ProxieRequest._(
+    map['method'] as String,
+    Uri.parse(map['url'] as String),
+    normalizeHeaders(map['headers'] as Map),
+    ProxieBody.fromMap(map['body'] as Map),
   );
+
+  // Takes headers that are already normalized and unmodifiable.
+  ProxieRequest._(this.method, this.url, this.headers, this.body);
 
   final String method;
   final Uri url;
 
-  /// Header names are lowercase.
+  /// Header names are lowercase; the map and its lists are unmodifiable.
   final Map<String, List<String>> headers;
   final ProxieBody body;
 
@@ -46,7 +55,7 @@ class ProxieRequest {
   Map<String, Object?> toMap() => {
     'method': method,
     'url': url.toString(),
-    'headers': headers,
+    'headers': copyHeaders(headers),
     'body': body.toMap(),
   };
 }

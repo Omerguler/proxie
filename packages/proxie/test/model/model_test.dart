@@ -128,6 +128,97 @@ void main() {
     expect(_body([0xff, 0xfe], BodyKind.binary).text, isNull);
   });
 
+  test('ProxieBody.fromMap accepts a plain List<int> of bytes', () {
+    final b = ProxieBody.fromMap({
+      'bytes': <int>[0x68, 0x69],
+      'contentType': 'text/plain',
+      'kind': 'text',
+    });
+    expect(b.bytes, isA<Uint8List>());
+    expect(b.text, 'hi');
+    expect(b.truncated, isFalse);
+    expect(b.originalLength, 2);
+  });
+
+  test('copyWith can clear nullable fields', () {
+    final s = res.copyWith(clearReasonPhrase: true);
+    expect(s.reasonPhrase, isNull);
+    expect(s.statusCode, 201);
+    expect(res.copyWith().reasonPhrase, 'Created');
+
+    final call = ProxieCall(
+      id: 'c',
+      sessionId: 1,
+      adapter: 'http',
+      request: req,
+      response: res,
+      error: const ProxieError(type: 't', message: 'm'),
+      startedAt: DateTime.utc(2026),
+      duration: const Duration(seconds: 1),
+      tags: {CallTag.edited},
+    );
+    final kept = call.copyWith(id: 'd');
+    expect(kept.id, 'd');
+    expect(kept.response, same(res));
+    expect(kept.error, isNotNull);
+    expect(kept.duration, const Duration(seconds: 1));
+    expect(kept.tags, {CallTag.edited});
+    final cleared = call.copyWith(
+      clearResponse: true,
+      clearError: true,
+      clearDuration: true,
+    );
+    expect(cleared.response, isNull);
+    expect(cleared.error, isNull);
+    expect(cleared.duration, isNull);
+  });
+
+  test('toMap output and constructors do not alias internal state', () {
+    final headers = {
+      'x-a': ['1'],
+    };
+    final r = ProxieRequest(
+      method: 'GET',
+      url: Uri.parse('https://x.dev'),
+      headers: headers,
+      body: ProxieBody.empty(),
+    );
+    headers['x-a']!.add('2');
+    headers['x-b'] = ['3'];
+    expect(r.headers, {
+      'x-a': ['1'],
+    });
+    expect(() => r.headers['x-c'] = ['1'], throwsUnsupportedError);
+    expect(() => r.headers['x-a']!.add('9'), throwsUnsupportedError);
+
+    final map = r.toMap();
+    ((map['headers'] as Map)['x-a'] as List).add('evil');
+    (map['headers'] as Map)['evil'] = ['1'];
+    expect(r.headers, {
+      'x-a': ['1'],
+    });
+
+    final tags = {CallTag.edited};
+    final call = ProxieCall(
+      id: 'c',
+      sessionId: 0,
+      adapter: 'a',
+      request: r,
+      startedAt: DateTime.utc(2026),
+      tags: tags,
+    );
+    tags.add(CallTag.mapLocal);
+    expect(call.tags, {CallTag.edited});
+    expect(() => call.tags.add(CallTag.replayed), throwsUnsupportedError);
+    (call.toMap()['tags'] as List).add('x');
+    expect(call.tags, {CallTag.edited});
+
+    final resp = ProxieResponse.fromMap(res.toMap());
+    ((resp.toMap()['headers'] as Map)['set-cookie'] as List).clear();
+    expect(resp.headers['set-cookie'], ['a=b', 'c=d']);
+    expect(() => resp.headers['set-cookie']!.add('z'), throwsUnsupportedError);
+  });
+
   test('ProxieBody.empty', () {
     final b = ProxieBody.empty();
     expect(b.kind, BodyKind.empty);
