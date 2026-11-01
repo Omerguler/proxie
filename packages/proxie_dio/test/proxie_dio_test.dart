@@ -1,0 +1,747 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:dio/dio.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:proxie/proxie.dart';
+import 'package:proxie_dio/proxie_dio.dart';
+
+import 'support/test_server.dart';
+
+class _Sink implements CallSink {
+  final calls = <ProxieCall>[];
+  @override
+  void upsert(ProxieCall call) => calls.add(call);
+
+  /// The latest snapshot of each call, in first-seen order.
+  List<ProxieCall> get latest {
+    final byId = <String, ProxieCall>{};
+    for (final c in calls) {
+      byId[c.id] = c;
+    }
+    return byId.values.toList();
+  }
+
+  ProxieCall get last => calls.last;
+}
+
+/// An adapter recording whether each fetch ran marked captured.
+class _RecordingAdapter implements HttpClientAdapter {
+  _RecordingAdapter(this.inner);
+
+  final HttpClientAdapter inner;
+  final marked = <bool>[];
+  bool? closedForce;
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) {
+    marked.add(isProxieCaptured());
+    return inner.fetch(options, requestStream, cancelFuture);
+  }
+
+  @override
+  void close({bool force = false}) {
+    closedForce = force;
+    inner.close(force: force);
+  }
+}
+
+ProxieRule _mapLocal(String pattern, MapLocalAction action) => ProxieRule(
+  id: 'ml',
+  name: 'ml',
+  kind: RuleKind.mapLocal,
+  matcher: UrlMatcher(pattern),
+  mapLocal: action,
+);
+
+ProxieRule _bp(String pattern, BreakpointPhase phase) => ProxieRule(
+  id: 'bp',
+  name: 'bp',
+  kind: RuleKind.breakpoint,
+  matcher: UrlMatcher(pattern),
+  phase: phase,
+);
+
+ProxieResponse _jsonRes(int status, String body) => ProxieResponse(
+  statusCode: status,
+  headers: {
+    'content-type': ['application/json'],
+  },
+  body: ProxieBody.from(
+    Uint8List.fromList(utf8.encode(body)),
+    'application/json',
+  ),
+);
+
+ProxieBody _jsonBody(String body) =>
+    ProxieBody.from(Uint8List.fromList(utf8.encode(body)), 'application/json');
+
+/// Resolves the next paused call in [phase] with [resolve].
+void _onPause(
+  ProxieEngine engine,
+  BreakpointPhase phase,
+  BreakpointResolution Function(PausedCall) resolve,
+) {
+  late StreamSubscription<List<PausedCall>> sub;
+  sub = engine.breakpoints.changes.listen((pending) {
+    for (final p in pending) {
+      if (p.phase == phase) {
+        sub.cancel();
+        engine.breakpoints.resolve(p.callId, resolve(p));
+        return;
+      }
+    }
+  });
+}
+
+/// The overrides set globally, ignoring zone overrides.
+HttpOverrides? _globalOverrides() => Zone.root.run(() => HttpOverrides.current);
+
+void main() {
+  late TestServer server;
+  late _Sink sink;
+  late ProxieEngine engine;
+  late Dio dio;
+  late ProxieDioInterceptor interceptor;
+
+  setUp(() async {
+    server = await startTestServer();
+    sink = _Sink();
+    engine = ProxieEngine(
+      config: const ProxieConfig(),
+      sink: sink,
+      breakpoints: BreakpointController(timeout: const Duration(seconds: 5)),
+    );
+    dio = Dio();
+    interceptor = ProxieDio.install(dio)..attach(engine);
+  });
+
+  tearDown(() async {
+    dio.close(force: true);
+    engine.dispose();
+    await server.close();
+  });
+
+  String url(String path) => server.url(path).toString();
+
+  test('name and replay support', () {
+    expect(interceptor.name, 'dio');
+    expect(interceptor.supportsReplay, isTrue);
+    expect(interceptor, isA<ProxieCaptureAdapter>());
+    expect(ProxieDioInterceptor().supportsReplay, isFalse);
+    expect(ProxieDioInterceptor(replayClient: Dio()).supportsReplay, isTrue);
+  });
+
+  test('GET /json: app gets the decoded map, sink records 200', () async {
+    final res = await dio.get<dynamic>(url('/json'));
+    expect(res.statusCode, 200);
+    expect(res.data, {'hello': 'world'});
+    await pumpEventQueue();
+    expect(sink.latest, hasLength(1));
+    final call = sink.last;
+    expect(call.adapter, 'dio');
+    expect(call.request.method, 'GET');
+    expect(call.request.url, server.url('/json'));
+    expect(call.response!.statusCode, 200);
+    expect(call.response!.body.text, '{"hello":"world"}');
+    expect(call.response!.body.kind, BodyKind.json);
+    expect(call.error, isNull);
+    expect(call.duration, isNotNull);
+    expect(res.requestOptions.extra.containsKey('proxie.callId'), isFalse);
+  });
+
+  test('POST map body: JSON captured and delivered', () async {
+    final res = await dio.post<dynamic>(
+      url('/echo'),
+      data: {'a': 1, 'b': 'two'},
+    );
+    expect(jsonDecode(res.data['body'] as String), {'a': 1, 'b': 'two'});
+    await pumpEventQueue();
+    final req = sink.last.request;
+    expect(req.method, 'POST');
+    expect(req.headers['content-type'], ['application/json']);
+    expect(jsonDecode(req.body.text!), {'a': 1, 'b': 'two'});
+    expect(req.body.kind, BodyKind.json);
+  });
+
+  test('form-urlencoded map body is captured the way Dio sends it', () async {
+    final res = await dio.post<dynamic>(
+      url('/echo'),
+      data: {'a': '1', 'b': 'x y'},
+      options: Options(contentType: Headers.formUrlEncodedContentType),
+    );
+    final sent = res.data['body'] as String;
+    expect(sent, 'a=1&b=x+y');
+    await pumpEventQueue();
+    expect(sink.last.request.body.text, sent);
+  });
+
+  test('String and Uint8List bodies are captured as sent', () async {
+    await dio.post<dynamic>(
+      url('/echo'),
+      data: 'plain text',
+      options: Options(contentType: 'text/plain'),
+    );
+    await dio.post<dynamic>(
+      url('/echo'),
+      data: Uint8List.fromList([1, 2, 3]),
+      options: Options(contentType: 'application/octet-stream'),
+    );
+    await pumpEventQueue();
+    final calls = sink.latest;
+    expect(calls[0].request.body.text, 'plain text');
+    expect(calls[1].request.body.bytes, [1, 2, 3]);
+  });
+
+  test('FormData: placeholder recorded, server gets the multipart', () async {
+    final form = FormData.fromMap({
+      'name': 'proxie',
+      'kind': 'test',
+      'file': MultipartFile.fromBytes([1, 2, 3], filename: 'a.bin'),
+    });
+    final length = form.length;
+    final res = await dio.post<dynamic>(url('/echo'), data: form);
+    final echoed = res.data as Map;
+    expect(
+      (echoed['headers'] as Map)['content-type'],
+      startsWith('multipart/form-data; boundary='),
+    );
+    expect(echoed['body'], contains('name="name"'));
+    await pumpEventQueue();
+    final body = sink.last.request.body;
+    expect(body.text, 'multipart/form-data: 2 fields, 1 files');
+    expect(body.truncated, isTrue);
+    expect(body.originalLength, length);
+  });
+
+  test('Stream body: placeholder recorded, server gets the bytes', () async {
+    final res = await dio.post<dynamic>(
+      url('/echo'),
+      data: Stream.fromIterable([utf8.encode('ab'), utf8.encode('cd')]),
+      options: Options(
+        contentType: 'text/plain',
+        headers: {Headers.contentLengthHeader: 4},
+      ),
+    );
+    expect(res.data['body'], 'abcd');
+    await pumpEventQueue();
+    final body = sink.last.request.body;
+    expect(body.text, 'streamed body');
+    expect(body.truncated, isTrue);
+    expect(body.originalLength, 4);
+  });
+
+  test('mocked 401 is a badResponse DioException; server not hit', () async {
+    engine.rules = RuleSet([
+      _mapLocal('*/json', MapLocalAction(response: _jsonRes(401, '{"e":1}'))),
+    ]);
+    final err = await dio
+        .get<dynamic>(url('/json'))
+        .then<DioException>((_) => fail('expected an error'))
+        .catchError((Object e) => e as DioException);
+    expect(err.type, DioExceptionType.badResponse);
+    expect(err.response!.statusCode, 401);
+    expect(err.response!.data, {'e': 1});
+    expect(server.hitsFor('/json'), 0);
+    await pumpEventQueue();
+    expect(sink.latest, hasLength(1));
+    expect(sink.last.response!.statusCode, 401);
+    expect(sink.last.tags, contains(CallTag.mapLocal));
+    expect(sink.last.error, isNull);
+  });
+
+  test('mocked 500 with an accept-all validateStatus resolves', () async {
+    engine.rules = RuleSet([
+      _mapLocal('*/json', MapLocalAction(response: _jsonRes(500, '{"e":2}'))),
+    ]);
+    final res = await dio.get<dynamic>(
+      url('/json'),
+      options: Options(validateStatus: (_) => true),
+    );
+    expect(res.statusCode, 500);
+    expect(res.data, {'e': 2});
+    expect(res.headers.value('content-type'), 'application/json');
+  });
+
+  test('mocked body is decoded per responseType', () async {
+    engine.rules = RuleSet([
+      _mapLocal('*/json', MapLocalAction(response: _jsonRes(200, '{"m":1}'))),
+    ]);
+    final plain = await dio.get<dynamic>(
+      url('/json'),
+      options: Options(responseType: ResponseType.plain),
+    );
+    expect(plain.data, '{"m":1}');
+    final bytes = await dio.get<dynamic>(
+      url('/json'),
+      options: Options(responseType: ResponseType.bytes),
+    );
+    expect(bytes.data, utf8.encode('{"m":1}'));
+    final stream = await dio.get<ResponseBody>(
+      url('/json'),
+      options: Options(responseType: ResponseType.stream),
+    );
+    final streamed = await stream.data!.stream.expand((c) => c).toList();
+    expect(utf8.decode(streamed), '{"m":1}');
+  });
+
+  test('map-local delay is honoured', () async {
+    engine.rules = RuleSet([
+      _mapLocal(
+        '*/json',
+        MapLocalAction(
+          response: _jsonRes(200, '{}'),
+          delay: const Duration(milliseconds: 150),
+        ),
+      ),
+    ]);
+    final sw = Stopwatch()..start();
+    await dio.get<dynamic>(url('/json'));
+    expect(sw.elapsedMilliseconds, greaterThanOrEqualTo(140));
+  });
+
+  test('map-local timeout failure is a connectionTimeout', () async {
+    engine.rules = RuleSet([
+      _mapLocal(
+        '*/json',
+        const MapLocalAction(failure: SimulatedFailure.timeout),
+      ),
+    ]);
+    final err = await dio
+        .get<dynamic>(url('/json'))
+        .then<DioException>((_) => fail('expected an error'))
+        .catchError((Object e) => e as DioException);
+    expect(err.type, DioExceptionType.connectionTimeout);
+    expect(err.message, contains('simulated by Proxie'));
+    expect(server.hitsFor('/json'), 0);
+    await pumpEventQueue();
+    expect(sink.last.error!.type, 'timeout');
+    expect(sink.last.response, isNull);
+  });
+
+  test('map-local noConnection failure is a connectionError', () async {
+    engine.rules = RuleSet([
+      _mapLocal(
+        '*/json',
+        const MapLocalAction(failure: SimulatedFailure.noConnection),
+      ),
+    ]);
+    final err = await dio
+        .get<dynamic>(url('/json'))
+        .then<DioException>((_) => fail('expected an error'))
+        .catchError((Object e) => e as DioException);
+    expect(err.type, DioExceptionType.connectionError);
+    await pumpEventQueue();
+    expect(sink.last.error!.type, 'no_connection');
+  });
+
+  test('request breakpoint edits query, header and JSON body', () async {
+    engine.rules = RuleSet([_bp('*/echo*', BreakpointPhase.request)]);
+    _onPause(engine, BreakpointPhase.request, (p) {
+      final r = p.request;
+      return ExecuteRequest(
+        r.copyWith(
+          method: 'PUT',
+          url: r.url.replace(queryParameters: {'q': 'edited'}),
+          headers: {
+            ...r.headers,
+            'x-test': ['1'],
+          },
+          body: _jsonBody('{"edited":true}'),
+        ),
+      );
+    });
+    final res = await dio.post<dynamic>(
+      url('/echo'),
+      queryParameters: {'q': 'orig'},
+      data: {'orig': true},
+    );
+    final echoed = res.data as Map;
+    expect(echoed['method'], 'PUT');
+    expect(echoed['uri'], '/echo?q=edited');
+    expect((echoed['headers'] as Map)['x-test'], '1');
+    expect((echoed['headers'] as Map)['content-type'], 'application/json');
+    expect(jsonDecode(echoed['body'] as String), {'edited': true});
+    expect(res.requestOptions.uri, server.url('/echo?q=edited'));
+    await pumpEventQueue();
+    expect(sink.last.request.url.queryParameters['q'], 'edited');
+    expect(sink.last.tags, contains(CallTag.edited));
+  });
+
+  test('request breakpoint continue keeps the original request', () async {
+    engine.rules = RuleSet([_bp('*/echo*', BreakpointPhase.request)]);
+    _onPause(engine, BreakpointPhase.request, (_) => const ContinueUnchanged());
+    final form = FormData.fromMap({'f': 'v'});
+    final res = await dio.post<dynamic>(url('/echo'), data: form);
+    expect((res.data as Map)['body'], contains('name="f"'));
+  });
+
+  test(
+    'request breakpoint resent with placeholder bytes keeps FormData',
+    () async {
+      engine.rules = RuleSet([_bp('*/echo*', BreakpointPhase.request)]);
+      _onPause(engine, BreakpointPhase.request, (p) {
+        final b = p.request.body;
+        // A UI round-trip may drop the truncated flag; the bytes are the same.
+        return ExecuteRequest(
+          p.request.copyWith(
+            body: ProxieBody(bytes: b.bytes, kind: b.kind),
+          ),
+        );
+      });
+      final res = await dio.post<dynamic>(
+        url('/echo'),
+        data: FormData.fromMap({'f': 'v'}),
+      );
+      expect((res.data as Map)['body'], contains('name="f"'));
+    },
+  );
+
+  test('request breakpoint abort is an unknown DioException', () async {
+    engine.rules = RuleSet([_bp('*/json', BreakpointPhase.request)]);
+    _onPause(engine, BreakpointPhase.request, (_) => const Abort());
+    final err = await dio
+        .get<dynamic>(url('/json'))
+        .then<DioException>((_) => fail('expected an error'))
+        .catchError((Object e) => e as DioException);
+    expect(err.type, DioExceptionType.unknown);
+    expect(err.message, 'Aborted at breakpoint');
+    expect(server.hitsFor('/json'), 0);
+    await pumpEventQueue();
+    expect(sink.last.error!.type, 'aborted');
+  });
+
+  test('response breakpoint edits status and JSON body', () async {
+    engine.rules = RuleSet([_bp('*/json', BreakpointPhase.response)]);
+    _onPause(
+      engine,
+      BreakpointPhase.response,
+      (p) => ExecuteResponse(
+        p.response!.copyWith(
+          statusCode: 201,
+          reasonPhrase: 'Made',
+          body: _jsonBody('{"edited":[1,2]}'),
+        ),
+      ),
+    );
+    final res = await dio.get<dynamic>(url('/json'));
+    expect(res.statusCode, 201);
+    expect(res.statusMessage, 'Made');
+    expect(res.data, {
+      'edited': [1, 2],
+    });
+    await pumpEventQueue();
+    expect(sink.last.response!.statusCode, 201);
+    expect(sink.last.tags, containsAll([CallTag.breakpoint, CallTag.edited]));
+  });
+
+  test('response breakpoint edit to 500 is a badResponse', () async {
+    engine.rules = RuleSet([_bp('*/json', BreakpointPhase.response)]);
+    _onPause(
+      engine,
+      BreakpointPhase.response,
+      (p) => ExecuteResponse(p.response!.copyWith(statusCode: 500)),
+    );
+    final err = await dio
+        .get<dynamic>(url('/json'))
+        .then<DioException>((_) => fail('expected an error'))
+        .catchError((Object e) => e as DioException);
+    expect(err.type, DioExceptionType.badResponse);
+    expect(err.response!.statusCode, 500);
+    expect(err.response!.data, {'hello': 'world'});
+  });
+
+  test('response breakpoint can turn a server 404 into a success', () async {
+    engine.rules = RuleSet([_bp('*/status/*', BreakpointPhase.response)]);
+    _onPause(
+      engine,
+      BreakpointPhase.response,
+      (p) => ExecuteResponse(p.response!.copyWith(statusCode: 200)),
+    );
+    final res = await dio.get<dynamic>(url('/status/404'));
+    expect(res.statusCode, 200);
+    expect(res.data, {'status': 404});
+  });
+
+  test('response breakpoint abort is an unknown DioException', () async {
+    engine.rules = RuleSet([_bp('*/json', BreakpointPhase.response)]);
+    _onPause(engine, BreakpointPhase.response, (_) => const Abort());
+    final err = await dio
+        .get<dynamic>(url('/json'))
+        .then<DioException>((_) => fail('expected an error'))
+        .catchError((Object e) => e as DioException);
+    expect(err.type, DioExceptionType.unknown);
+    expect(err.message, 'Aborted at response breakpoint');
+    await pumpEventQueue();
+    expect(sink.last.error!.type, 'aborted');
+  });
+
+  test('response breakpoints apply to mocked responses', () async {
+    engine.rules = RuleSet([
+      _bp('*/json', BreakpointPhase.response),
+      _mapLocal('*/json', MapLocalAction(response: _jsonRes(200, '{"m":1}'))),
+    ]);
+    _onPause(
+      engine,
+      BreakpointPhase.response,
+      (p) => ExecuteResponse(p.response!.copyWith(body: _jsonBody('{"m":2}'))),
+    );
+    final res = await dio.get<dynamic>(url('/json'));
+    expect(res.data, {'m': 2});
+  });
+
+  test('server 404 is recorded as a response, app gets badResponse', () async {
+    final err = await dio
+        .get<dynamic>(url('/status/404'))
+        .then<DioException>((_) => fail('expected an error'))
+        .catchError((Object e) => e as DioException);
+    expect(err.type, DioExceptionType.badResponse);
+    expect(err.response!.statusCode, 404);
+    await pumpEventQueue();
+    expect(sink.latest, hasLength(1));
+    expect(sink.last.response!.statusCode, 404);
+    expect(sink.last.response!.body.text, '{"status":404}');
+    expect(sink.last.error, isNull);
+  });
+
+  test('connection failure records a network error', () async {
+    final port = server.url('/').port;
+    await server.close();
+    final err = await dio
+        .get<dynamic>('http://127.0.0.1:$port/json')
+        .then<DioException>((_) => fail('expected an error'))
+        .catchError((Object e) => e as DioException);
+    expect(err.type, DioExceptionType.connectionError);
+    await pumpEventQueue();
+    expect(sink.last.error!.type, 'network');
+    server = await startTestServer();
+  });
+
+  test('cancelled request records cancelled', () async {
+    final token = CancelToken();
+    final future = dio.get<dynamic>(url('/big?mb=50'), cancelToken: token);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    token.cancel('bye');
+    final err = await future
+        .then<DioException>((_) => fail('expected an error'))
+        .catchError((Object e) => e as DioException);
+    expect(err.type, DioExceptionType.cancel);
+    await pumpEventQueue();
+    expect(sink.last.error!.type, 'cancelled');
+  });
+
+  test('/big?mb=6 reaches the app intact; record capped', () async {
+    final res = await dio.get<String>(url('/big?mb=6'));
+    expect(res.data!.length, 6 * 1024 * 1024);
+    expect(res.data!.codeUnits.every((c) => c == 0x61), isTrue);
+    await pumpEventQueue();
+    final body = sink.last.response!.body;
+    expect(body.truncated, isTrue);
+    expect(body.bytes.length, 5 * 1024 * 1024);
+    expect(body.originalLength, 6 * 1024 * 1024);
+  });
+
+  test('ResponseType.stream is not consumed; app gets every byte', () async {
+    final res = await dio.get<ResponseBody>(
+      url('/big?mb=1'),
+      options: Options(responseType: ResponseType.stream),
+    );
+    await pumpEventQueue();
+    final body = sink.last.response!.body;
+    expect(body.bytes, isEmpty);
+    expect(body.truncated, isTrue);
+    expect(body.kind, BodyKind.empty);
+    expect(body.originalLength, 1024 * 1024);
+    var total = 0;
+    await for (final chunk in res.data!.stream) {
+      total += chunk.length;
+    }
+    expect(total, 1024 * 1024);
+  });
+
+  test('unattached: pure pass-through, nothing recorded', () async {
+    interceptor.detach();
+    final options = RequestOptions(path: url('/json'));
+    final res = await dio.fetch<dynamic>(options);
+    expect(res.data, {'hello': 'world'});
+    expect(options.extra, isEmpty);
+    expect(identical(res.requestOptions, options), isTrue);
+    await pumpEventQueue();
+    expect(sink.calls, isEmpty);
+  });
+
+  test(
+    'a retry that bypasses the interceptor supersedes the first try',
+    () async {
+      var retried = false;
+      dio.interceptors.insert(
+        1,
+        InterceptorsWrapper(
+          onError: (err, handler) async {
+            if (retried) return handler.next(err);
+            retried = true;
+            final again = err.requestOptions..path = url('/json');
+            handler.resolve(await dio.fetch<dynamic>(again));
+          },
+        ),
+      );
+      final res = await dio.get<dynamic>(url('/status/500'));
+      expect(res.data, {'hello': 'world'});
+      await pumpEventQueue();
+      final calls = sink.latest;
+      expect(calls, hasLength(2));
+      expect(calls[0].error!.type, 'superseded');
+      expect(calls[1].response!.statusCode, 200);
+    },
+  );
+
+  group('install', () {
+    test('wraps the adapter: captured fetches run marked', () async {
+      final d = Dio();
+      final rec = _RecordingAdapter(d.httpClientAdapter);
+      d.httpClientAdapter = rec;
+      final i = ProxieDio.install(d);
+      await d.get<dynamic>(url('/json'));
+      i.attach(engine);
+      await d.get<dynamic>(url('/json'));
+      expect(rec.marked, [false, true]);
+      d.close(force: true);
+      expect(rec.closedForce, isTrue);
+    });
+
+    test('is idempotent and accepts a given interceptor', () {
+      final d = Dio();
+      final given = ProxieDioInterceptor();
+      final i = ProxieDio.install(d, interceptor: given);
+      final adapter = d.httpClientAdapter;
+      expect(ProxieDio.install(d, interceptor: given), same(i));
+      expect(identical(d.httpClientAdapter, adapter), isTrue);
+      expect(d.interceptors.whereType<ProxieDioInterceptor>(), [given]);
+      expect(given.supportsReplay, isTrue);
+      d.close();
+    });
+
+    test('with the HttpOverrides adapter attached: captured once', () async {
+      final saved = _globalOverrides();
+      HttpOverrides.global = null;
+      final io = ProxieHttpOverridesAdapter()..attach(engine);
+      try {
+        final d = Dio();
+        ProxieDio.install(d).attach(engine);
+        final res = await d.get<dynamic>(url('/json'));
+        expect(res.data, {'hello': 'world'});
+        await pumpEventQueue();
+        expect(sink.latest, hasLength(1));
+        expect(sink.last.adapter, 'dio');
+        d.close(force: true);
+      } finally {
+        io.detach();
+        HttpOverrides.global = saved;
+      }
+    });
+
+    test(
+      'added by hand with the HttpOverrides adapter: recorded twice',
+      () async {
+        final saved = _globalOverrides();
+        HttpOverrides.global = null;
+        final io = ProxieHttpOverridesAdapter()..attach(engine);
+        try {
+          final d = Dio();
+          d.interceptors.add(ProxieDioInterceptor()..attach(engine));
+          await d.get<dynamic>(url('/json'));
+          await pumpEventQueue();
+          expect(
+            sink.latest.map((c) => c.adapter),
+            unorderedEquals(['dio', 'io']),
+          );
+          d.close(force: true);
+        } finally {
+          io.detach();
+          HttpOverrides.global = saved;
+        }
+      },
+    );
+  });
+
+  group('replay', () {
+    ProxieRequest req(String path, {ProxieBody? body}) => ProxieRequest(
+      method: 'POST',
+      url: server.url(path),
+      headers: {
+        'content-type': ['text/plain'],
+        'x-replay': ['1'],
+      },
+      body:
+          body ??
+          ProxieBody.from(
+            Uint8List.fromList(utf8.encode('again')),
+            'text/plain',
+          ),
+    );
+
+    test('sends the request with the installed Dio, unrecorded', () async {
+      final saved = _globalOverrides();
+      HttpOverrides.global = null;
+      final io = ProxieHttpOverridesAdapter()..attach(engine);
+      try {
+        final res = await interceptor.replay(req('/echo'));
+        expect(res.statusCode, 200);
+        final echoed = jsonDecode(res.body.text!) as Map;
+        expect(echoed['method'], 'POST');
+        expect(echoed['body'], 'again');
+        expect((echoed['headers'] as Map)['x-replay'], '1');
+        expect(
+          res.headers['content-type']!.single,
+          startsWith('application/json'),
+        );
+        await pumpEventQueue();
+        expect(sink.calls, isEmpty);
+      } finally {
+        io.detach();
+        HttpOverrides.global = saved;
+      }
+    });
+
+    test('keeps error statuses as responses', () async {
+      final res = await interceptor.replay(req('/status/503'));
+      expect(res.statusCode, 503);
+    });
+
+    test('uses replayClient when given', () async {
+      final client = Dio();
+      final i = ProxieDioInterceptor(replayClient: client);
+      final res = await i.replay(req('/echo'));
+      expect(res.statusCode, 200);
+      client.close();
+    });
+
+    test('truncated body throws StateError', () async {
+      final big = Uint8List(10);
+      final body = ProxieBody.from(big, 'text/plain', cap: 4);
+      expect(
+        () => interceptor.replay(req('/echo', body: body)),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            'Cannot replay: request body was truncated',
+          ),
+        ),
+      );
+    });
+
+    test('without a Dio throws StateError', () {
+      expect(
+        () => ProxieDioInterceptor().replay(req('/echo')),
+        throwsStateError,
+      );
+    });
+  });
+}
