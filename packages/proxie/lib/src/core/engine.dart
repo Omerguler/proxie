@@ -166,7 +166,10 @@ class ProxieEngine {
     return current;
   }
 
-  void onError(String callId, ProxieError err) => _fail(callId, err);
+  /// Records [err] as the outcome of the call, with the [response] received
+  /// so far, if any (for example a partial body before a stream failed).
+  void onError(String callId, ProxieError err, {ProxieResponse? response}) =>
+      _fail(callId, err, response: response);
 
   void _fail(String callId, ProxieError err, {ProxieResponse? response}) {
     final state = _states.remove(callId);

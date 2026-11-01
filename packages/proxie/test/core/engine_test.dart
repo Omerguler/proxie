@@ -185,6 +185,17 @@ void main() {
     expect(await engine.onResponse('c1', r), same(r));
   });
 
+  test('onError keeps a partial response when given', () async {
+    await engine.onRequest('c1', 'http', _req());
+    engine.onError(
+      'c1',
+      const ProxieError(type: 'cancelled', message: 'gone'),
+      response: _res(200),
+    );
+    expect(sink.last.error!.type, 'cancelled');
+    expect(sink.last.response!.statusCode, 200);
+  });
+
   test('sessionId is stamped on calls', () async {
     engine.sessionId = 7;
     await engine.onRequest('c1', 'http', _req());
