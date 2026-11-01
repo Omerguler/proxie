@@ -10,9 +10,10 @@ import 'json_schema.dart';
 /// used one.
 const int maxOpenJsonDocs = 8;
 
-/// Total nodes kept open per worker; least recently used documents are
-/// evicted to stay under it, though a single larger document is allowed
-/// on its own.
+/// Total node capacity kept open per worker; least recently used documents
+/// are evicted to stay under it, though a single larger document is allowed
+/// on its own. An edit that would grow one document's capacity beyond it is
+/// rejected (see [JsonDocument.maxCapacity]).
 const int maxOpenJsonNodes = 4000000;
 
 /// Which body of a call to open.
@@ -133,7 +134,9 @@ class JsonSchema extends WorkerCommand<ArraySchema?> {
 }
 
 /// Applies [edit] to the document; returns the new visible row count. See
-/// [JsonDocument.apply].
+/// [JsonDocument.apply]; an edit that would grow the document's capacity
+/// beyond [maxOpenJsonNodes] throws `StateError('Document too large to edit
+/// further')`.
 class JsonApply extends WorkerCommand<int> {
   const JsonApply(this.docId, this.edit);
 
@@ -257,7 +260,8 @@ class _JsonDocs {
   }
 
   (String, JsonDocument) add(String source, Uint8List bytes, JsonDocument doc) {
-    final nodes = doc.storedNodes;
+    final nodes = doc.storedCapacity;
+    doc.maxCapacity = maxOpenJsonNodes;
     while (_open.isNotEmpty &&
         (_open.length >= maxOpenJsonDocs ||
             _nodes + nodes > maxOpenJsonNodes)) {
@@ -279,7 +283,7 @@ class _JsonDocs {
   /// [maxOpenJsonNodes].
   void recharge(String docId) {
     final entry = _open[docId]!;
-    final nodes = _doc(docId).storedNodes;
+    final nodes = _doc(docId).storedCapacity;
     _nodes += nodes - entry.nodes;
     entry.nodes = nodes;
     while (_nodes > maxOpenJsonNodes && _open.keys.first != docId) {

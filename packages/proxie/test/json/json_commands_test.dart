@@ -266,6 +266,26 @@ void main() {
     expect(openDocs(), hasLength(1));
   });
 
+  test('an edit growing one document past the budget is rejected', () async {
+    await store.upsert(_call('c1', response: _body('[1,2,3]')));
+    final h = await open('c1', JsonBodySide.response);
+    final doc = ctx.resources['json:${h.docId}']! as JsonDocument;
+    expect(doc.maxCapacity, maxOpenJsonNodes);
+    doc.maxCapacity = 10; // a small injected budget
+    await expectLater(
+      JsonApply(h.docId, AddItem(0, List.filled(20, 0))).execute(ctx),
+      throwsA(
+        isA<StateError>().having(
+          (e) => e.message,
+          'message',
+          'Document too large to edit further',
+        ),
+      ),
+    );
+    expect(utf8.decode(await JsonEncode(h.docId).execute(ctx)), '[1,2,3]');
+    expect(await JsonApply(h.docId, const DeleteNode(1)).execute(ctx), 2);
+  });
+
   test('nodes added by edits count towards the budget', () async {
     await store.upsert(_call('big', response: _zeros(2500000)));
     await store.upsert(_call('small', response: _body('[1]')));

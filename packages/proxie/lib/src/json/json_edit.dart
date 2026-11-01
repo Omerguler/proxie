@@ -149,13 +149,16 @@ String _numberLexeme(Object value) {
 }
 
 /// Throws an [ArgumentError] unless [value] is JSON data (see [JsonEdit]).
-/// Iterative, so any nesting depth is fine; cycles are rejected.
-void _checkValue(Object? value) {
+/// Iterative, so any nesting depth is fine; cycles are rejected. Returns the
+/// number of nodes [value] takes.
+int _checkValue(Object? value) {
   final open = HashSet<Object>.identity();
   final stack = <Iterator<Object?>>[];
   final owners = <Object>[];
+  var nodes = 0;
 
   void visit(Object? v) {
+    nodes++;
     switch (v) {
       case null || bool() || String():
         return;
@@ -193,6 +196,7 @@ void _checkValue(Object? value) {
       open.remove(owners.removeLast());
     }
   }
+  return nodes;
 }
 
 /// The value [JsonEdit]s use for a missing field of [kind].
@@ -227,7 +231,7 @@ extension _Editing on JsonDocument {
         if (keyId != null && _member(objectNodeId, keyId) != -1) {
           throw ArgumentError.value(key, 'key', 'Object already has it');
         }
-        _checkValue(value);
+        _reserve(_checkValue(value));
         _insert(objectNodeId, _create(objectNodeId, _internKey(key), value));
         _schemaChanged(objectNodeId);
       case AddItem(:final arrayNodeId, :final value, :final at):
@@ -240,7 +244,7 @@ extension _Editing on JsonDocument {
             'at',
           );
         }
-        _checkValue(value);
+        _reserve(_checkValue(value));
         _insert(
           arrayNodeId,
           _create(arrayNodeId, 0, value),
@@ -249,6 +253,7 @@ extension _Editing on JsonDocument {
         _schemaChanged(arrayNodeId);
       case DuplicateItem(:final itemNodeId):
         final array = _itemParent(itemNodeId);
+        _reserve(_subtreeSize(itemNodeId));
         _insert(
           array,
           _copy(itemNodeId, array),
@@ -259,17 +264,25 @@ extension _Editing on JsonDocument {
         _addMissingKey(itemNodeId, key);
       case AddKeyToAll(:final arrayNodeId, :final key, :final value):
         _checkKind(arrayNodeId, JsonKind.array);
-        _checkValue(value);
+        final size = _checkValue(value);
         var keyId = _keyIdOf(key);
+        bool lacks(int item) =>
+            _n.kind(item) == JsonKind.object &&
+            (keyId == null || _member(item, keyId) == -1);
+        var targets = 0;
         for (var item = _n.firstChild[arrayNodeId]; item != -1;) {
-          if (_n.kind(item) == JsonKind.object &&
-              (keyId == null || _member(item, keyId) == -1)) {
-            keyId ??= _internKey(key);
-            _insert(item, _create(item, keyId, value));
+          if (lacks(item)) targets++;
+          item = _n.nextSibling[item];
+        }
+        _reserve(size * targets);
+        for (var item = _n.firstChild[arrayNodeId]; item != -1;) {
+          if (lacks(item)) {
+            final id = keyId ??= _internKey(key);
+            _insert(item, _create(item, id, value));
           }
           item = _n.nextSibling[item];
         }
-        _schemas.remove(arrayNodeId);
+        _invalidateSchema(arrayNodeId);
       case RemoveKeyFromAll(:final arrayNodeId, :final key):
         _checkKind(arrayNodeId, JsonKind.array);
         final keyId = _keyIdOf(key);
@@ -284,7 +297,7 @@ extension _Editing on JsonDocument {
           }
           item = _n.nextSibling[item];
         }
-        _schemas.remove(arrayNodeId);
+        _invalidateSchema(arrayNodeId);
       case NewItemFromSchema(:final arrayNodeId):
         _checkKind(arrayNodeId, JsonKind.array);
         final schema = schemaOf(arrayNodeId);
@@ -298,14 +311,15 @@ extension _Editing on JsonDocument {
         final item = {
           for (final f in schema.fields) f.key: _defaultValue(f.kinds.first),
         };
+        _reserve(1 + item.length);
         _insert(arrayNodeId, _create(arrayNodeId, 0, item));
-        _schemas.remove(arrayNodeId);
+        _invalidateSchema(arrayNodeId);
     }
   }
 
   void _setValue(int nodeId, Object? value) {
     _checkId(nodeId);
-    _checkValue(value);
+    _reserve(_checkValue(value) - 1);
     final before = _below(nodeId);
     for (var c = _n.firstChild[nodeId]; c != -1; c = _n.nextSibling[c]) {
       _drop(c);
@@ -314,7 +328,7 @@ extension _Editing on JsonDocument {
     _n.childCount[nodeId] = 0;
     _n.inner[nodeId] = 0;
     _children.remove(nodeId);
-    _schemas.remove(nodeId);
+    _invalidateSchema(nodeId);
     _fill(nodeId, value);
     final parent = _n.parent[nodeId];
     if (parent != -1) _resized(parent, _below(nodeId) - before);
@@ -356,6 +370,7 @@ extension _Editing on JsonDocument {
     if (source == -1) {
       throw ArgumentError.value(key, 'key', 'No other item has it');
     }
+    _reserve(1);
     final int id;
     if (_n.isContainer(source)) {
       id = _create(itemNodeId, keyId!, _defaultValue(_n.kind(source)));
@@ -432,11 +447,11 @@ extension _Editing on JsonDocument {
   void _schemaChanged(int container) {
     if (container == -1) return;
     if (_n.kind(container) == JsonKind.array) {
-      _schemas.remove(container);
+      _invalidateSchema(container);
     } else {
       final parent = _n.parent[container];
       if (parent != -1 && _n.kind(parent) == JsonKind.array) {
-        _schemas.remove(parent);
+        _invalidateSchema(parent);
       }
     }
   }
@@ -445,9 +460,19 @@ extension _Editing on JsonDocument {
   /// last when it is -1.
   void _insert(int parent, int id, {int before = -1}) {
     var prev = -1;
-    for (var c = _n.firstChild[parent]; c != before; c = _n.nextSibling[c]) {
-      prev = c;
+    final hint = _lastChild[parent];
+    if (before == -1 &&
+        hint != null &&
+        !_n.deleted(hint) &&
+        _n.parent[hint] == parent &&
+        _n.nextSibling[hint] == -1) {
+      prev = hint; // an append: no walk
+    } else {
+      for (var c = _n.firstChild[parent]; c != before; c = _n.nextSibling[c]) {
+        prev = c;
+      }
     }
+    if (before == -1) _lastChild[parent] = id;
     _n.nextSibling[id] = before;
     if (prev == -1) {
       _n.firstChild[parent] = id;
@@ -482,6 +507,40 @@ extension _Editing on JsonDocument {
     _dirty = true;
   }
 
+  /// Throws a [StateError] when appending [added] nodes would grow storage
+  /// beyond [JsonDocument.maxCapacity]. Mirrors the growth of
+  /// [JsonNodes.add].
+  void _reserve(int added) {
+    final limit = maxCapacity;
+    if (limit == null) return;
+    final need = _n.length + added;
+    var capacity = _n.capacity;
+    while (capacity < need) {
+      capacity += (capacity >> 1) + 16;
+    }
+    if (capacity != _n.capacity && capacity > limit) {
+      throw StateError('Document too large to edit further');
+    }
+  }
+
+  /// Nodes in the subtree of [root], itself included.
+  int _subtreeSize(int root) {
+    var size = 0;
+    var id = root;
+    while (true) {
+      size++;
+      if (_n.firstChild[id] != -1) {
+        id = _n.firstChild[id];
+        continue;
+      }
+      while (id != root && _n.nextSibling[id] == -1) {
+        id = _n.parent[id];
+      }
+      if (id == root) return size;
+      id = _n.nextSibling[id];
+    }
+  }
+
   /// Array items from [id] on get indices from [index] up.
   void _renumber(int id, int index) {
     for (var c = id; c != -1; c = _n.nextSibling[c]) {
@@ -496,7 +555,8 @@ extension _Editing on JsonDocument {
       _n.flags[id] |= deletedFlag;
       _values.remove(id);
       _children.remove(id);
-      _schemas.remove(id);
+      _invalidateSchema(id);
+      _lastChild.remove(id);
       _deleted++;
       if (_n.firstChild[id] != -1) {
         id = _n.firstChild[id];

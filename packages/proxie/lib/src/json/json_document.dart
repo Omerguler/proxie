@@ -9,6 +9,7 @@ import 'json_row.dart';
 import 'json_schema.dart';
 
 part 'json_edit.dart';
+part 'json_search.dart';
 
 /// Longest [JsonRow.preview].
 const int _previewLimit = 120;
@@ -19,9 +20,11 @@ const int _prettyMaxDepth = 512;
 /// A parsed JSON body in typed parallel arrays, with a windowed view of its
 /// visible rows for a virtualized tree.
 ///
-/// Scalars are not converted: they point into the retained source bytes,
-/// so previews and [encode] keep numbers exactly as written (no int64 or
-/// double rounding) and duplicate member names stay separate members.
+/// Scalars are not converted: parsed ones point into the retained source
+/// bytes, so previews and [encode] keep numbers exactly as written (no int64
+/// or double rounding) and duplicate member names stay separate members.
+/// Scalars set by [apply] have no source text; their values (string text,
+/// number lexeme or bool) live in a side table keyed by node id.
 ///
 /// Node 0 is the root. It is not a row itself and is always expanded, so its
 /// children are the initial rows; a scalar root is shown as a single row.
@@ -32,8 +35,9 @@ const int _prettyMaxDepth = 512;
 /// container caches prefix sums of its children's visible sizes (rebuilt
 /// lazily once invalidated), so [rows] is O(count + depth · log(children)).
 ///
-/// [apply] edits the tree in place. Node ids stay stable: new nodes get new
-/// ids and deleted ones are retired, never reused.
+/// [apply] edits the tree in place. Node ids stay stable: new nodes are
+/// appended with new ids and deleted ones are unlinked and retired, never
+/// reused or compacted away.
 class JsonDocument {
   JsonDocument._(this.parseError, this._source, this._n);
 
@@ -82,6 +86,16 @@ class JsonDocument {
   /// Nodes retired by edits; they keep their storage.
   int _deleted = 0;
 
+  /// Last child per container, as of the last append; a hint that is used
+  /// only while it is still a live last child of that container.
+  final Map<int, int> _lastChild = {};
+
+  /// Most node slots an edit may grow storage to; an edit that would need
+  /// more capacity throws a [StateError] and changes nothing. Null for no
+  /// limit. A document parsed above the limit can still take edits that fit
+  /// in its current capacity.
+  int? maxCapacity;
+
   bool _dirty = false;
 
   /// Whether an edit has changed the document.
@@ -91,14 +105,14 @@ class JsonDocument {
   /// removed by edits are not counted.
   int get nodeCount => _n.length - _deleted;
 
-  /// Node slots held in storage, including those of removed nodes; what the
-  /// document's memory grows with.
-  int get storedNodes => _n.length;
+  /// Node slots allocated in storage, used or not, including those of
+  /// removed nodes; what the document's memory grows with.
+  int get storedCapacity => _n.capacity;
 
   /// Applies [edit] and returns the new [visibleCount]. Throws a
-  /// [StateError] when there is a [parseError], and an [ArgumentError]
-  /// (leaving the document unchanged) when the edit does not apply; see
-  /// [JsonEdit].
+  /// [StateError] when there is a [parseError] or when the edit would grow
+  /// storage beyond [maxCapacity], and an [ArgumentError] when the edit does
+  /// not apply (see [JsonEdit]); either way the document is unchanged.
   int apply(JsonEdit edit) {
     if (parseError != null) {
       throw StateError('Document has no JSON: $parseError');
@@ -209,7 +223,8 @@ class JsonDocument {
   }
 
   /// The shape of the objects in array [arrayNodeId]; null when it is not an
-  /// array or holds no objects. Cached until [invalidateSchema].
+  /// array or holds no objects. Cached until an edit changes the array's
+  /// items or their members.
   ArraySchema? schemaOf(int arrayNodeId) {
     _checkId(arrayNodeId);
     if (_n.kind(arrayNodeId) != JsonKind.array) return null;
@@ -227,9 +242,9 @@ class JsonDocument {
     return _schemas[arrayNodeId] = builder.build();
   }
 
-  /// Drops the cached schema of [arrayNodeId]. Internal: for edits that
-  /// change the array's items.
-  void invalidateSchema(int arrayNodeId) => _schemas.remove(arrayNodeId);
+  /// Drops the cached schema of [arrayNodeId]; every edit that changes an
+  /// array's items or their members goes through here.
+  void _invalidateSchema(int arrayNodeId) => _schemas.remove(arrayNodeId);
 
   /// Optional schema fields that object [id] lacks, in schema order.
   List<String> _missingKeys(int id) {
@@ -321,106 +336,11 @@ class JsonDocument {
   /// matched decoded, numbers by their lexeme, and `true` / `false` / `null`
   /// by name. Containers match by name only. An empty [query], or a
   /// document that did not parse, finds nothing.
-  List<int> search(String query, {int limit = 500}) {
-    RangeError.checkNotNegative(limit, 'limit');
-    if (query.isEmpty || limit == 0 || _n.length == 0) return const [];
-    final q = query.toLowerCase();
-    // An ASCII query is matched on the bytes of ASCII-only source text,
-    // which lowercases to ASCII; such text cannot hold any other query.
-    final ascii = q.codeUnits.every((c) => c < 0x80) ? q.codeUnits : null;
-    final names = [for (final k in _n.keys) k.toLowerCase().contains(q)];
-    final source = _source!;
-    final hits = <int>[];
-
-    bool matches(int id) {
-      final p = _n.parent[id];
-      if (p != -1 &&
-          _n.kind(p) == JsonKind.object &&
-          names[_n.keyOrIndex[id]]) {
-        return true;
-      }
-      final start = _n.valueStart[id];
-      switch (_n.kind(id)) {
-        case JsonKind.object || JsonKind.array:
-          return false;
-        case JsonKind.string || JsonKind.number when _edited(id):
-          return (_values[id] as String).toLowerCase().contains(q);
-        case JsonKind.string when _n.flags[id] & escapedFlag != 0:
-          return decodeJsonString(source, start).toLowerCase().contains(q);
-        case JsonKind.string:
-          var end = start + 1;
-          var nonAscii = false;
-          for (int c; (c = source[end]) != 0x22; end++) {
-            if (c >= 0x80) nonAscii = true;
-          }
-          if (nonAscii) {
-            return utf8
-                .decode(Uint8List.sublistView(source, start + 1, end))
-                .toLowerCase()
-                .contains(q);
-          }
-          return ascii != null && _containsAscii(source, start + 1, end, ascii);
-        case JsonKind.number:
-          return ascii != null &&
-              _containsAscii(
-                source,
-                start,
-                jsonNumberEnd(source, start),
-                ascii,
-              );
-        case JsonKind.boolean:
-          return (_boolean(id) ? 'true' : 'false').contains(q);
-        case JsonKind.nullValue:
-          return 'null'.contains(q);
-      }
-    }
-
-    // Preorder over the linked tree: document order, edits included.
-    var id = 0;
-    while (true) {
-      if (matches(id)) {
-        hits.add(id);
-        if (hits.length == limit) break;
-      }
-      if (_n.firstChild[id] != -1) {
-        id = _n.firstChild[id];
-        continue;
-      }
-      while (id > 0 && _n.nextSibling[id] == -1) {
-        id = _n.parent[id];
-      }
-      if (id <= 0) break;
-      id = _n.nextSibling[id];
-    }
-    return hits;
-  }
+  List<int> search(String query, {int limit = 500}) => _search(query, limit);
 
   /// Expands every ancestor of [nodeId] and returns the row that shows it.
   /// Throws an [ArgumentError] for a container root, which has no row.
-  int reveal(int nodeId) {
-    _checkId(nodeId);
-    if (_scalarRoot) return 0;
-    if (nodeId == 0) {
-      throw ArgumentError.value(nodeId, 'nodeId', 'The root is not a row');
-    }
-    final path = <int>[];
-    for (var a = nodeId; a > 0; a = _n.parent[a]) {
-      path.add(a);
-      if (a != nodeId && !_n.expanded(a)) toggle(a);
-    }
-    var row = 0;
-    for (var i = path.length - 1; i >= 0; i--) {
-      final child = path[i];
-      final parent = _n.parent[child];
-      final c = _childrenOf(parent);
-      final at = _n.kind(parent) == JsonKind.array
-          ? _n.keyOrIndex[child]
-          : c.ids.indexOf(child);
-      // Rows of earlier siblings, then the row of each ancestor itself.
-      row += c.prefix[at] + (i > 0 ? 1 : 0);
-    }
-    return row;
-  }
+  int reveal(int nodeId) => _reveal(nodeId);
 
   /// The document as UTF-8 JSON, compact or indented by two spaces like
   /// `JsonEncoder.withIndent('  ')`. Scalars are copied from the source as
@@ -580,6 +500,13 @@ class _Children {
   /// `prefix[i]` = rows shown by children before `ids[i]` (each child counts
   /// itself plus its visible descendants); length `ids.length + 1`.
   final Int32List prefix;
+
+  /// Position of each child in [ids], built on first [positionOf].
+  Map<int, int>? _positions;
+
+  /// The index of child [id] in [ids].
+  int positionOf(int id) =>
+      (_positions ??= {for (var i = 0; i < ids.length; i++) ids[i]: i})[id]!;
 }
 
 /// A growable byte buffer.
@@ -675,24 +602,6 @@ Uint8List _quotedUtf8(String s) {
   out.write('"');
   return utf8.encode(out.toString());
 }
-
-/// Whether ASCII bytes `b[start, end)`, lowercased, contain [query]
-/// (lowercase ASCII code units).
-bool _containsAscii(Uint8List b, int start, int end, List<int> query) {
-  final n = query.length;
-  final first = query[0];
-  for (var i = start; i <= end - n; i++) {
-    if (_lowerAscii(b[i]) != first) continue;
-    var j = 1;
-    while (j < n && _lowerAscii(b[i + j]) == query[j]) {
-      j++;
-    }
-    if (j == n) return true;
-  }
-  return false;
-}
-
-int _lowerAscii(int c) => c >= 0x41 && c <= 0x5A ? c | 0x20 : c;
 
 bool _isHighSurrogate(int cu) => cu >= 0xD800 && cu <= 0xDBFF;
 

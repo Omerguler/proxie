@@ -120,14 +120,19 @@ void main() {
     });
   });
 
-  test('schemas are cached until invalidated', () {
-    final doc = _doc('[{"a":1}]');
+  test('schemas are cached until an edit changes the items', () {
+    final doc = _doc('[{"a":1},{"a":2}]');
     final first = doc.schemaOf(0);
     expect(doc.schemaOf(0), same(first));
-    doc.invalidateSchema(0);
+    // Toggling and reading rows keep the cache.
+    doc.toggle(doc.rows(0, 1).single.nodeId);
+    doc.rows(0, 3);
+    expect(doc.schemaOf(0), same(first));
+    doc.apply(const AddItem(0, {'a': 3}));
     final second = doc.schemaOf(0);
     expect(second, isNot(same(first)));
     expect(second!.describe(), first!.describe());
+    expect(doc.schemaOf(0), same(second));
   });
 
   test('fields and kinds are unmodifiable', () {

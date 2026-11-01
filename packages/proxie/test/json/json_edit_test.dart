@@ -312,6 +312,20 @@ void main() {
       expect(_labels(doc), ['0 [0] number 2 0 false []']);
     });
 
+    test('duplicate member names: delete the middle one; no new clashes', () {
+      final doc = _doc('{"a":1,"a":2,"a":3}');
+      doc.apply(DeleteNode(doc.rows(1, 1).single.nodeId));
+      expect(_enc(doc), '{"a":1,"a":3}');
+      _checkConsistent(doc);
+
+      final dup = _doc('{"a":1,"a":2,"b":3}');
+      final b = dup.rows(2, 1).single.nodeId;
+      expect(() => dup.apply(RenameKey(b, 'a')), throwsArgumentError);
+      expect(() => dup.apply(const AddKey(0, 'a', 0)), throwsArgumentError);
+      expect(_enc(dup), '{"a":1,"a":2,"b":3}');
+      expect(dup.dirty, isFalse);
+    });
+
     test('the root cannot be deleted', () {
       final doc = _doc('[1]');
       expect(() => doc.apply(const DeleteNode(0)), throwsArgumentError);
@@ -549,7 +563,82 @@ void main() {
       expect(doc.nodeCount, 6);
     });
 
-    test('random edits keep counts, caches and output consistent', () {
+    test('edits that would grow storage beyond maxCapacity throw', () {
+      final doc = _doc('[1,2,3]'); // 4 nodes, trimmed to capacity 4
+      expect(doc.storedCapacity, 4);
+      doc.maxCapacity = 30;
+      // Growth goes 4 -> 22 -> 49: up to 18 more nodes fit.
+      doc.apply(AddItem(0, List.filled(17, 0)));
+      expect(doc.storedCapacity, 22);
+      final before = _enc(doc);
+      final edits = <JsonEdit>[
+        const AddItem(0, 'x'),
+        SetValue(doc.rows(0, 1).single.nodeId, [1]),
+        DuplicateItem(doc.rows(0, 1).single.nodeId),
+        const AddItem(0, {}),
+      ];
+      for (final e in edits) {
+        expect(
+          () => doc.apply(e),
+          throwsA(
+            isA<StateError>().having(
+              (e) => e.message,
+              'message',
+              'Document too large to edit further',
+            ),
+          ),
+        );
+      }
+      expect(_enc(doc), before);
+      // Edits that need no new nodes, or fit in the capacity, still work.
+      doc
+        ..apply(DeleteNode(doc.rows(0, 1).single.nodeId))
+        ..apply(SetValue(doc.rows(0, 1).single.nodeId, 'y'))
+        ..apply(const RemoveKeyFromAll(0, 'k'));
+      expect(doc.storedCapacity, 22);
+      _checkConsistent(doc);
+      // No limit: grows as needed.
+      doc.maxCapacity = null;
+      doc.apply(const AddItem(0, 'x'));
+      expect(doc.storedCapacity, greaterThan(22));
+    });
+
+    test('maxCapacity counts every node an edit adds', () {
+      final doc = _doc('[{"a":1},{"b":2},3]'); // 6 nodes
+      doc.maxCapacity = 6;
+      expect(() => doc.apply(const NewItemFromSchema(0)), throwsStateError);
+      expect(() => doc.apply(const AddKeyToAll(0, 'c', 1)), throwsStateError);
+      expect(
+        () => doc.apply(AddMissingKey(doc.rows(0, 1).single.nodeId, 'b')),
+        throwsStateError,
+      );
+      expect(doc.dirty, isFalse);
+    });
+
+    test('appending 20k items one by one stays fast', () {
+      final doc = _doc('{"l":[]}');
+      final l = doc.rows(0, 1).single.nodeId;
+      doc.toggle(l);
+      final sw = Stopwatch()..start();
+      for (var i = 0; i < 20000; i++) {
+        doc.apply(AddItem(l, i));
+      }
+      for (var i = 0; i < 2000; i++) {
+        doc.apply(AddKey(0, 'k$i', i));
+      }
+      expect(sw.elapsedMilliseconds, lessThan(500));
+      expect(doc.visibleCount, 22001);
+      expect(doc.rows(20000, 1).single.index, 19999);
+      // Removing the last item, then appending, still links correctly.
+      doc
+        ..apply(DeleteNode(doc.rows(20000, 1).single.nodeId))
+        ..apply(AddItem(l, 'end'));
+      expect(doc.rows(20000, 1).single.preview, '"end"');
+      expect(doc.rows(20000, 1).single.index, 19999);
+      _checkConsistent(doc);
+    });
+
+    test('random edits match a plain-Dart mirror; counts stay consistent', () {
       final rnd = Random(18);
       Object? value(int depth) {
         final r = rnd.nextInt(depth > 2 ? 4 : 7);
@@ -566,44 +655,62 @@ void main() {
         };
       }
 
+      List<Map<String, Object?>> objects(int n) => [
+        for (var i = 0; i < n; i++)
+          {'id': i, 'k${i % 3}': value(1), 'n': value(1)},
+      ];
+
       final applied = <Type, int>{};
+      var rejected = 0;
       for (var round = 0; round < 40; round++) {
-        final doc = _doc(
-          jsonEncode([
-            for (var i = 0; i < 4; i++)
-              {'id': i, 'k${i % 3}': value(1), 'n': value(1)},
-          ]),
-        );
+        final doc = _doc(jsonEncode(objects(4)));
+        Object? mirror = jsonDecode(_enc(doc));
         for (var step = 0; step < 40; step++) {
           final rows = doc.rows(0, doc.visibleCount);
-          if (rows.isEmpty) break;
-          final row = rows[rnd.nextInt(rows.length)];
-          final id = row.nodeId;
+          final row = rows.isEmpty || rnd.nextInt(25) == 0
+              ? null
+              : rows[rnd.nextInt(rows.length)];
+          final id = row?.nodeId ?? 0;
+          final children =
+              row?.childCount ?? rows.where((r) => r.depth == 0).length;
           // Array-wide edits mostly target the root array of objects.
           final array = rnd.nextBool() ? 0 : id;
-          final edit = switch (rnd.nextInt(12)) {
+          final edit = switch (rnd.nextInt(13)) {
             0 => SetValue(id, value(2)),
             1 => RenameKey(id, 'k${rnd.nextInt(5)}'),
             2 => DeleteNode(id),
             3 => AddKey(id, 'k${rnd.nextInt(5)}', value(2)),
-            4 => AddItem(id, value(2), at: rnd.nextInt(2) == 0 ? 0 : null),
+            4 => AddItem(
+              id,
+              value(2),
+              at: rnd.nextInt(4) == 0 ? null : rnd.nextInt(children + 2),
+            ),
             5 => DuplicateItem(id),
             6 => AddMissingKey(id, 'k${rnd.nextInt(4)}'),
             7 => AddKeyToAll(array, 'k${rnd.nextInt(5)}', value(2)),
             8 => RemoveKeyFromAll(array, 'k${rnd.nextInt(5)}'),
             9 => NewItemFromSchema(array),
-            10 => const AddItem(0, {'id': 9}),
+            10 => AddItem(0, {'id': 9}, at: rnd.nextInt(children + 1)),
+            11 => SetValue(0, rnd.nextInt(4) == 0 ? value(0) : objects(3)),
             _ => null,
           };
           if (edit == null) {
-            doc.toggle(id);
+            if (row != null) doc.toggle(id);
           } else {
+            final before = _enc(doc);
+            final wasDirty = doc.dirty;
+            final expected = _mirror(doc, mirror, edit);
             try {
               expect(doc.apply(edit), doc.visibleCount);
               applied[edit.runtimeType] = (applied[edit.runtimeType] ?? 0) + 1;
+              mirror = expected();
             } on ArgumentError {
-              // Not applicable to this node; nothing changed.
+              // Not applicable to this node: nothing changed.
+              rejected++;
+              expect(_enc(doc), before);
+              expect(doc.dirty, wasDirty);
             }
+            expect(jsonDecode(_enc(doc)), mirror, reason: '$edit');
           }
           _checkConsistent(doc);
         }
@@ -611,6 +718,134 @@ void main() {
       // Every kind of edit was exercised, not just rejected.
       expect(applied.keys, hasLength(10), reason: '$applied');
       expect(applied.values.every((n) => n >= 10), isTrue, reason: '$applied');
+      expect(rejected, greaterThan(50));
     });
   });
+}
+
+/// The value at [path] of a decoded tree.
+Object? _at(Object? tree, List<Object> path) {
+  var v = tree;
+  for (final p in path) {
+    v = v is Map ? v[p] : (v as List)[p as int];
+  }
+  return v;
+}
+
+/// [tree] with the value at [path] replaced by [v].
+Object? _put(Object? tree, List<Object> path, Object? v) {
+  if (path.isEmpty) return v;
+  final parent = _at(tree, path.sublist(0, path.length - 1));
+  if (parent is Map) {
+    parent[path.last] = v;
+  } else {
+    (parent as List)[path.last as int] = v;
+  }
+  return tree;
+}
+
+/// A deep, mutable copy of JSON data.
+Object? _copyOf(Object? v) => jsonDecode(jsonEncode(v));
+
+Object? _defaultLike(Object? v) => switch (v) {
+  Map() => <String, Object?>{},
+  List() => <Object?>[],
+  String() => '',
+  num() => 0,
+  bool() => false,
+  _ => null,
+};
+
+/// What [edit] should turn [tree] (the decoded output of [doc]) into, as a
+/// function to call once the edit succeeded. Addresses nodes by
+/// [JsonDocument.pathOf], taken before the edit.
+Object? Function() _mirror(JsonDocument doc, Object? tree, JsonEdit edit) {
+  List<Object> path(int id) => doc.pathOf(id);
+  final t = _copyOf(tree);
+  switch (edit) {
+    case SetValue(:final nodeId, :final value):
+      final p = path(nodeId);
+      return () => _put(t, p, _copyOf(value));
+    case RenameKey(:final nodeId, :final newKey):
+      final p = path(nodeId);
+      return () {
+        final parentPath = p.sublist(0, p.length - 1);
+        final m = _at(t, parentPath) as Map;
+        return _put(t, parentPath, {
+          for (final e in m.entries)
+            (e.key == p.last ? newKey : e.key): e.value,
+        });
+      };
+    case DeleteNode(:final nodeId):
+      final p = path(nodeId);
+      return () {
+        final parent = _at(t, p.sublist(0, p.length - 1));
+        if (parent is Map) {
+          parent.remove(p.last);
+        } else {
+          (parent as List).removeAt(p.last as int);
+        }
+        return t;
+      };
+    case AddKey(:final objectNodeId, :final key, :final value):
+      final p = path(objectNodeId);
+      return () {
+        (_at(t, p) as Map)[key] = _copyOf(value);
+        return t;
+      };
+    case AddItem(:final arrayNodeId, :final value, :final at):
+      final p = path(arrayNodeId);
+      return () {
+        final l = _at(t, p) as List;
+        l.insert(at ?? l.length, _copyOf(value));
+        return t;
+      };
+    case DuplicateItem(:final itemNodeId):
+      final p = path(itemNodeId);
+      return () {
+        final l = _at(t, p.sublist(0, p.length - 1)) as List;
+        final i = p.last as int;
+        l.insert(i + 1, _copyOf(l[i]));
+        return t;
+      };
+    case AddMissingKey(:final itemNodeId, :final key):
+      final p = path(itemNodeId);
+      return () {
+        final l = _at(t, p.sublist(0, p.length - 1)) as List;
+        final source = l.firstWhere((o) => o is Map && o.containsKey(key));
+        final v = (source as Map)[key];
+        (_at(t, p) as Map)[key] = v is Map || v is List ? _defaultLike(v) : v;
+        return t;
+      };
+    case AddKeyToAll(:final arrayNodeId, :final key, :final value):
+      final p = path(arrayNodeId);
+      return () {
+        for (final o in _at(t, p) as List) {
+          if (o is Map && !o.containsKey(key)) o[key] = _copyOf(value);
+        }
+        return t;
+      };
+    case RemoveKeyFromAll(:final arrayNodeId, :final key):
+      final p = path(arrayNodeId);
+      return () {
+        for (final o in _at(t, p) as List) {
+          if (o is Map) o.remove(key);
+        }
+        return t;
+      };
+    case NewItemFromSchema(:final arrayNodeId):
+      final p = path(arrayNodeId);
+      return () {
+        final l = _at(t, p) as List;
+        final item = <String, Object?>{};
+        for (final o in l) {
+          if (o is! Map) continue;
+          for (final e in o.entries) {
+            item.putIfAbsent(e.key as String, () => _defaultLike(e.value));
+          }
+        }
+        l.add(item);
+        return t;
+      };
+  }
 }
