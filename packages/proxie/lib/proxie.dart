@@ -18,6 +18,9 @@ export 'src/model/response.dart';
 export 'src/storage/call_query.dart';
 export 'src/storage/memory_store.dart';
 export 'src/storage/store.dart';
+export 'src/worker/commands.dart';
+export 'src/worker/worker.dart';
+export 'src/worker/worker_factory.dart';
 
 /// Current package version.
 const kProxieVersion = '0.1.0';
