@@ -4,7 +4,7 @@ import 'package:proxie/proxie.dart';
 import 'store_contract.dart';
 
 void main() {
-  runStoreContract(() async => MemoryStore());
+  runStoreContract(({now}) async => MemoryStore(now: now));
 
   group('MemoryStore clock', () {
     test(
@@ -43,6 +43,44 @@ void main() {
       final store = MemoryStore(now: () => now);
       await store.startSession();
       expect((await store.sessions()).single.startedAt, now);
+    });
+  });
+  group('MemoryStore corrupt rows', () {
+    final validRule = ProxieRule(
+      id: 'ok',
+      name: 'ok',
+      kind: RuleKind.breakpoint,
+      matcher: UrlMatcher('*'),
+    );
+
+    test('rules() skips undecodable rows and keeps the valid ones', () async {
+      final store = MemoryStore();
+      await store.saveRules([validRule]);
+      store.debugInsertRawRule({
+        ...validRule.toMap(),
+        'id': 'bad-kind',
+        'kind': 'futureKind',
+      });
+      store.debugInsertRawRule({...validRule.toMap(), 'name': 42});
+      store.debugInsertRawRule({'garbage': true});
+      store.debugInsertRawRule({...validRule.toMap(), 'id': 'ok2'});
+      expect((await store.rules()).map((r) => r.id), ['ok', 'ok2']);
+    });
+
+    test('customPresets() skips undecodable rows', () async {
+      final store = MemoryStore();
+      await store.saveCustomPreset(
+        'good',
+        'Good',
+        const MapLocalAction(failure: SimulatedFailure.timeout),
+      );
+      store.debugInsertRawPreset('bad1', {
+        'id': 'bad1',
+        'label': 'x',
+        'action': {'failure': 'nope'},
+      });
+      store.debugInsertRawPreset('bad2', {'id': 'bad2'});
+      expect((await store.customPresets()).map((p) => p.id), ['good']);
     });
   });
 }

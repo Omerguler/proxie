@@ -6,6 +6,9 @@ import 'package:proxie/proxie.dart';
 
 final _t0 = DateTime.utc(2026, 1, 1, 12);
 
+/// The fixed clock every store under test is created with.
+final _now = DateTime.utc(2026, 6, 1, 12);
+
 ProxieBody _body(String text, String contentType) =>
     ProxieBody.from(Uint8List.fromList(utf8.encode(text)), contentType);
 
@@ -61,11 +64,13 @@ Future<List<String>> _ids(
 ];
 
 /// Behaviour every [ProxieStore] implementation must satisfy.
-void runStoreContract(Future<ProxieStore> Function() create) {
+void runStoreContract(
+  Future<ProxieStore> Function({DateTime Function()? now}) create,
+) {
   group('ProxieStore contract', () {
     late ProxieStore store;
 
-    setUp(() async => store = await create());
+    setUp(() async => store = await create(now: () => _now));
     tearDown(() async => store.close());
 
     group('calls', () {
@@ -410,6 +415,296 @@ void runStoreContract(Future<ProxieStore> Function() create) {
         expect(await store.count(const CallQuery()), 3);
       });
 
+      test('text also searches text and json response bodies', () async {
+        const token = 'ZxqUniqueToken';
+        final tokenBytes = utf8.encode(token);
+        await store.upsert(
+          _call(
+            'json',
+            status: 200,
+            responseBody: _body('{"k":"$token"}', 'application/json'),
+          ),
+        );
+        await store.upsert(
+          _call(
+            'txt',
+            status: 200,
+            responseBody: _body('hello $token!', 'text/plain'),
+          ),
+        );
+        await store.upsert(
+          _call(
+            'other',
+            status: 200,
+            responseBody: _body('{"k":"nothing"}', 'application/json'),
+          ),
+        );
+        await store.upsert(
+          _call(
+            'bin',
+            status: 200,
+            responseBody: ProxieBody.from(
+              Uint8List.fromList([0, 255, 254, ...tokenBytes]),
+              'application/octet-stream',
+            ),
+          ),
+        );
+        await store.upsert(
+          _call(
+            'img',
+            status: 200,
+            responseBody: ProxieBody.from(
+              Uint8List.fromList([
+                0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, //
+                ...tokenBytes,
+              ]),
+              'image/png',
+            ),
+          ),
+        );
+        await store.upsert(_call('pending'));
+        await store.upsert(_call('pending2', url: 'https://api.test/$token'));
+
+        const q = CallQuery(text: 'zxqUNIQUEtoken');
+        expect((await _ids(store, q)).toSet(), {'json', 'txt', 'pending2'});
+        expect(await store.count(q), 3);
+        expect(
+          await _ids(store, const CallQuery(text: 'absent-token')),
+          isEmpty,
+        );
+      });
+
+      test('filtered pagination is stable and count ignores paging', () async {
+        for (var i = 0; i < 12; i++) {
+          await store.upsert(
+            _call(
+              'c${i.toString().padLeft(2, '0')}',
+              method: i.isEven ? 'GET' : 'POST',
+              startedAt: _t0.add(Duration(seconds: i)),
+            ),
+          );
+        }
+        const q = CallQuery(methods: {'GET'});
+        final all = await _ids(store, q);
+        expect(all, ['c10', 'c08', 'c06', 'c04', 'c02', 'c00']);
+        final paged = <String>[];
+        for (var off = 0; off < 6; off += 2) {
+          paged.addAll(await _ids(store, q, offset: off, limit: 2));
+        }
+        expect(paged, all);
+        expect(await _ids(store, q, offset: 5, limit: 10), ['c00']);
+        expect(await _ids(store, q, offset: 6, limit: 10), isEmpty);
+        expect(await store.count(q), 6);
+      });
+
+      test('every filter excludes on its own and filters combine', () async {
+        ProxieBody json(String s) => _body(s, 'application/json');
+        await store.upsert(
+          _call(
+            'hit',
+            url: 'https://api.test/needle/1',
+            session: 2,
+            adapter: 'dio',
+            status: 200,
+            responseBody: json('{"a":1}'),
+          ),
+        );
+        await store.upsert(
+          _call(
+            'plain',
+            url: 'https://api.test/needle/2',
+            session: 2,
+            adapter: 'dio',
+            status: 200,
+            responseBody: _body('ok', 'text/plain'),
+          ),
+        );
+        // Each row below differs from a hit in exactly one respect.
+        await store.upsert(
+          _call(
+            'noText',
+            url: 'https://api.test/other',
+            session: 2,
+            adapter: 'dio',
+            status: 200,
+            responseBody: json('{"a":1}'),
+          ),
+        );
+        await store.upsert(
+          _call(
+            'method',
+            url: 'https://api.test/needle/3',
+            method: 'POST',
+            session: 2,
+            adapter: 'dio',
+            status: 200,
+            responseBody: json('{"a":1}'),
+          ),
+        );
+        await store.upsert(
+          _call(
+            'status',
+            url: 'https://api.test/needle/4',
+            session: 2,
+            adapter: 'dio',
+            status: 500,
+            responseBody: json('{"a":1}'),
+          ),
+        );
+        await store.upsert(
+          _call(
+            'adapter',
+            url: 'https://api.test/needle/5',
+            session: 2,
+            adapter: 'http',
+            status: 200,
+            responseBody: json('{"a":1}'),
+          ),
+        );
+        await store.upsert(
+          _call(
+            'session',
+            url: 'https://api.test/needle/6',
+            session: 1,
+            adapter: 'dio',
+            status: 200,
+            responseBody: json('{"a":1}'),
+          ),
+        );
+        await store.upsert(
+          _call(
+            'big',
+            url: 'https://api.test/needle/7',
+            session: 2,
+            adapter: 'dio',
+            status: 200,
+            responseBody: json('{"a":"${'x' * 100}"}'),
+          ),
+        );
+        await store.upsert(
+          _call(
+            'binary',
+            url: 'https://api.test/needle/8',
+            session: 2,
+            adapter: 'dio',
+            status: 200,
+            responseBody: ProxieBody.from(
+              Uint8List.fromList([0, 255, 254]),
+              'application/octet-stream',
+            ),
+          ),
+        );
+        const q = CallQuery(
+          text: 'NEEDLE',
+          methods: {'get'},
+          status: StatusFilter.success,
+          hideBinary: true,
+          maxSize: 50,
+          sessionId: 2,
+          adapters: {'dio'},
+        );
+        expect((await _ids(store, q)).toSet(), {'hit', 'plain'});
+        expect(await store.count(q), 2);
+        final onlyJson = q.copyWith(onlyJson: true);
+        expect(await _ids(store, onlyJson), ['hit']);
+        expect(await store.count(onlyJson), 1);
+      });
+
+      test('upsert refreshes the queryable summary', () async {
+        await store.upsert(
+          _call('a', url: 'https://old.test/a', method: 'GET', session: 1),
+        );
+        await store.upsert(
+          _call(
+            'a',
+            url: 'https://new.test/b',
+            method: 'PUT',
+            session: 2,
+            adapter: 'dio',
+            status: 500,
+            responseBody: _body('boom', 'text/plain'),
+            duration: const Duration(milliseconds: 77),
+            tags: {CallTag.edited},
+          ),
+        );
+        expect(await store.count(const CallQuery()), 1);
+        final s = (await store.query(
+          const CallQuery(),
+          offset: 0,
+          limit: 10,
+        )).single;
+        expect(s.url, 'https://new.test/b');
+        expect(s.method, 'PUT');
+        expect(s.sessionId, 2);
+        expect(s.adapter, 'dio');
+        expect(s.statusCode, 500);
+        expect(s.durationMs, 77);
+        expect(s.kind, BodyKind.text);
+        expect(s.responseSize, 4);
+        expect(s.tags, {CallTag.edited});
+        expect(s.hasError, isFalse);
+        expect(
+          await _ids(store, const CallQuery(status: StatusFilter.errors)),
+          ['a'],
+        );
+        expect(await _ids(store, const CallQuery(sessionId: 2)), ['a']);
+        expect(await _ids(store, const CallQuery(text: 'new.test')), ['a']);
+        expect(await _ids(store, const CallQuery(text: 'boom')), ['a']);
+        expect(await _ids(store, const CallQuery(methods: {'PUT'})), ['a']);
+        expect(await _ids(store, const CallQuery(sessionId: 1)), isEmpty);
+        expect(await _ids(store, const CallQuery(text: 'old.test')), isEmpty);
+        expect(await _ids(store, const CallQuery(methods: {'GET'})), isEmpty);
+        expect(
+          await _ids(store, const CallQuery(status: StatusFilter.success)),
+          isEmpty,
+        );
+      });
+
+      test('upsert that adds an error flips hasError and the filter', () async {
+        await store.upsert(_call('a', status: 200));
+        await store.upsert(_call('a', status: 200, error: _err));
+        final s = (await store.query(
+          const CallQuery(),
+          offset: 0,
+          limit: 1,
+        )).single;
+        expect(s.hasError, isTrue);
+        expect(
+          await store.count(const CallQuery(status: StatusFilter.errors)),
+          1,
+        );
+        expect(
+          await store.count(const CallQuery(status: StatusFilter.success)),
+          0,
+        );
+      });
+
+      test('orders by instant across UTC and local, down to the ms', () async {
+        final base = DateTime.utc(2026, 1, 1, 12);
+        await store.upsert(_call('a', startedAt: base));
+        await store.upsert(
+          _call('b', startedAt: base.add(const Duration(milliseconds: 1))),
+        );
+        // Same instant as base + 1 s, but expressed in local time.
+        await store.upsert(
+          _call(
+            'c',
+            startedAt: DateTime.fromMillisecondsSinceEpoch(
+              base.millisecondsSinceEpoch + 1000,
+            ),
+          ),
+        );
+        await store.upsert(
+          _call('d', startedAt: base.subtract(const Duration(milliseconds: 1))),
+        );
+        expect(await _ids(store, const CallQuery()), ['c', 'b', 'a', 'd']);
+        final got = await store.get('c');
+        expect(
+          got!.startedAt.millisecondsSinceEpoch,
+          base.millisecondsSinceEpoch + 1000,
+        );
+      });
+
       test('CallQuery.copyWith sets and clears fields', () {
         const q = CallQuery(text: 't', maxSize: 3, sessionId: 2);
         expect(q.copyWith(onlyJson: true).text, 't');
@@ -442,6 +737,17 @@ void runStoreContract(Future<ProxieStore> Function() create) {
           expect(sessions.map((s) => s.callCount), [0, 2, 1]);
         },
       );
+
+      test('lists only started sessions; orphan calls are tolerated', () async {
+        final s1 = await store.startSession();
+        await store.upsert(_call('orphan', session: 99));
+        await store.upsert(_call('a', session: s1));
+        final sessions = await store.sessions();
+        expect(sessions.map((s) => s.id), [s1]);
+        expect(sessions.single.callCount, 1);
+        expect(await store.get('orphan'), isNotNull);
+        expect(await store.count(const CallQuery(sessionId: 99)), 1);
+      });
 
       test('a call moved to another session is counted there', () async {
         final s1 = await store.startSession();
@@ -541,6 +847,17 @@ void runStoreContract(Future<ProxieStore> Function() create) {
         expect(built.response, isNull);
       });
 
+      test('listed in insertion order; replacing keeps the position', () async {
+        await store.saveCustomPreset('b', 'B', action(400));
+        await store.saveCustomPreset('a', 'A', action(401));
+        await store.saveCustomPreset('c', 'C', action(402));
+        await store.saveCustomPreset('b', 'B2', action(403));
+        final presets = await store.customPresets();
+        expect(presets.map((p) => p.id), ['b', 'a', 'c']);
+        expect(presets.first.label, 'B2');
+        expect(presets.first.build(null).response!.statusCode, 403);
+      });
+
       test('saving an existing id replaces it', () async {
         await store.saveCustomPreset('p1', 'One', action(400));
         await store.saveCustomPreset('p2', 'Two', action(500));
@@ -553,11 +870,44 @@ void runStoreContract(Future<ProxieStore> Function() create) {
       });
     });
 
+    group('isolation', () {
+      test(
+        'changing objects after upsert does not change stored data',
+        () async {
+          final c = _call('a', status: 200);
+          await store.upsert(c);
+          c.response!.body.bytes[0] = 0x58;
+          c.request.body.bytes[0] = 0x58;
+          final changed = c.copyWith(
+            response: c.response!.copyWith(statusCode: 500),
+          );
+          expect(changed.response!.statusCode, 500);
+          final got = (await store.get('a'))!;
+          expect(got.response!.statusCode, 200);
+          expect(got.response!.body.text, '{"ok":true}');
+          expect(got.request.body.text, '{"q":1}');
+        },
+      );
+
+      test('changing a returned call does not change stored data', () async {
+        await store.upsert(_call('a', status: 200));
+        final got = (await store.get('a'))!;
+        got.response!.body.bytes[0] = 0x58;
+        got.request.body.bytes[0] = 0x58;
+        got.copyWith(response: got.response!.copyWith(statusCode: 500));
+        final again = (await store.get('a'))!;
+        expect(again.response!.statusCode, 200);
+        expect(again.response!.body.text, '{"ok":true}');
+        expect(again.request.body.text, '{"q":1}');
+        expect(await store.count(const CallQuery(text: '"ok"')), 1);
+      });
+    });
+
     group('trim', () {
       test('maxCalls: 2 keeps the newest 2', () async {
         for (var i = 0; i < 5; i++) {
           await store.upsert(
-            _call('c$i', startedAt: DateTime.now().add(Duration(seconds: i))),
+            _call('c$i', startedAt: _now.add(Duration(seconds: i))),
           );
         }
         await store.trim(maxCalls: 2, maxAge: const Duration(days: 365));
@@ -567,7 +917,7 @@ void runStoreContract(Future<ProxieStore> Function() create) {
       });
 
       test('ties at the cutoff are broken by id like the listing', () async {
-        final t = DateTime.now();
+        final t = _now;
         await store.upsert(_call('a', startedAt: t));
         await store.upsert(_call('b', startedAt: t));
         await store.upsert(_call('c', startedAt: t));
@@ -576,19 +926,19 @@ void runStoreContract(Future<ProxieStore> Function() create) {
       });
 
       test('maxCalls larger than the count removes nothing', () async {
-        await store.upsert(_call('a', startedAt: DateTime.now()));
+        await store.upsert(_call('a', startedAt: _now));
         await store.trim(maxCalls: 10, maxAge: const Duration(days: 365));
         expect(await store.count(const CallQuery()), 1);
       });
 
       test('maxCalls: 0 removes everything', () async {
-        await store.upsert(_call('a', startedAt: DateTime.now()));
+        await store.upsert(_call('a', startedAt: _now));
         await store.trim(maxCalls: 0, maxAge: const Duration(days: 365));
         expect(await store.count(const CallQuery()), 0);
       });
 
       test('removes calls older than maxAge', () async {
-        final now = DateTime.now();
+        final now = _now;
         await store.upsert(
           _call('old', startedAt: now.subtract(const Duration(days: 10))),
         );
@@ -597,6 +947,44 @@ void runStoreContract(Future<ProxieStore> Function() create) {
         );
         await store.trim(maxCalls: 100, maxAge: const Duration(days: 7));
         expect(await _ids(store, const CallQuery()), ['fresh']);
+      });
+
+      test('applies the age cut and then the count cut in one call', () async {
+        for (final (id, age) in [
+          ('ancient', 30),
+          ('old', 20),
+          ('d3', 3),
+          ('d2', 2),
+          ('d1', 1),
+        ]) {
+          await store.upsert(
+            _call(id, startedAt: _now.subtract(Duration(days: age))),
+          );
+        }
+        await store.trim(maxCalls: 2, maxAge: const Duration(days: 10));
+        expect(await _ids(store, const CallQuery()), ['d1', 'd2']);
+        // Age alone would keep all three recent calls; count alone is 2.
+        await store.upsert(
+          _call('d0', startedAt: _now.subtract(const Duration(hours: 1))),
+        );
+        await store.trim(
+          maxCalls: 10,
+          maxAge: const Duration(days: 1, hours: 12),
+        );
+        expect(await _ids(store, const CallQuery()), ['d0', 'd1']);
+      });
+
+      test('a call exactly maxAge old is kept, one older is removed', () async {
+        const age = Duration(days: 7);
+        await store.upsert(_call('exact', startedAt: _now.subtract(age)));
+        await store.upsert(
+          _call(
+            'older',
+            startedAt: _now.subtract(age + const Duration(milliseconds: 1)),
+          ),
+        );
+        await store.trim(maxCalls: 100, maxAge: age);
+        expect(await _ids(store, const CallQuery()), ['exact']);
       });
 
       test('keeps rules, presets and sessions', () async {
@@ -614,7 +1002,7 @@ void runStoreContract(Future<ProxieStore> Function() create) {
           'P',
           const MapLocalAction(failure: SimulatedFailure.noConnection),
         );
-        await store.upsert(_call('a', session: s, startedAt: DateTime.now()));
+        await store.upsert(_call('a', session: s, startedAt: _now));
         await store.trim(maxCalls: 0, maxAge: const Duration(days: 1));
         expect(await store.rules(), hasLength(1));
         expect(await store.customPresets(), hasLength(1));

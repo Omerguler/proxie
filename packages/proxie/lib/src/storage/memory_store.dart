@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+
 import '../core/presets.dart';
 import '../core/rule.dart';
 import '../model/body.dart';
@@ -106,7 +108,8 @@ class MemoryStore implements ProxieStore {
   @override
   Future<ProxieCall?> get(String id) async {
     final e = _calls[id];
-    return e == null ? null : ProxieCall.fromMap(e.map);
+    // Round-trip through toMap to hand out copies of the body bytes.
+    return e == null ? null : ProxieCall.fromMap(e.call.toMap());
   }
 
   @override
@@ -131,9 +134,13 @@ class MemoryStore implements ProxieStore {
     final out = <ProxieRule>[];
     for (final m in _rules) {
       try {
-        out.add(ProxieRule.fromMap(m));
-      } catch (_) {
+        // Decode twice: the first validates, the second yields copies that
+        // share no byte buffers with the stored map.
+        out.add(ProxieRule.fromMap(ProxieRule.fromMap(m).toMap()));
+      } on Exception {
         // Skip rules that no longer decode (e.g. written by a newer version).
+      } on TypeError {
+        // A wrongly typed field in a stored row.
       }
     }
     return out;
@@ -154,11 +161,13 @@ class MemoryStore implements ProxieStore {
           ResponsePreset(
             id: m['id'] as String,
             label: m['label'] as String,
-            build: (_) => action,
+            build: (_) => MapLocalAction.fromMap(action.toMap()),
           ),
         );
-      } catch (_) {
+      } on Exception {
         // Skip presets that no longer decode.
+      } on TypeError {
+        // A wrongly typed field in a stored row.
       }
     }
     return out;
@@ -172,6 +181,15 @@ class MemoryStore implements ProxieStore {
   ) async {
     _presets[id] = {'id': id, 'label': label, 'action': a.toMap()};
   }
+
+  /// Test hook: appends [raw] as a stored rule without validating it.
+  @visibleForTesting
+  void debugInsertRawRule(Map<String, Object?> raw) => _rules.add(raw);
+
+  /// Test hook: stores [raw] as the custom preset [id] without validating it.
+  @visibleForTesting
+  void debugInsertRawPreset(String id, Map<String, Object?> raw) =>
+      _presets[id] = raw;
 
   @override
   Future<void> trim({required int maxCalls, required Duration maxAge}) async {

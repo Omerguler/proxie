@@ -25,6 +25,9 @@ abstract interface class ProxieStore {
   Future<int> startSession();
 
   /// Inserts [c], or replaces the stored call with the same id.
+  ///
+  /// The call's session need not have been started (there is no foreign
+  /// key); such calls are queryable but belong to no entry of [sessions].
   Future<void> upsert(ProxieCall c);
 
   Future<List<CallSummary>> query(
@@ -38,7 +41,8 @@ abstract interface class ProxieStore {
 
   Future<ProxieCall?> get(String id);
 
-  /// Sessions, newest first.
+  /// Started sessions, newest first. `callCount` counts the stored calls
+  /// carrying the session id.
   Future<List<SessionInfo>> sessions();
 
   /// Stored rules in saved order; rules that cannot be decoded are skipped.
@@ -47,7 +51,8 @@ abstract interface class ProxieStore {
   /// Replaces all stored rules.
   Future<void> saveRules(List<ProxieRule> r);
 
-  /// Custom presets; their `build` ignores the captured response.
+  /// Custom presets in insertion order (replacing an id keeps its original
+  /// position); their `build` ignores the captured response.
   Future<List<ResponsePreset>> customPresets();
 
   /// Saves a custom preset, replacing any with the same [id].

@@ -26,8 +26,9 @@ class CallQuery {
     this.adapters = const {},
   });
 
-  /// Case-insensitive substring searched in the URL (and, depending on the
-  /// store, in response bodies). Null or empty means no text filter.
+  /// Case-insensitive substring searched in the URL and in the response body
+  /// when its kind is text or json (never binary or image bodies). Every
+  /// store must do both. Null or empty means no text filter.
   final String? text;
 
   /// HTTP methods to keep, compared case-insensitively. Empty keeps all.
