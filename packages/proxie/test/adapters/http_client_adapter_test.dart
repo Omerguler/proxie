@@ -514,6 +514,8 @@ void main() {
     expect(call.error!.type, 'stream_error');
     expect(call.response!.statusCode, 200);
     expect(call.response!.body.bytes, utf8.encode('par'));
+    expect(call.response!.body.truncated, isTrue);
+    expect(call.response!.body.originalLength, 3);
     expect(sink.latest, hasLength(1));
   });
 
@@ -541,6 +543,8 @@ void main() {
     final call = sink.last;
     expect(call.error!.type, 'cancelled');
     expect(call.response!.body.bytes, utf8.encode('first'));
+    expect(call.response!.body.truncated, isTrue);
+    expect(call.response!.body.originalLength, 5);
   });
 
   test('early cancel against the real server completes cleanly', () async {
@@ -556,5 +560,164 @@ void main() {
     await first.future;
     await pumpEventQueue();
     expect(sink.last.error!.type, 'cancelled');
+  });
+
+  test('rule added mid-stream does not pause the streamed call', () async {
+    final res = await client.send(http.Request('GET', server.url('/json')));
+    engine.rules = RuleSet([_bp('*/json', BreakpointPhase.response)]);
+    var paused = false;
+    final sub = engine.breakpoints.changes.listen((p) {
+      if (p.isNotEmpty) paused = true;
+    });
+    expect(await res.stream.bytesToString(), '{"hello":"world"}');
+    await pumpEventQueue();
+    await sub.cancel();
+    expect(paused, isFalse);
+    expect(engine.breakpoints.pending, isEmpty);
+    final call = sink.last;
+    expect(call.response!.statusCode, 200);
+    expect(call.tags, isNot(contains(CallTag.breakpoint)));
+    expect(call.tags, isNot(contains(CallTag.edited)));
+  });
+
+  test('Set-Cookie headers stay separate values (streamed)', () async {
+    final res = await client.get(server.url('/cookies'));
+    expect(res.body, 'ok');
+    await pumpEventQueue();
+    expect(sink.last.response!.headers['set-cookie'], [
+      'a=1; Expires=Sun, 06 Nov 1994 08:49:37 GMT',
+      'b=2',
+    ]);
+  });
+
+  test('Set-Cookie headers stay separate values (breakpoint)', () async {
+    engine.rules = RuleSet([_bp('*/cookies', BreakpointPhase.response)]);
+    _onPause(
+      engine,
+      BreakpointPhase.response,
+      (_) => const ContinueUnchanged(),
+    );
+    final res = await client.get(server.url('/cookies'));
+    expect(res.headers['set-cookie'], contains('b=2'));
+    await pumpEventQueue();
+    expect(sink.last.response!.headers['set-cookie'], hasLength(2));
+  });
+
+  test('Set-Cookie headers stay separate values (replay)', () async {
+    final r = await client.replay(
+      ProxieRequest(
+        method: 'GET',
+        url: server.url('/cookies'),
+        headers: {},
+        body: ProxieBody.empty(),
+      ),
+    );
+    expect(r.headers['set-cookie'], hasLength(2));
+  });
+
+  test('final url after redirects is kept (streamed)', () async {
+    final res = await client.send(http.Request('GET', server.url('/redirect')));
+    await res.stream.drain<void>();
+    expect(res, isA<http.BaseResponseWithUrl>());
+    expect((res as http.BaseResponseWithUrl).url, server.url('/json'));
+  });
+
+  test('final url after redirects is kept (breakpoint)', () async {
+    engine.rules = RuleSet([_bp('*/redirect', BreakpointPhase.response)]);
+    _onPause(
+      engine,
+      BreakpointPhase.response,
+      (_) => const ContinueUnchanged(),
+    );
+    final res = await client.send(http.Request('GET', server.url('/redirect')));
+    await res.stream.drain<void>();
+    expect((res as http.BaseResponseWithUrl).url, server.url('/json'));
+  });
+
+  test('mocked responses carry the request url', () async {
+    engine.rules = RuleSet([
+      _mapLocal('*/json', MapLocalAction(response: _jsonRes(200, '{}'))),
+    ]);
+    final res = await client.send(http.Request('GET', server.url('/json')));
+    await res.stream.drain<void>();
+    expect((res as http.BaseResponseWithUrl).url, server.url('/json'));
+  });
+
+  test('replay of a truncated request body throws StateError', () async {
+    final body = ProxieBody.from(Uint8List(20), null, cap: 10);
+    expect(body.truncated, isTrue);
+    await expectLater(
+      client.replay(
+        ProxieRequest(
+          method: 'POST',
+          url: server.url('/echo'),
+          headers: {},
+          body: body,
+        ),
+      ),
+      throwsA(
+        isA<StateError>().having(
+          (e) => e.message,
+          'message',
+          'Cannot replay: request body was truncated',
+        ),
+      ),
+    );
+    expect(server.hitsFor('/echo'), 0);
+  });
+
+  test('a streamed response that is never listened to stays pending', () async {
+    final res = await client.send(http.Request('GET', server.url('/json')));
+    await pumpEventQueue();
+    expect(sink.last.response, isNull);
+    expect(sink.last.error, isNull);
+    expect(sink.last.duration, isNull);
+    await res.stream.drain<void>();
+    await pumpEventQueue();
+    expect(sink.last.response!.statusCode, 200);
+  });
+
+  test('/status/<code>: app and record see the status', () async {
+    final res = await client.get(server.url('/status/418'));
+    expect(res.statusCode, 418);
+    expect(jsonDecode(res.body), {'status': 418});
+    await pumpEventQueue();
+    expect(sink.last.response!.statusCode, 418);
+  });
+
+  test('MultipartRequest: boundary in content-type matches the body', () async {
+    final req = http.MultipartRequest('POST', server.url('/echo'))
+      ..fields['name'] = 'proxie'
+      ..files.add(
+        http.MultipartFile.fromString('file', 'data', filename: 'f.txt'),
+      );
+    final res = await http.Response.fromStream(await client.send(req));
+    final echo = jsonDecode(res.body) as Map;
+    final ct = (echo['headers'] as Map)['content-type'] as String;
+    final boundary = RegExp(r'boundary=(.+)$').firstMatch(ct)!.group(1)!;
+    final body = echo['body'] as String;
+    expect(body, startsWith('--$boundary\r\n'));
+    expect(body, contains('proxie'));
+    expect(body, contains('data'));
+    expect(body.trimRight(), endsWith('--$boundary--'));
+    await pumpEventQueue();
+    final call = sink.last;
+    expect(call.request.headers['content-type']!.single, ct);
+    expect(call.request.body.text, body);
+  });
+
+  test('StreamedRequest: chunks are sent and captured in full', () async {
+    final req = http.StreamedRequest('PUT', server.url('/echo'))
+      ..headers['content-type'] = 'text/plain';
+    final sent = client.send(req);
+    req.sink
+      ..add(utf8.encode('one,'))
+      ..add(utf8.encode('two,'))
+      ..add(utf8.encode('three'));
+    unawaited(req.sink.close());
+    final res = await http.Response.fromStream(await sent);
+    expect((jsonDecode(res.body) as Map)['body'], 'one,two,three');
+    await pumpEventQueue();
+    expect(sink.last.request.body.text, 'one,two,three');
   });
 }

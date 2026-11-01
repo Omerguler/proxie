@@ -196,6 +196,29 @@ void main() {
     expect(sink.last.response!.statusCode, 200);
   });
 
+  test('recordResponse records without consulting breakpoints', () async {
+    await engine.onRequest('c1', 'http', _req());
+    engine.rules = RuleSet([_bp(BreakpointPhase.response)]);
+    engine.recordResponse('c1', _res(201));
+    expect(bps.pending, isEmpty);
+    expect(sink.last.response!.statusCode, 201);
+    expect(sink.last.tags, isNot(contains(CallTag.breakpoint)));
+    expect(sink.last.duration, isNotNull);
+    final n = sink.calls.length;
+    // State is gone: a second record and unknown ids are ignored.
+    engine.recordResponse('c1', _res(200));
+    engine.recordResponse('nope', _res(200));
+    expect(sink.calls, hasLength(n));
+  });
+
+  test('recordResponse after dispose is a no-op', () async {
+    await engine.onRequest('c1', 'http', _req());
+    final n = sink.calls.length;
+    engine.dispose();
+    engine.recordResponse('c1', _res(200));
+    expect(sink.calls, hasLength(n));
+  });
+
   test('sessionId is stamped on calls', () async {
     engine.sessionId = 7;
     await engine.onRequest('c1', 'http', _req());

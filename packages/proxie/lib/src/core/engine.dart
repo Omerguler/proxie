@@ -166,6 +166,17 @@ class ProxieEngine {
     return current;
   }
 
+  /// Records [res] as the final response without consulting breakpoints.
+  ///
+  /// For responses the app already received (streamed through), where a
+  /// pause or edit could no longer take effect. Unknown calls are ignored.
+  void recordResponse(String callId, ProxieResponse res) {
+    if (_disposed) return;
+    final state = _states.remove(callId);
+    if (state == null) return;
+    _emit(callId, state, response: res);
+  }
+
   /// Records [err] as the outcome of the call, with the [response] received
   /// so far, if any (for example a partial body before a stream failed).
   void onError(String callId, ProxieError err, {ProxieResponse? response}) =>

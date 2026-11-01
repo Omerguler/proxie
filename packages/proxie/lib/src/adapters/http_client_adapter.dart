@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:developer' as developer;
 import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
@@ -21,6 +20,13 @@ const _simulatedTimeout = 'Request timed out (simulated by Proxie)';
 ///
 /// Wrap the app's client: `ProxieHttpClient(inner: http.Client())`. While no
 /// engine is attached every request goes straight to [inner] untouched.
+///
+/// A streamed response is recorded when the app finishes (or cancels) reading
+/// it; one the app never listens to stays pending in the inspector.
+///
+/// Responses handed to the app are rebuilt `StreamedResponse`s that keep the
+/// final URL (`BaseResponseWithUrl.url`) but not `IOStreamedResponse`'s
+/// `detachSocket`.
 class ProxieHttpClient extends http.BaseClient implements ProxieCaptureAdapter {
   ProxieHttpClient({http.Client? inner}) : _inner = inner ?? http.Client();
 
@@ -73,6 +79,9 @@ class ProxieHttpClient extends http.BaseClient implements ProxieCaptureAdapter {
 
   @override
   Future<ProxieResponse> replay(ProxieRequest request) async {
+    if (request.body.truncated) {
+      throw StateError('Cannot replay: request body was truncated');
+    }
     final out = http.Request(request.method, request.url)
       ..headers.addAll(_toHttpHeaders(request.headers))
       ..bodyBytes = request.body.bytes;
@@ -81,7 +90,7 @@ class ProxieHttpClient extends http.BaseClient implements ProxieCaptureAdapter {
     return ProxieResponse(
       statusCode: res.statusCode,
       reasonPhrase: res.reasonPhrase,
-      headers: _toProxieHeaders(res.headers),
+      headers: _responseHeaders(res),
       body: ProxieBody.from(
         bytes,
         _header(res.headers, 'content-type'),
@@ -120,7 +129,7 @@ class ProxieHttpClient extends http.BaseClient implements ProxieCaptureAdapter {
         action.response ??
         ProxieResponse(statusCode: 200, headers: {}, body: ProxieBody.empty());
     final out = await _respond(engine, callId, request.url, mocked);
-    return _streamed(out, out.body.bytes, request);
+    return _streamed(out, out.body.bytes, request, url: request.url);
   }
 
   Future<http.StreamedResponse> _proceed(
@@ -159,7 +168,7 @@ class ProxieHttpClient extends http.BaseClient implements ProxieCaptureAdapter {
     final received = ProxieResponse(
       statusCode: res.statusCode,
       reasonPhrase: res.reasonPhrase,
-      headers: _toProxieHeaders(res.headers),
+      headers: _responseHeaders(res),
       body: ProxieBody.from(
         body,
         _header(res.headers, 'content-type'),
@@ -171,6 +180,7 @@ class ProxieHttpClient extends http.BaseClient implements ProxieCaptureAdapter {
       out,
       _keepsFull(received.body, out.body) ? body : out.body.bytes,
       request,
+      url: _finalUrl(res, request),
       isRedirect: res.isRedirect,
       persistentConnection: res.persistentConnection,
     );
@@ -188,8 +198,9 @@ class ProxieHttpClient extends http.BaseClient implements ProxieCaptureAdapter {
       ..followRedirects = original.followRedirects
       ..maxRedirects = original.maxRedirects
       ..persistentConnection = original.persistentConnection;
-    if (identical(proceeded, captured) ||
-        identical(proceeded.headers, captured.headers)) {
+    // Unedited (the engine hands back the same object): the app's headers as
+    // given; edited: the breakpoint's headers.
+    if (identical(proceeded, captured)) {
       for (final e in original.headers.entries) {
         if (e.key.toLowerCase() != 'content-length') {
           out.headers[e.key] = e.value;
@@ -222,7 +233,9 @@ class ProxieHttpClient extends http.BaseClient implements ProxieCaptureAdapter {
     var finished = false;
     StreamSubscription<List<int>>? upstream;
 
-    ProxieResponse snapshot() {
+    // A partial snapshot (stream failed or cancelled) is marked truncated:
+    // it holds only the bytes received so far.
+    ProxieResponse snapshot({bool partial = false}) {
       final b = ProxieBody.from(
         kept.toBytes(),
         _header(res.headers, 'content-type'),
@@ -231,12 +244,12 @@ class ProxieHttpClient extends http.BaseClient implements ProxieCaptureAdapter {
       return ProxieResponse(
         statusCode: res.statusCode,
         reasonPhrase: res.reasonPhrase,
-        headers: _toProxieHeaders(res.headers),
+        headers: _responseHeaders(res),
         body: ProxieBody(
           bytes: b.bytes,
           contentType: b.contentType,
           kind: b.kind,
-          truncated: b.truncated,
+          truncated: b.truncated || partial,
           originalLength: total,
         ),
       );
@@ -248,7 +261,7 @@ class ProxieHttpClient extends http.BaseClient implements ProxieCaptureAdapter {
       engine.onError(
         callId,
         ProxieError(type: type, message: message),
-        response: snapshot(),
+        response: snapshot(partial: true),
       );
     }
 
@@ -271,16 +284,8 @@ class ProxieHttpClient extends http.BaseClient implements ProxieCaptureAdapter {
           onDone: () {
             if (!finished) {
               finished = true;
-              engine
-                  .onResponse(callId, snapshot())
-                  .then<void>(
-                    (_) {},
-                    onError: (Object e, StackTrace st) => developer.log(
-                      'Proxie response recording failed',
-                      error: e,
-                      stackTrace: st,
-                    ),
-                  );
+              // The app already has the bytes: record without breakpoints.
+              engine.recordResponse(callId, snapshot());
             }
             controller.close();
           },
@@ -294,9 +299,10 @@ class ProxieHttpClient extends http.BaseClient implements ProxieCaptureAdapter {
       },
     );
 
-    return http.StreamedResponse(
+    return _ProxieStreamedResponse(
       controller.stream,
       res.statusCode,
+      url: _finalUrl(res, request),
       contentLength: res.contentLength,
       request: request,
       headers: res.headers,
@@ -334,11 +340,13 @@ http.StreamedResponse _streamed(
   ProxieResponse res,
   Uint8List bytes,
   http.BaseRequest request, {
+  required Uri url,
   bool isRedirect = false,
   bool persistentConnection = true,
-}) => http.StreamedResponse(
+}) => _ProxieStreamedResponse(
   Stream.value(bytes),
   res.statusCode,
+  url: url,
   contentLength: bytes.length,
   request: request,
   headers: {
@@ -372,6 +380,43 @@ String? _header(Map<String, String> headers, String name) {
 Map<String, List<String>> _toProxieHeaders(Map<String, String> headers) => {
   for (final e in headers.entries) e.key: [e.value],
 };
+
+/// Response headers with `set-cookie` split back into its separate values.
+///
+/// Only `set-cookie` is split: other headers keep the value the app sees,
+/// since splitting on commas would break dates such as `date` or `expires`.
+Map<String, List<String>> _responseHeaders(http.BaseResponse res) {
+  final headers = _toProxieHeaders(res.headers);
+  for (final key in headers.keys.toList()) {
+    if (key.toLowerCase() == 'set-cookie') {
+      headers[key] = res.headersSplitValues[key] ?? headers[key]!;
+    }
+  }
+  return headers;
+}
+
+Uri _finalUrl(http.BaseResponse res, http.BaseRequest request) =>
+    res is http.BaseResponseWithUrl ? res.url : request.url;
+
+/// A [http.StreamedResponse] that reports the final [url], like the ones
+/// `package:http` clients return (its own `StreamedResponseV2` is private).
+class _ProxieStreamedResponse extends http.StreamedResponse
+    implements http.BaseResponseWithUrl {
+  _ProxieStreamedResponse(
+    super.stream,
+    super.statusCode, {
+    required this.url,
+    super.contentLength,
+    super.request,
+    super.headers,
+    super.isRedirect,
+    super.persistentConnection,
+    super.reasonPhrase,
+  });
+
+  @override
+  final Uri url;
+}
 
 /// Joins multi-valued headers; content-length is left to the body.
 Map<String, String> _toHttpHeaders(Map<String, List<String>> headers) => {

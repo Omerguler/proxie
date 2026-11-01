@@ -9,6 +9,8 @@ import 'dart:typed_data';
 /// - `/echo` → JSON `{method, headers, body}` (body is the UTF-8 request body)
 /// - `/big?mb=N` → N MB of `a` in 64 KB chunks, `text/plain`
 /// - `/status/<code>` → that status with a JSON body
+/// - `/redirect` → 302 to the absolute `/json` URL
+/// - `/cookies` → two `Set-Cookie` headers (one with an `Expires` date)
 class TestServer {
   TestServer._(this._server) {
     _server.listen(_handle);
@@ -57,6 +59,15 @@ class TestServer {
           res.add(chunk);
           await res.flush();
         }
+      } else if (path == '/redirect') {
+        res.statusCode = HttpStatus.found;
+        res.headers.set(HttpHeaders.locationHeader, url('/json').toString());
+      } else if (path == '/cookies') {
+        res.headers
+          ..add('set-cookie', 'a=1; Expires=Sun, 06 Nov 1994 08:49:37 GMT')
+          ..add('set-cookie', 'b=2');
+        res.headers.contentType = ContentType.text;
+        res.write('ok');
       } else if (path.startsWith('/status/')) {
         final code = int.parse(path.substring('/status/'.length));
         res.statusCode = code;

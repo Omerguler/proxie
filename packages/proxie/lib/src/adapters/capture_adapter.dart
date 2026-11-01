@@ -19,5 +19,8 @@ abstract interface class ProxieCaptureAdapter {
   void detach();
 
   /// Sends [request] again and returns the full response, without recording.
+  ///
+  /// Throws a [StateError] when `request.body.truncated` is set: the full
+  /// body was not kept, so it cannot be sent again faithfully.
   Future<ProxieResponse> replay(ProxieRequest request);
 }
