@@ -92,4 +92,32 @@ void main() {
       "curl 'https://a.com/x' -H 'accept: a/b' -H 'accept: c/d'",
     );
   });
+
+  test('GET with a body emits -X GET', () {
+    final r = _req('GET', 'https://a.com/x', body: _body('q', 'text/plain'));
+    expect(toCurl(r), startsWith("curl -X GET 'https://a.com/x'"));
+  });
+
+  test('truncated request body adds a comment line', () {
+    final big = Uint8List.fromList(List.filled(100, 0x61));
+    final r = _req(
+      'POST',
+      'https://a.com/x',
+      body: ProxieBody.from(big, 'text/plain', cap: 40),
+    );
+    final out = toCurl(r);
+    expect(out.split('\n').last, '# body truncated: 40 of 100 bytes');
+    expect(out, contains('--data-raw'));
+  });
+
+  test('unusual methods are shell-quoted', () {
+    expect(
+      toCurl(_req('M-SEARCH', 'https://a.com/x')),
+      "curl -X M-SEARCH 'https://a.com/x'",
+    );
+    expect(
+      toCurl(_req("a b'c", 'https://a.com/x')),
+      r"curl -X 'a b'\''c' 'https://a.com/x'",
+    );
+  });
 }
