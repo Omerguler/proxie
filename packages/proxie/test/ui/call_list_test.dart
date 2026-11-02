@@ -716,6 +716,118 @@ void main() {
     expect(find.text('/ok'), findsOneWidget);
   });
 
+  double pixelsOf(WidgetTester tester) => tester
+      .state<ScrollableState>(find.byType(Scrollable).last)
+      .position
+      .pixels;
+
+  testWidgets('a fling keeps going through a page load and a new call', (
+    tester,
+  ) async {
+    await addItems(1000);
+    Future<(double, List<double>)> run({required bool push}) async {
+      worker.log.clear();
+      await tester.pumpWidget(const SizedBox());
+      final engine = ProxieEngine(
+        config: const ProxieConfig(),
+        sink: worker,
+        sessionId: 2,
+      );
+      addTearDown(engine.dispose);
+      await pumpList(tester, stream: engine.calls);
+      final list = find.byType(Scrollable).last;
+      await tester.drag(list, const Offset(0, -4800));
+      await tester.pumpAndSettle();
+
+      worker.hold = true;
+      await tester.fling(list, const Offset(0, -300), 3000);
+      final trace = <double>[];
+      for (var i = 0; i < 8; i++) {
+        await tester.pump(const Duration(milliseconds: 16));
+        trace.add(pixelsOf(tester));
+      }
+      // Mid-fling: the page it scrolled into arrives, and a call is pushed.
+      expect(worker.log.whereType<QueryCalls>(), isNotEmpty);
+      worker
+        ..hold = false
+        ..release();
+      if (push) {
+        await engine.onRequest('new', 'http', getRequest('/new'));
+        engine.recordResponse('new', okResponse());
+      }
+      for (var i = 0; i < 8; i++) {
+        await tester.pump(const Duration(milliseconds: 16));
+        trace.add(pixelsOf(tester));
+      }
+      await tester.pumpAndSettle();
+      return (pixelsOf(tester), trace);
+    }
+
+    final (still, _) = await run(push: false);
+    final (moved, trace) = await run(push: true);
+    for (var i = 1; i < trace.length; i++) {
+      expect(trace[i], greaterThan(trace[i - 1]), reason: 'frame $i');
+    }
+    // Same resting place, shifted by the one row inserted above it.
+    expect(moved, closeTo(still + CallRow.height, 0.5));
+  });
+
+  testWidgets('scrolled to the end, a new call keeps the last row still', (
+    tester,
+  ) async {
+    await addItems(200);
+    final engine = await pumpWithEngine(tester);
+    await tester.drag(find.byType(Scrollable).last, const Offset(0, -20000));
+    await tester.pumpAndSettle();
+    final last = find.text('/items/0');
+    expect(last, findsOneWidget);
+    final before = tester.getTopLeft(last).dy;
+
+    await engine.onRequest('new', 'http', getRequest('/new'));
+    engine.recordResponse('new', okResponse());
+    for (var i = 0; i < 6; i++) {
+      await tester.pump();
+      expect(tester.getTopLeft(last).dy, before, reason: 'frame $i');
+    }
+    await tester.pumpAndSettle();
+    expect(tester.getTopLeft(last).dy, before);
+    expect(find.text('1 new'), findsOneWidget);
+  });
+
+  testWidgets('clearing a filter while scrolled starts the new list at the '
+      'top without a pill', (tester) async {
+    for (var i = 0; i < 1000; i++) {
+      await store.upsert(
+        call(
+          'c$i',
+          session: 2,
+          method: i.isEven ? 'GET' : 'POST',
+          path: '/items/$i',
+          at: clock.subtract(Duration(seconds: 1000 - i)),
+        ),
+      );
+    }
+    await pumpList(tester);
+    final post = find.widgetWithText(FilterChip, 'POST');
+    await tester.ensureVisible(post);
+    await tester.tap(post);
+    await tester.pump();
+    await tester.pump();
+    await tester.drag(find.byType(Scrollable).last, const Offset(0, -3000));
+    await tester.pumpAndSettle();
+    expect(pixelsOf(tester), greaterThan(0));
+
+    final all = find.widgetWithText(FilterChip, 'All');
+    await tester.ensureVisible(all);
+    await tester.tap(all);
+    await tester.pump();
+    await tester.pump();
+    await tester.pump();
+    expect(pixelsOf(tester), 0);
+    expect(find.textContaining(' new'), findsNothing);
+    expect(find.text('/items/999'), findsOneWidget);
+  });
+
   testWidgets('the inspector shows the call list', (tester) async {
     addTearDown(Proxie.shutdown);
     addTearDown(tester.view.reset);

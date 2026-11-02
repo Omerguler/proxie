@@ -58,6 +58,12 @@ class _CallListState extends State<CallList> {
   final _anchor = ScrollAnchor(rowHeight: CallRow.height);
   int _seenGeneration = 0;
   int _seenCount = 0;
+  // False until the current query's first snapshot is seen: that snapshot
+  // only sets [_seenCount]; it is not a change to anchor or count as new.
+  bool _seeded = false;
+  // True from a query change until the new list's first frame: before it,
+  // the scroll position still belongs to the old list.
+  bool _freshList = false;
 
   ListController _create([CallQuery query = const CallQuery()]) =>
       ListController(worker: widget.worker, calls: widget.calls, query: query)
@@ -71,8 +77,8 @@ class _CallListState extends State<CallList> {
       _controller.dispose();
       _controller = _create(query);
       _seenGeneration = _controller.generation;
-      _seenCount = 0;
-      _anchor.update(newQuery: true, added: 0, indexOf: _controller.indexOf);
+      _seeded = false;
+      _anchor.reset();
     }
   }
 
@@ -86,17 +92,26 @@ class _CallListState extends State<CallList> {
   // Runs before the next frame, while the rows on screen still have their
   // old positions.
   void _onListChanged() {
+    if (_controller.generation != _seenGeneration) {
+      // A new query is shown in a new list (new key) that starts at the top.
+      _seenGeneration = _controller.generation;
+      _seeded = false;
+      _freshList = true;
+      _anchor.reset();
+      WidgetsBinding.instance
+        ..addPostFrameCallback((_) => _freshList = false)
+        ..ensureVisualUpdate();
+    }
+    if (!_controller.loaded) return;
     final count = _controller.count;
-    final newQuery = _controller.generation != _seenGeneration;
-    _seenGeneration = _controller.generation;
+    if (!_seeded || _freshList) {
+      _seeded = true;
+      _seenCount = count;
+      return;
+    }
     final added = count - _seenCount;
     _seenCount = count;
-    // A new query is shown in a new list (new key) that starts at the top.
-    _anchor.update(
-      newQuery: newQuery,
-      added: added,
-      indexOf: _controller.indexOf,
-    );
+    _anchor.update(added: added, indexOf: _controller.indexOf);
   }
 
   @override
@@ -128,7 +143,7 @@ class _CallListState extends State<CallList> {
             return Column(
               children: [
                 if (error != null) _ErrorBar(onRetry: _controller.refresh),
-                Expanded(child: _list()),
+                Expanded(child: _list(context)),
               ],
             );
           },
@@ -137,16 +152,27 @@ class _CallListState extends State<CallList> {
     ],
   );
 
-  Widget _list() => Stack(
-    key: _anchor.viewportKey,
+  Widget _list(BuildContext context) => Stack(
     children: [
       // A new query gets a new list, scrolled to the top, so no row of the
       // old one is rebuilt (and its page fetched) on the way.
-      ListView.builder(
+      CustomScrollView(
         key: ValueKey(_controller.generation),
         controller: _anchor.scroll,
-        itemCount: _controller.count,
-        itemBuilder: _item,
+        slivers: [
+          AnchoredSliver(
+            anchor: _anchor,
+            sliver: SliverPadding(
+              padding: EdgeInsets.only(
+                bottom: MediaQuery.paddingOf(context).bottom,
+              ),
+              sliver: SliverList.builder(
+                itemCount: _controller.count,
+                itemBuilder: _item,
+              ),
+            ),
+          ),
+        ],
       ),
       Positioned(
         top: 8,

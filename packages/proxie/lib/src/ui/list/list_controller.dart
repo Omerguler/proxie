@@ -64,6 +64,7 @@ class ListController extends ChangeNotifier {
 
   // Bumped by every query change: older results are dropped.
   int _generation = 0;
+  int _loadedGeneration = -1;
   // Bumped by every reload start: page loads started earlier are dropped.
   int _reloadEpoch = 0;
   bool _reloading = false;
@@ -93,6 +94,10 @@ class ListController extends ChangeNotifier {
 
   /// How many calls match [query].
   int get count => _count;
+
+  /// Whether a reload for the current [query] has finished; until then
+  /// [count] may still be the previous query's.
+  bool get loaded => _loadedGeneration == _generation;
 
   /// Why the last reload failed, or null when it succeeded.
   Object? get error => _error;
@@ -248,6 +253,7 @@ class ListController extends ChangeNotifier {
         };
         _loadedDuringReload.clear();
         _covered = pages.toSet();
+        _loadedGeneration = generation;
         _error = null;
         notifyListeners();
       } while (_reloadAgain && !_disposed);
