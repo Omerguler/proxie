@@ -102,8 +102,7 @@ void main() {
   });
 
   test('rows outside arrays and nested rows get no missingKeys', () {
-    final doc = _doc('{"o":{"x":1},"l":[{"a":{"p":1}},{"b":2}]}');
-    doc.expandAll();
+    final doc = _doc('{"o":{"x":1},"l":[{"a":{"p":1}},{"b":2}]}')..expandAll();
     final byPath = {
       for (final r in doc.rows(0, doc.visibleCount))
         doc.pathOf(r.nodeId).join('/'): r.missingKeys,

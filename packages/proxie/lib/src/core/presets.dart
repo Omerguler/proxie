@@ -7,16 +7,20 @@ import 'package:proxie/src/model/response.dart';
 
 /// A one-tap Map Local response template.
 class ResponsePreset {
+  /// Creates a preset shown as [label].
   const ResponsePreset({
     required this.id,
     required this.label,
     required this.build,
   });
 
+  /// Identifies the preset; built-in ids are stable.
   final String id;
+
+  /// The name shown in the preset picker.
   final String label;
 
-  /// Builds the action; [captured] is the call's real response, if any.
+  /// Builds the action; `captured` is the call's real response, if any.
   final MapLocalAction Function(ProxieResponse? captured) build;
 }
 

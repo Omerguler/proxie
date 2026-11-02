@@ -36,7 +36,7 @@ final _defaultTransformer = SyncTransformer();
 /// request is sent again (or stays pending if it is not). With
 /// `ProxieHttpOverridesAdapter` attached each call is also recorded twice,
 /// bodies are encoded with Dio's default transformer, and [replay] needs a
-/// [replayClient].
+/// `replayClient`.
 ///
 /// While no engine is attached every request, response and error passes
 /// through untouched.
@@ -59,6 +59,8 @@ final _defaultTransformer = SyncTransformer();
 ///   for example a cache interceptor added after [ProxieDio.install] that
 ///   answers from its cache. Add such interceptors before installing.
 class ProxieDioInterceptor extends Interceptor implements ProxieCaptureAdapter {
+  /// Creates the interceptor; [replay] sends with [replayClient] when given,
+  /// otherwise with the Dio given to [ProxieDio.install].
   ProxieDioInterceptor({Dio? replayClient}) : _replayClient = replayClient;
 
   final Dio? _replayClient;
@@ -70,7 +72,7 @@ class ProxieDioInterceptor extends Interceptor implements ProxieCaptureAdapter {
   @override
   String get name => 'dio';
 
-  /// True when a Dio to replay with is known: [replayClient] or the one
+  /// True when a Dio to replay with is known: `replayClient` or the one
   /// given to [ProxieDio.install].
   @override
   bool get supportsReplay => _replayClient != null || _installed != null;
@@ -123,7 +125,7 @@ class ProxieDioInterceptor extends Interceptor implements ProxieCaptureAdapter {
         ),
       );
       decision = await engine.onRequest(callId, name, captured);
-    } catch (e, st) {
+    } on Object catch (e, st) {
       // Capturing must never break the request: the call is recorded as
       // failed ('unknown') and the request is sent on unchanged.
       developer.log('Proxie capture failed', error: e, stackTrace: st);
@@ -150,7 +152,7 @@ class ProxieDioInterceptor extends Interceptor implements ProxieCaptureAdapter {
           }
           handler.next(options);
       }
-    } catch (e, st) {
+    } on Object catch (e, st) {
       // Applying the decision failed (ignored when already recorded).
       developer.log('Proxie decision failed', error: e, stackTrace: st);
       _safeOnError(
@@ -197,7 +199,7 @@ class ProxieDioInterceptor extends Interceptor implements ProxieCaptureAdapter {
       _finish(options);
       if (handler.isCompleted) return;
       return handler.reject(f.toDioException(options), true);
-    } catch (e, st) {
+    } on Object catch (e, st) {
       developer.log('Proxie response capture failed', error: e, stackTrace: st);
       _finish(options);
       if (!handler.isCompleted) handler.next(response);
@@ -242,7 +244,7 @@ class ProxieDioInterceptor extends Interceptor implements ProxieCaptureAdapter {
         _finish(options);
         if (handler.isCompleted) return;
         return handler.next(f.toDioException(options));
-      } catch (e, st) {
+      } on Object catch (e, st) {
         developer.log(
           'Proxie response capture failed',
           error: e,
@@ -280,7 +282,7 @@ class ProxieDioInterceptor extends Interceptor implements ProxieCaptureAdapter {
     handler.next(err);
   }
 
-  /// Sends [request] again with [replayClient] (or the Dio given to
+  /// Sends [request] again with `replayClient` (or the Dio given to
   /// [ProxieDio.install]) and returns the full response, without recording
   /// it. Every status is returned as a response.
   ///
@@ -588,7 +590,7 @@ class _DecodeFailure implements Exception {
 void _safeOnError(ProxieEngine engine, String callId, ProxieError error) {
   try {
     engine.onError(callId, error);
-  } catch (e, st) {
+  } on Object catch (e, st) {
     developer.log('Proxie could not record an error', error: e, stackTrace: st);
   }
 }

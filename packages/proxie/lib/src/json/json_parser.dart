@@ -13,7 +13,10 @@ import 'package:proxie/src/json/json_row.dart';
 JsonNodes parseJson(Uint8List bytes) => _Parser(bytes).parse();
 
 // Byte values.
-const _tab = 0x09, _lf = 0x0A, _cr = 0x0D, _space = 0x20;
+const _tab = 0x09;
+const _lf = 0x0A;
+const _cr = 0x0D;
+const _space = 0x20;
 const _quote = 0x22;
 const _comma = 0x2C;
 const _minus = 0x2D;

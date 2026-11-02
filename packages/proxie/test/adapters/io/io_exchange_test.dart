@@ -210,7 +210,7 @@ void main() {
     sub = res.listen((_) {
       if (!first.isCompleted) {
         first.complete();
-        sub.cancel();
+        unawaited(sub.cancel());
       }
     });
     await first.future;
@@ -231,7 +231,7 @@ void main() {
     sub = res.listen((_) {
       if (!first.isCompleted) {
         first.complete();
-        sub.cancel();
+        unawaited(sub.cancel());
       }
     });
     await first.future;

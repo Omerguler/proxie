@@ -82,7 +82,7 @@ void _onPause(
   sub = engine.breakpoints.changes.listen((pending) {
     for (final p in pending) {
       if (p.phase == phase) {
-        sub.cancel();
+        unawaited(sub.cancel());
         engine.breakpoints.resolve(p.callId, resolve(p));
         return;
       }
@@ -441,8 +441,9 @@ void main() {
     expect(inner.capturedZone.single, isFalse);
     expect(await res.stream.toBytes(), [1, 2, 3]);
 
-    c.attach(engine);
-    c.detach();
+    c
+      ..attach(engine)
+      ..detach();
     final req2 = http.Request('GET', server.url('/json'));
     final res2 = await c.send(req2);
     expect(inner.sent.last, same(req2));
@@ -500,10 +501,10 @@ void main() {
 
   test('stream error is recorded and forwarded to the app', () async {
     final inner = _FakeClient((_) async {
-      final ctrl = StreamController<List<int>>();
-      ctrl.add(utf8.encode('par'));
-      ctrl.addError(const FormatException('broken'));
-      ctrl.close();
+      final ctrl = StreamController<List<int>>()
+        ..add(utf8.encode('par'))
+        ..addError(const FormatException('broken'));
+      unawaited(ctrl.close());
       return http.StreamedResponse(ctrl.stream, 200);
     });
     final c = ProxieHttpClient(inner: inner)..attach(engine);
@@ -535,7 +536,7 @@ void main() {
     late StreamSubscription<List<int>> sub;
     sub = res.stream.listen((d) {
       got.complete(d);
-      sub.cancel();
+      unawaited(sub.cancel());
     });
     expect(await got.future, utf8.encode('first'));
     await pumpEventQueue();
@@ -554,7 +555,7 @@ void main() {
     sub = res.stream.listen((_) {
       if (!first.isCompleted) {
         first.complete();
-        sub.cancel();
+        unawaited(sub.cancel());
       }
     });
     await first.future;

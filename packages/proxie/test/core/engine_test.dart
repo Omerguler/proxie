@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -198,24 +200,27 @@ void main() {
 
   test('recordResponse records without consulting breakpoints', () async {
     await engine.onRequest('c1', 'http', _req());
-    engine.rules = RuleSet([_bp(BreakpointPhase.response)]);
-    engine.recordResponse('c1', _res(201));
+    engine
+      ..rules = RuleSet([_bp(BreakpointPhase.response)])
+      ..recordResponse('c1', _res(201));
     expect(bps.pending, isEmpty);
     expect(sink.last.response!.statusCode, 201);
     expect(sink.last.tags, isNot(contains(CallTag.breakpoint)));
     expect(sink.last.duration, isNotNull);
     final n = sink.calls.length;
     // State is gone: a second record and unknown ids are ignored.
-    engine.recordResponse('c1', _res(200));
-    engine.recordResponse('nope', _res(200));
+    engine
+      ..recordResponse('c1', _res(200))
+      ..recordResponse('nope', _res(200));
     expect(sink.calls, hasLength(n));
   });
 
   test('recordResponse after dispose is a no-op', () async {
     await engine.onRequest('c1', 'http', _req());
     final n = sink.calls.length;
-    engine.dispose();
-    engine.recordResponse('c1', _res(200));
+    engine
+      ..dispose()
+      ..recordResponse('c1', _res(200));
     expect(sink.calls, hasLength(n));
   });
 
@@ -301,10 +306,9 @@ void main() {
       final e = ProxieEngine(
         config: const ProxieConfig(breakpointTimeout: Duration(seconds: 5)),
         sink: sink,
-      );
-      e.rules = RuleSet([_bp(BreakpointPhase.request)]);
+      )..rules = RuleSet([_bp(BreakpointPhase.request)]);
       RequestDecision? d;
-      e.onRequest('c1', 'http', _req()).then((v) => d = v);
+      unawaited(e.onRequest('c1', 'http', _req()).then((v) => d = v));
       async.elapse(const Duration(seconds: 4));
       expect(d, isNull);
       async.elapse(const Duration(seconds: 1));
@@ -314,8 +318,8 @@ void main() {
   });
 
   test('dispose resolves pending and closes streams', () async {
-    final e = ProxieEngine(config: const ProxieConfig(), sink: sink);
-    e.rules = RuleSet([_bp(BreakpointPhase.request)]);
+    final e = ProxieEngine(config: const ProxieConfig(), sink: sink)
+      ..rules = RuleSet([_bp(BreakpointPhase.request)]);
     final f = e.onRequest('c1', 'http', _req());
     await Future<void>.delayed(Duration.zero);
     final done = e.calls.isEmpty;
@@ -328,18 +332,18 @@ void main() {
   test(
     'onRequest/onResponse after dispose pass through with no state',
     () async {
-      final e = ProxieEngine(config: const ProxieConfig(), sink: sink);
-      e.rules = RuleSet([
-        _bp(BreakpointPhase.both),
-        ProxieRule(
-          id: 'm',
-          name: 'm',
-          kind: RuleKind.mapLocal,
-          matcher: UrlMatcher('api.test/*'),
-          mapLocal: const MapLocalAction(failure: SimulatedFailure.timeout),
-        ),
-      ]);
-      e.dispose();
+      final e = ProxieEngine(config: const ProxieConfig(), sink: sink)
+        ..rules = RuleSet([
+          _bp(BreakpointPhase.both),
+          ProxieRule(
+            id: 'm',
+            name: 'm',
+            kind: RuleKind.mapLocal,
+            matcher: UrlMatcher('api.test/*'),
+            mapLocal: const MapLocalAction(failure: SimulatedFailure.timeout),
+          ),
+        ])
+        ..dispose();
       final req = _req();
       final d = await e.onRequest('c1', 'http', req);
       expect(d, isA<Proceed>());
@@ -353,11 +357,11 @@ void main() {
 
   test('three concurrent pauses all time out after 60 s', () {
     fakeAsync((async) {
-      final e = ProxieEngine(config: const ProxieConfig(), sink: sink);
-      e.rules = RuleSet([_bp(BreakpointPhase.request)]);
+      final e = ProxieEngine(config: const ProxieConfig(), sink: sink)
+        ..rules = RuleSet([_bp(BreakpointPhase.request)]);
       final ds = <RequestDecision>[];
       for (final id in ['a', 'b', 'c']) {
-        e.onRequest(id, 'http', _req()).then(ds.add);
+        unawaited(e.onRequest(id, 'http', _req()).then(ds.add));
       }
       async.flushMicrotasks();
       expect(e.breakpoints.pending.map((p) => p.callId), ['a', 'b', 'c']);

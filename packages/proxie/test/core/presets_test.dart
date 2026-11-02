@@ -31,13 +31,13 @@ void main() {
       'server_error': (500, 'Internal Server Error'),
       'unavailable': (503, 'Service Unavailable'),
     };
-    expected.forEach((id, e) {
+    for (final MapEntry(key: id, value: e) in expected.entries) {
       final r = _preset(id).build(null).response!;
       expect(r.statusCode, e.$1);
       expect(jsonDecode(r.body.text!), {
         'error': {'code': e.$1, 'message': e.$2},
       });
-    });
+    }
   });
 
   test('ok_captured with null captured is an empty 200', () {

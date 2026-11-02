@@ -136,8 +136,7 @@ void main() {
       await tester.pumpWidget(
         Builder(
           builder: (context) {
-            wrapped = Proxie.wrap(context, child);
-            return wrapped;
+            return wrapped = Proxie.wrap(context, child);
           },
         ),
       );

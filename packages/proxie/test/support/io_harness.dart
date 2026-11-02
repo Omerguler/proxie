@@ -76,7 +76,7 @@ class IoHarness {
     prepare?.call(req);
     final res = req.close();
     if (closeClient) client.close();
-    return res;
+    return await res;
   }
 
   /// The decoded body of an `/echo` response.
@@ -128,7 +128,7 @@ void onPause(
   sub = engine.breakpoints.changes.listen((pending) {
     for (final p in pending) {
       if (p.phase == phase) {
-        sub.cancel();
+        unawaited(sub.cancel());
         engine.breakpoints.resolve(p.callId, resolve(p));
         return;
       }

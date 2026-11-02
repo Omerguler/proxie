@@ -19,7 +19,7 @@ final ValueNotifier<ProxieRuntime?> proxieActive = ValueNotifier(null);
 void detachAdapter(ProxieCaptureAdapter adapter) {
   try {
     adapter.detach();
-  } catch (e, st) {
+  } on Object catch (e, st) {
     developer.log(
       'Proxie adapter ${adapter.name} failed to detach',
       name: 'proxie',
@@ -31,6 +31,8 @@ void detachAdapter(ProxieCaptureAdapter adapter) {
 
 /// Everything an active Proxie owns.
 class ProxieRuntime {
+  /// Bundles the parts of an active Proxie and starts keeping [navigation]
+  /// in step with [controller].
   ProxieRuntime({
     required this.worker,
     required this.engine,
@@ -42,15 +44,29 @@ class ProxieRuntime {
     controller.addListener(_sync);
   }
 
+  /// Runs storage and heavy JSON work off the UI isolate.
   final ProxieWorker worker;
+
+  /// Decides what happens to each captured call.
   final ProxieEngine engine;
+
+  /// The adapters attached to [engine], detached on dispose.
   final List<ProxieCaptureAdapter> adapters;
+
+  /// Whether the inspector is open; [navigation] follows it.
   final ProxieInspectorController controller;
+
+  /// Shows and hides the inspector page.
   final ProxieNavigationAdapter navigation;
+
+  /// Counts this session's calls for the bubble's badge.
   final SessionCallCounter callCount;
+
+  /// The settings Proxie was started with.
   final ProxieConfig config;
   bool _disposed = false;
 
+  /// Whether the inspector is drawn in Proxie's own overlay layer.
   bool get isOverlay => navigation is OverlayNavigationAdapter;
 
   // The controller is the source of truth; the adapter follows it. A page
@@ -68,14 +84,14 @@ class ProxieRuntime {
           ),
           onDismissed: _onDismissed,
         );
-      } catch (e, st) {
+      } on Object catch (e, st) {
         _report(e, st, 'while showing the Proxie inspector');
         controller.close();
       }
     } else if (navigation.isShowing) {
       try {
         navigation.hide();
-      } catch (e, st) {
+      } on Object catch (e, st) {
         _report(e, st, 'while hiding the Proxie inspector');
       }
     }
@@ -102,7 +118,7 @@ class ProxieRuntime {
     controller.removeListener(_sync);
     try {
       navigation.hide();
-    } catch (e, st) {
+    } on Object catch (e, st) {
       developer.log(
         'Proxie failed to hide the inspector',
         name: 'proxie',

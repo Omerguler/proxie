@@ -11,9 +11,7 @@
 library;
 
 import 'package:proxie/adapter.dart'
-    show ProxieCaptureAdapter, ProxieEngine, RequestDecision;
-import 'package:proxie/proxie.dart'
-    show ProxieCaptureAdapter, ProxieEngine, RequestDecision;
+    show ProxieCaptureAdapter, ProxieEngine, RequestDecision, runMarkedCaptured;
 
 export 'src/adapters/capture_adapter.dart' show ProxieCaptureAdapter;
 export 'src/adapters/capture_marker.dart'

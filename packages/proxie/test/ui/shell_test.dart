@@ -151,15 +151,18 @@ void main() {
     test('notifies only on change', () {
       final c = ProxieInspectorController();
       var n = 0;
-      c.addListener(() => n++);
-      c.open();
-      c.open();
+      c
+        ..addListener(() => n++)
+        ..open()
+        ..open();
       expect(c.isOpen, isTrue);
-      c.select('a');
-      c.select('a');
+      c
+        ..select('a')
+        ..select('a');
       expect(c.selectedCallId, 'a');
-      c.close();
-      c.close();
+      c
+        ..close()
+        ..close();
       expect(c.isOpen, isFalse);
       expect(n, 3);
     });
@@ -260,8 +263,7 @@ void main() {
       await tester.pumpWidget(hostApp());
       Proxie.open();
       await tester.pumpAndSettle();
-      final controller = controllerIn(tester);
-      controller.select('a');
+      final controller = controllerIn(tester)..select('a');
       await tester.pumpAndSettle();
       expect(find.text('No requests yet'), findsNothing);
 

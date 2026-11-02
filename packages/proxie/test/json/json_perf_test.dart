@@ -109,9 +109,11 @@ void main() {
   test('tryParse a 10 MB array of 40k objects < 1500 ms', () {
     late JsonDocument doc;
     final t = _time(() => doc = JsonDocument.tryParse(bytes));
+    // Reports the timings on the console on purpose.
     // ignore: avoid_print
     print(
-      'tryParse ${bytes.length} bytes: ${_ms(t)}; ${_memory(doc, bytes.length)}',
+      'tryParse ${bytes.length} bytes: ${_ms(t)}; '
+      '${_memory(doc, bytes.length)}',
     );
     expect(doc.parseError, isNull);
     expect(doc.visibleCount, _items);
@@ -132,6 +134,7 @@ void main() {
     final deep = _time(() => rows = doc.rows(mid, 60));
     expect(rows, hasLength(60));
     final deepWarm = _time(() => doc.rows(mid + 1000, 60));
+    // Reports the timings on the console on purpose.
     // ignore: avoid_print
     print(
       'rows(0,60) cold: ${_ms(first)}; rows(20000,60): ${_ms(jump)}; '
@@ -150,6 +153,7 @@ void main() {
     late ArraySchema? schema;
     final cold = _time(() => schema = doc.schemaOf(0));
     final cached = _time(() => doc.schemaOf(0));
+    // Reports the timings on the console on purpose.
     // ignore: avoid_print
     print('schemaOf(40k objects): ${_ms(cold)}; cached: ${_ms(cached)}');
     expect(
@@ -181,6 +185,7 @@ void main() {
       'address',
       'zip',
     ]);
+    // Reports the timings on the console on purpose.
     // ignore: avoid_print
     print(
       'search no match: ${_ms(none)}; last item: ${_ms(last)}; '
@@ -203,6 +208,7 @@ void main() {
     late Uint8List out;
     final encode = _time(() => out = doc.encode());
     expect((jsonDecode(utf8.decode(out)) as List).length, _items + 2);
+    // Reports the timings on the console on purpose.
     // ignore: avoid_print
     print(
       'DuplicateItem(first): ${_ms(dup)}; AddItem: ${_ms(add)}; '
@@ -223,6 +229,7 @@ void main() {
     late List<JsonRow> rows;
     final page = _time(() => rows = doc.rows(doc.visibleCount ~/ 2, 60));
     expect(rows, hasLength(60));
+    // Reports the timings on the console on purpose.
     // ignore: avoid_print
     print(
       'dense tryParse ${dense.length} bytes: ${_ms(t)}; '
@@ -244,6 +251,7 @@ void main() {
     final page = _time(() => rows = doc.rows(mid, 60));
     expect(rows, hasLength(60));
     final encode = _time(doc.encode);
+    // Reports the timings on the console on purpose.
     // ignore: avoid_print
     print(
       'graphql tryParse ${src.length} bytes: ${_ms(t)}; '
@@ -266,6 +274,7 @@ void main() {
     final page = _time(() => rows = doc.rows(0, 2));
     late Uint8List out;
     final encode = _time(() => out = doc.encode());
+    // Reports the timings on the console on purpose.
     // ignore: avoid_print
     print(
       'base64 tryParse ${src.length} bytes: ${_ms(t)}; rows: ${_ms(page)}; '
@@ -298,6 +307,7 @@ void main() {
     final innerPage = _time(() => doc.rows(30000, 60));
     final collapse = _time(() => doc.toggle(items.nodeId));
     expect(doc.visibleCount, 1);
+    // Reports the timings on the console on purpose.
     // ignore: avoid_print
     print(
       'toggle expand: ${_ms(expand)}; rows after: ${_ms(page)}; '

@@ -33,13 +33,16 @@ final proxieNavigatorObserver = ProxieNavigatorObserver();
 /// too: an app `PopScope` on that route gets
 /// `onPopInvokedWithResult(false, null)` although Proxie handled the press.
 class HostPopGuard {
+  /// Creates a guard that follows the top route reported by [observer].
   HostPopGuard(this.observer);
 
+  /// Reports the app's top route, which the guard blocks while engaged.
   final ProxieNavigatorObserver observer;
 
   _BlockingPopEntry? _entry;
   ModalRoute<dynamic>? _route;
 
+  /// Whether [engage] was called without a matching [release].
   bool get isEngaged => _entry != null;
 
   /// Whether a blocking entry sits on an app route right now. While true,
@@ -47,6 +50,8 @@ class HostPopGuard {
   /// app's own state.
   bool get isBlocking => _route != null;
 
+  /// Starts blocking pops of the app's top route, calling [onBack] for
+  /// each attempt; does nothing when already engaged.
   void engage(VoidCallback onBack) {
     if (_entry != null) return;
     _entry = _BlockingPopEntry(onBack);
@@ -54,6 +59,7 @@ class HostPopGuard {
     _follow();
   }
 
+  /// Stops blocking and removes the block from the app's route.
   void release() {
     final entry = _entry;
     if (entry == null) return;

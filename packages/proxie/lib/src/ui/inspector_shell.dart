@@ -12,17 +12,20 @@ class ProxieInspectorController extends ChangeNotifier {
   String? _selectedCallId;
   bool _disposed = false;
 
+  /// Whether the inspector is open.
   bool get isOpen => _isOpen;
 
   /// The call shown in the detail pane, or null for none.
   String? get selectedCallId => _selectedCallId;
 
+  /// Opens the inspector; does nothing when it is already open.
   void open() {
     if (_disposed || _isOpen) return;
     _isOpen = true;
     notifyListeners();
   }
 
+  /// Closes the inspector; does nothing when it is already closed.
   void close() {
     if (_disposed || !_isOpen) return;
     _isOpen = false;
@@ -62,6 +65,7 @@ class _InspectorScope extends InheritedNotifier<ProxieInspectorController> {
 /// (see [ProxieThemed]),
 /// with its own [ScaffoldMessenger] so its messages never reach the host.
 class ProxieInspector extends StatelessWidget {
+  /// Creates the inspector page driven by [controller].
   const ProxieInspector({
     required this.controller,
     super.key,
@@ -71,10 +75,19 @@ class ProxieInspector extends StatelessWidget {
     this.detailBuilder,
   });
 
+  /// Holds whether the inspector is open and which call it shows.
   final ProxieInspectorController controller;
+
+  /// Minimum width for the side-by-side layout.
   final double splitWidth;
+
+  /// Which of Proxie's themes the page uses.
   final ProxieThemeMode themeMode;
+
+  /// Builds the call list; defaults to a placeholder.
   final WidgetBuilder? listBuilder;
+
+  /// Builds the detail of a call; defaults to a placeholder.
   final Widget Function(BuildContext context, String callId)? detailBuilder;
 
   @override
@@ -99,6 +112,7 @@ class ProxieInspector extends StatelessWidget {
 /// layout follows rotation and window resizes live; the selection lives in
 /// [controller] and survives layout changes.
 class InspectorShell extends StatelessWidget {
+  /// Creates the layout driven by [controller].
   const InspectorShell({
     required this.controller,
     super.key,
@@ -107,6 +121,7 @@ class InspectorShell extends StatelessWidget {
     this.detailBuilder,
   });
 
+  /// Holds the selection, so it survives layout changes.
   final ProxieInspectorController controller;
 
   /// Minimum width for the side-by-side layout.

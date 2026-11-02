@@ -4,9 +4,14 @@ import 'package:proxie/src/navigation/navigation_adapter.dart';
 
 /// Hands the inspector page to app-provided [push] and [pop] callbacks.
 class CustomNavigationAdapter implements ProxieNavigationAdapter {
+  /// Creates an adapter that shows the page with [push] and removes it
+  /// with [pop].
   CustomNavigationAdapter({required this.push, required this.pop});
 
+  /// Shows the inspector page in the app's own way.
   final void Function(Widget page) push;
+
+  /// Removes the page [push] showed.
   final void Function() pop;
 
   // Identifies the page currently shown; a late dispose of an earlier page

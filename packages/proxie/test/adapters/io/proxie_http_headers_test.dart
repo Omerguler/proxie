@@ -16,8 +16,9 @@ void main() {
   }
 
   test('names are case-insensitive and stored lowercase', () {
-    h.add('X-Thing', 'a');
-    h.add('x-thing', 'b');
+    h
+      ..add('X-Thing', 'a')
+      ..add('x-thing', 'b');
     expect(h['X-THING'], ['a', 'b']);
     expect(each(h), {
       'x-thing': ['a', 'b'],
@@ -164,8 +165,8 @@ void main() {
       ..add('a', '1')
       ..contentLength = 3
       ..persistentConnection = false
-      ..host = 'x';
-    h.clear();
+      ..host = 'x'
+      ..clear();
     expect(each(h), isEmpty);
     expect(h.contentLength, -1);
     expect(h.persistentConnection, isTrue);

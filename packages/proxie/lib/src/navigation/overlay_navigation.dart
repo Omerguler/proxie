@@ -22,6 +22,8 @@ import 'package:proxie/src/navigation/navigator_observer.dart';
 class OverlayNavigationAdapter extends ChangeNotifier
     with WidgetsBindingObserver
     implements ProxieNavigationAdapter {
+  /// Creates the adapter; [observer] defaults to the observer behind
+  /// `Proxie.navigatorObserver`.
   OverlayNavigationAdapter({ProxieNavigatorObserver? observer})
     : _guard = HostPopGuard(observer ?? proxieNavigatorObserver);
 
@@ -71,6 +73,7 @@ class OverlayNavigationAdapter extends ChangeNotifier
     WidgetsBinding.instance.addObserver(this);
   }
 
+  /// Stops handling the back button; the reverse of [attachBackButton].
   void detachBackButton() {
     if (!_observing) return;
     _observing = false;

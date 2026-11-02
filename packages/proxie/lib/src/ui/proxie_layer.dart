@@ -13,8 +13,10 @@ import 'package:proxie/src/ui/theme.dart';
 /// sends presses to the framework only when told so), hides the app from
 /// semantics, and afterwards restores the app's own back state.
 class ProxieHost extends StatefulWidget {
+  /// Creates the host around the app's [child].
   const ProxieHost({required this.child, super.key});
 
+  /// The app, drawn below Proxie's layer.
   final Widget child;
 
   @override
@@ -106,8 +108,10 @@ class _ProxieHostState extends State<ProxieHost> {
 
 /// The bubble, and the inspector in overlay mode, in Proxie's own theme.
 class ProxieLayer extends StatelessWidget {
+  /// Creates the layer for [runtime].
   const ProxieLayer({required this.runtime, super.key});
 
+  /// The active Proxie whose bubble and inspector are drawn.
   final ProxieRuntime runtime;
 
   @override

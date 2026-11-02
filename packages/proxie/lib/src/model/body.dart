@@ -7,10 +7,26 @@ import 'package:proxie/src/core/body_classifier.dart';
 const int defaultBodyCap = 5 * 1024 * 1024;
 
 /// How a captured body should be presented.
-enum BodyKind { empty, json, text, binary, image }
+enum BodyKind {
+  /// No content.
+  empty,
+
+  /// Valid JSON, shown as a tree.
+  json,
+
+  /// Readable text, shown as is.
+  text,
+
+  /// Anything else, shown as bytes.
+  binary,
+
+  /// An image the inspector can preview.
+  image,
+}
 
 /// A captured HTTP body.
 class ProxieBody {
+  /// Creates a body; [originalLength] defaults to the length of [bytes].
   const ProxieBody({
     required this.bytes,
     required this.kind,
@@ -72,6 +88,7 @@ class ProxieBody {
   factory ProxieBody.empty() =>
       ProxieBody(bytes: Uint8List(0), kind: BodyKind.empty);
 
+  /// Decodes a body written by [toMap].
   factory ProxieBody.fromMap(Map<dynamic, dynamic> map) {
     final raw = map['bytes'];
     return ProxieBody(
@@ -85,9 +102,16 @@ class ProxieBody {
     );
   }
 
+  /// The captured content; only its start when [truncated] is set.
   final Uint8List bytes;
+
+  /// The `content-type` header value, if any.
   final String? contentType;
+
+  /// How the inspector presents the body.
   final BodyKind kind;
+
+  /// Whether [bytes] holds only the start of a longer body.
   final bool truncated;
 
   /// Length on the wire before any capping. Masking and other rewrites keep
@@ -105,6 +129,8 @@ class ProxieBody {
     }
   }
 
+  /// Encodes this body as plain data for storage and isolate messages; the
+  /// bytes are copied.
   Map<String, Object?> toMap() => {
     'bytes': Uint8List.fromList(bytes),
     'contentType': contentType,

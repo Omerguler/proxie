@@ -69,11 +69,11 @@ class ProxieHttpHeaders implements HttpHeaders {
 
   @override
   String? value(String name) {
-    name = validateHeaderName(name);
-    final values = _headers[name];
+    final key = validateHeaderName(name);
+    final values = _headers[key];
     if (values == null) return null;
     if (values.length > 1) {
-      throw HttpException('More than one value for header $name');
+      throw HttpException('More than one value for header $key');
     }
     return values.single;
   }
@@ -105,17 +105,17 @@ class ProxieHttpHeaders implements HttpHeaders {
   @override
   void remove(String name, Object value) {
     _checkMutable();
-    name = validateHeaderName(name);
-    value = validateHeaderValue(value);
-    final values = _headers[name];
+    final key = validateHeaderName(name);
+    final validValue = validateHeaderValue(value);
+    final values = _headers[key];
     if (values != null) {
-      values.remove(_valueToString(value));
+      values.remove(_valueToString(validValue));
       if (values.isEmpty) {
-        _headers.remove(name);
-        _originalNames.remove(name);
+        _headers.remove(key);
+        _originalNames.remove(key);
       }
     }
-    if (name == HttpHeaders.transferEncodingHeader && value == 'chunked') {
+    if (key == HttpHeaders.transferEncodingHeader && validValue == 'chunked') {
       _chunked = false;
     }
   }
@@ -123,9 +123,9 @@ class ProxieHttpHeaders implements HttpHeaders {
   @override
   void removeAll(String name) {
     _checkMutable();
-    name = validateHeaderName(name);
-    _headers.remove(name);
-    _originalNames.remove(name);
+    final key = validateHeaderName(name);
+    _headers.remove(key);
+    _originalNames.remove(key);
   }
 
   @override

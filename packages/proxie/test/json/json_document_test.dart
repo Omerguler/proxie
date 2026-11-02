@@ -10,11 +10,14 @@ Uint8List _bytes(String s) => Uint8List.fromList(utf8.encode(s));
 JsonDocument _doc(String s) => JsonDocument.tryParse(_bytes(s));
 
 /// Labels rows as `depth key/index kind preview`, for compact assertions.
-List<String> _labels(JsonDocument doc) => [
-  for (final r in doc.rows(0, doc.visibleCount))
-    '${r.depth} ${r.key ?? (r.index == null ? '-' : '[${r.index}]')} '
-        '${r.kind.name} ${r.preview}',
-];
+List<String> _labels(JsonDocument doc) => doc
+    .rows(0, doc.visibleCount)
+    .map(
+      (r) =>
+          '${r.depth} ${r.key ?? (r.index == null ? '-' : '[${r.index}]')} '
+          '${r.kind.name} ${r.preview}',
+    )
+    .toList();
 
 /// Reference implementation of the visible rows: a preorder walk of the
 /// decoded value, descending only into expanded containers.
@@ -521,8 +524,7 @@ void main() {
     const input = '{"a":{"b":{"c":[1]}},"d":[{"e":2}]}';
 
     test('expandAll opens everything', () {
-      final doc = _doc(input);
-      doc.expandAll();
+      final doc = _doc(input)..expandAll();
       expect(_labels(doc), [
         '0 a object {1 key}',
         '1 b object {1 key}',
@@ -536,8 +538,7 @@ void main() {
     });
 
     test('maxDepth limits which rows are opened', () {
-      final doc = _doc(input);
-      doc.expandAll(maxDepth: 1);
+      final doc = _doc(input)..expandAll(maxDepth: 1);
       expect(_labels(doc), [
         '0 a object {1 key}',
         '1 b object {1 key}',
@@ -550,9 +551,9 @@ void main() {
     });
 
     test('collapseAll keeps the root open', () {
-      final doc = _doc(input);
-      doc.expandAll();
-      doc.collapseAll();
+      final doc = _doc(input)
+        ..expandAll()
+        ..collapseAll();
       expect(_labels(doc), ['0 a object {1 key}', '0 d array [1 item]']);
       // Toggling still works after a bulk change.
       doc.toggle(doc.rows(1, 1).single.nodeId);
@@ -683,8 +684,7 @@ void main() {
     });
 
     test('expansion state does not affect the output', () {
-      final doc = _doc(plain);
-      doc.expandAll();
+      final doc = _doc(plain)..expandAll();
       expect(utf8.decode(doc.encode()), minify(plain));
     });
   });

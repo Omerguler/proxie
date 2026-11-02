@@ -25,6 +25,7 @@ class _Entry {
 /// Like a database it stores serialized copies, so later mutation of objects
 /// passed in or handed out never changes what is stored.
 class MemoryStore implements ProxieStore {
+  /// Creates an empty store; [now] stands in for the clock in tests.
   MemoryStore({DateTime Function()? now}) : _now = now ?? DateTime.now;
 
   final DateTime Function() _now;
@@ -138,6 +139,9 @@ class MemoryStore implements ProxieStore {
         out.add(ProxieRule.fromMap(ProxieRule.fromMap(m).toMap()));
       } on Exception {
         // Skip rules that no longer decode (e.g. written by a newer version).
+        // Stored rows are decoded with casts, so a wrongly typed field shows
+        // up as a TypeError; skip that row like any other undecodable one.
+        // ignore: avoid_catching_errors
       } on TypeError {
         // A wrongly typed field in a stored row.
       }
@@ -165,6 +169,9 @@ class MemoryStore implements ProxieStore {
         );
       } on Exception {
         // Skip presets that no longer decode.
+        // Stored rows are decoded with casts, so a wrongly typed field shows
+        // up as a TypeError; skip that row like any other undecodable one.
+        // ignore: avoid_catching_errors
       } on TypeError {
         // A wrongly typed field in a stored row.
       }

@@ -26,15 +26,24 @@ const int editedFlag = 0x40;
 /// means "none". Children are linked through [firstChild] / [nextSibling]
 /// and every node's id is larger than its parent's.
 class JsonNodes {
+  /// Creates an empty node table with room for [capacity] nodes.
   JsonNodes([int capacity = 16]) {
     _allocate(capacity < 1 ? 1 : capacity);
   }
 
+  /// How many node ids are in use, deleted nodes included.
   int length = 0;
 
+  /// The parent id of each node; -1 for the root.
   late Int32List parent;
+
+  /// The first child of each container node; -1 when it has none.
   late Int32List firstChild;
+
+  /// The next child of the same parent; -1 for the last one.
   late Int32List nextSibling;
+
+  /// The number of members or items of each container node.
   late Int32List childCount;
 
   /// Rows the subtree shows below the node while it is expanded, kept
@@ -48,23 +57,31 @@ class JsonNodes {
   /// Byte offset of a scalar's source text (a string's opening quote).
   late Int32List valueStart;
 
+  /// Per-node bits: the kind (see [kindMask]) and the flag constants above.
   late Uint8List flags;
 
   /// Distinct member names, interned while parsing.
   final List<String> keys = [];
 
+  /// How many nodes fit before the arrays must grow.
   int get capacity => parent.length;
 
+  /// The JSON kind of node [id].
   JsonKind kind(int id) => JsonKind.values[flags[id] & kindMask];
 
+  /// Whether node [id] is an object or an array.
   bool isContainer(int id) => (flags[id] & kindMask) <= JsonKind.array.index;
 
+  /// Whether container [id] is expanded.
   bool expanded(int id) => flags[id] & expandedFlag != 0;
 
+  /// Whether node [id] was removed by an edit.
   bool deleted(int id) => flags[id] & deletedFlag != 0;
 
-  void setExpanded(int id, bool value) =>
-      flags[id] = value ? flags[id] | expandedFlag : flags[id] & ~expandedFlag;
+  /// Marks container [id] as expanded or collapsed.
+  void setExpanded(int id, {required bool expanded}) => flags[id] = expanded
+      ? flags[id] | expandedFlag
+      : flags[id] & ~expandedFlag;
 
   /// Appends an unlinked node and returns its id.
   int add(int parentId, int flagBits, int keyOrIndexValue, int start) {

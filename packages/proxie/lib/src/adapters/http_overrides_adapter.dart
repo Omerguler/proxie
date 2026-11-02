@@ -87,7 +87,7 @@ class ProxieHttpOverridesAdapter implements ProxieCaptureAdapter {
       throw StateError('Cannot replay: request body was truncated');
     }
     final cap = _engine?.config.teeCap ?? defaultBodyCap;
-    return runMarkedCaptured(() async {
+    return await runMarkedCaptured(() async {
       final client = _overrides?.createInner(null) ?? HttpClient();
       try {
         final out = await client.openUrl(request.method, request.url);

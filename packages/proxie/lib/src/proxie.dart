@@ -136,6 +136,9 @@ abstract final class Proxie {
         sink: worker,
         sessionId: worker.sessionId,
       );
+      // Not a cascade: engine must be assigned before the await so the catch
+      // below disposes it when loading the rules fails.
+      // ignore: cascade_invocations
       engine.rules = RuleSet(await worker.run(const LoadRules()));
       for (final adapter in adapters) {
         adapter.attach(engine);
@@ -149,14 +152,14 @@ abstract final class Proxie {
         navigation: nav,
         config: config,
       );
-    } catch (_) {
+    } on Object catch (_) {
       if (nav is OverlayNavigationAdapter) nav.dispose();
       controller.dispose();
       attached.forEach(detachAdapter);
       engine?.dispose();
       try {
         await worker?.dispose();
-      } catch (e, st) {
+      } on Object catch (e, st) {
         developer.log(
           'Proxie worker dispose failed',
           name: 'proxie',
@@ -269,7 +272,7 @@ abstract final class Proxie {
     }
     try {
       await runtime.dispose();
-    } catch (e, st) {
+    } on Object catch (e, st) {
       developer.log(
         'Proxie shutdown failed',
         name: 'proxie',

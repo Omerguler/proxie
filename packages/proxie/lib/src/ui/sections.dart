@@ -6,6 +6,7 @@ import 'package:proxie/src/storage/call_query.dart';
 
 /// An extra tab on the call detail screen.
 class ProxieDetailTab {
+  /// Creates a tab; [appliesTo] decides per call whether it shows.
   const ProxieDetailTab({
     required this.id,
     required this.label,
@@ -28,6 +29,7 @@ class ProxieDetailTab {
 
 /// An extra tag chip on call list rows.
 class ProxieListBadge {
+  /// Creates a badge whose text comes from [label].
   const ProxieListBadge({required this.id, required this.label, this.color});
 
   /// Unique; registering another badge with the same id replaces this one.

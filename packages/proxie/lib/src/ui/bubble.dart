@@ -12,6 +12,7 @@ import 'package:proxie/src/ui/theme.dart';
 /// Only calls still in flight are remembered (to recognize their later
 /// snapshots), so memory stays bounded by the number of pending calls.
 class SessionCallCounter extends ValueNotifier<int> {
+  /// Starts counting the calls on [calls] from zero.
   SessionCallCounter(Stream<ProxieCall> calls) : super(0) {
     _sub = calls.listen(_onCall);
   }
@@ -31,7 +32,7 @@ class SessionCallCounter extends ValueNotifier<int> {
 
   @override
   void dispose() {
-    _sub.cancel();
+    unawaited(_sub.cancel());
     super.dispose();
   }
 }
@@ -44,6 +45,7 @@ class SessionCallCounter extends ValueNotifier<int> {
 /// e.g. inside a `Stack` with `fit: StackFit.expand`); only the button itself
 /// takes pointer events.
 class ProxieBubble extends StatefulWidget {
+  /// Creates the button; tapping it calls [onTap].
   const ProxieBubble({
     required this.callCount,
     required this.breakpoints,
@@ -51,8 +53,13 @@ class ProxieBubble extends StatefulWidget {
     super.key,
   });
 
+  /// The number shown on the badge.
   final ValueListenable<int> callCount;
+
+  /// Its paused calls make the button pulse.
   final BreakpointController breakpoints;
+
+  /// Called when the button is tapped, usually to open the inspector.
   final VoidCallback onTap;
 
   /// Diameter in logical pixels.
@@ -87,13 +94,13 @@ class _ProxieBubbleState extends State<ProxieBubble>
   double _yFraction = 0.7;
   // While dragging or snapping, the free top-left offset.
   Offset? _free;
-  Animation<Offset>? _snapAnimation;
+  late Animation<Offset> _snapAnimation;
   Rect _bounds = Rect.zero;
 
   @override
   void initState() {
     super.initState();
-    _snap.addListener(() => setState(() => _free = _snapAnimation!.value));
+    _snap.addListener(() => setState(() => _free = _snapAnimation.value));
     _snap.addStatusListener((status) {
       if (status == AnimationStatus.completed) setState(() => _free = null);
     });
@@ -104,7 +111,7 @@ class _ProxieBubbleState extends State<ProxieBubble>
   void didUpdateWidget(ProxieBubble oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (!identical(oldWidget.breakpoints, widget.breakpoints)) {
-      _breakpointSub?.cancel();
+      unawaited(_breakpointSub?.cancel());
       _listenBreakpoints();
     }
   }
@@ -118,14 +125,15 @@ class _ProxieBubbleState extends State<ProxieBubble>
     if (pending.isNotEmpty) {
       if (!_pulse.isAnimating) _pulse.repeat(reverse: true);
     } else {
-      _pulse.stop();
-      _pulse.value = 0;
+      _pulse
+        ..stop()
+        ..value = 0;
     }
   }
 
   @override
   void dispose() {
-    _breakpointSub?.cancel();
+    unawaited(_breakpointSub?.cancel());
     _pulse.dispose();
     _snap.dispose();
     super.dispose();

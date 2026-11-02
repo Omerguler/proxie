@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -233,7 +234,7 @@ void main() {
     test('trim and clear delete spill files', () async {
       final big = ProxieBody.from(_pattern(_threshold + 1), null);
       final now = DateTime.utc(2026, 6);
-      store.close();
+      unawaited(store.close());
       store = _open(dir, now: () => now);
       for (var i = 0; i < 3; i++) {
         await store.upsert(
@@ -476,9 +477,9 @@ void main() {
 
     test('a database from a newer version is refused', () async {
       final dir = _tempDir();
-      final db = sqlite3.open(_dbPath(dir));
-      db.userVersion = 2;
-      db.close();
+      sqlite3.open(_dbPath(dir))
+        ..userVersion = 2
+        ..close();
       expect(
         () => _open(dir),
         throwsA(
@@ -704,11 +705,11 @@ void main() {
       }
       await store.upsert(_call('g', method: 'GET'));
       await store.upsert(_call('h', method: 'GET'));
-      final db = raw();
-      db.execute("UPDATE calls SET kind = 'future' WHERE id = 'b'");
-      db.execute("UPDATE calls SET meta = x'7b' WHERE id = 'c'");
-      db.execute("UPDATE bodies SET kind = 'future' WHERE call_id = 'd'");
-      db.execute("UPDATE calls SET kind = 'future' WHERE id = 'h'");
+      raw()
+        ..execute("UPDATE calls SET kind = 'future' WHERE id = 'b'")
+        ..execute("UPDATE calls SET meta = x'7b' WHERE id = 'c'")
+        ..execute("UPDATE bodies SET kind = 'future' WHERE call_id = 'd'")
+        ..execute("UPDATE calls SET kind = 'future' WHERE id = 'h'");
       expect(await _ids(store, const CallQuery()), ['g', 'd', 'c', 'a']);
       expect(await _ids(store, const CallQuery(methods: {'POST'})), [
         'd',

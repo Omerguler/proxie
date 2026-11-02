@@ -6,6 +6,7 @@ import 'package:proxie/src/config.dart';
 /// Proxie's semantic colors, attached to [ProxieTheme] as a theme extension.
 @immutable
 class ProxieColors extends ThemeExtension<ProxieColors> {
+  /// Creates a color set; every color has a default.
   const ProxieColors({
     this.get = const Color(0xFF58A6FF),
     this.post = const Color(0xFF3FB950),
@@ -19,6 +20,10 @@ class ProxieColors extends ThemeExtension<ProxieColors> {
     this.accentStart = const Color(0xFF7C5CFF),
     this.accentEnd = const Color(0xFF20C3FF),
   });
+
+  /// The colors of the nearest Proxie theme, or the defaults.
+  factory ProxieColors.of(BuildContext context) =>
+      Theme.of(context).extension<ProxieColors>() ?? const ProxieColors();
 
   /// GET.
   final Color get;
@@ -47,7 +52,10 @@ class ProxieColors extends ThemeExtension<ProxieColors> {
   /// Calls without a response yet; also other methods and status codes.
   final Color pending;
 
+  /// The first color of [accentGradient].
   final Color accentStart;
+
+  /// The last color of [accentGradient].
   final Color accentEnd;
 
   /// The accent gradient, top-left to bottom-right.
@@ -77,10 +85,6 @@ class ProxieColors extends ThemeExtension<ProxieColors> {
     if (code >= 500) return serverError;
     return pending;
   }
-
-  /// The colors of the nearest Proxie theme, or the defaults.
-  static ProxieColors of(BuildContext context) =>
-      Theme.of(context).extension<ProxieColors>() ?? const ProxieColors();
 
   @override
   ProxieColors copyWith({
@@ -138,6 +142,7 @@ abstract final class ProxieTheme {
   /// The default theme.
   static ThemeData dark() => _dark;
 
+  /// The light theme.
   static ThemeData light() => _light;
 
   /// The theme for [mode]; [ProxieThemeMode.system] picks by
@@ -197,9 +202,13 @@ abstract final class ProxieTheme {
 /// a [Directionality] (the host's, else left-to-right). Lets `Proxie.wrap`
 /// work under a `WidgetsApp`, a `CupertinoApp` or no app at all.
 class ProxieThemed extends StatelessWidget {
+  /// Creates the wrapper that themes [child] by [mode].
   const ProxieThemed({required this.mode, required this.child, super.key});
 
+  /// Which of Proxie's themes applies.
   final ProxieThemeMode mode;
+
+  /// The Proxie UI to theme.
   final Widget child;
 
   @override

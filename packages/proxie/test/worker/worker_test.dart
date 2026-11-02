@@ -505,10 +505,9 @@ void main() {
         supportDir: dir.path,
       );
       final now = DateTime.now().toUtc();
-      first.upsert(
-        _call('old', startedAt: now.subtract(const Duration(days: 8))),
-      );
-      first.upsert(_call('new', startedAt: now));
+      first
+        ..upsert(_call('old', startedAt: now.subtract(const Duration(days: 8))))
+        ..upsert(_call('new', startedAt: now));
       expect(await first.run(const CountCalls()), 2);
       await first.dispose();
 

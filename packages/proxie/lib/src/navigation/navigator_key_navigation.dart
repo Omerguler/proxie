@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:developer' as developer;
 
 import 'package:flutter/material.dart';
@@ -7,8 +8,10 @@ import 'package:proxie/src/navigation/navigation_adapter.dart';
 /// Pushes the inspector as a full-screen dialog route onto the navigator of
 /// [navigatorKey].
 class NavigatorKeyNavigationAdapter implements ProxieNavigationAdapter {
+  /// Creates an adapter that pushes onto the navigator of [navigatorKey].
   NavigatorKeyNavigationAdapter(this.navigatorKey);
 
+  /// The key of the app navigator the inspector route is pushed onto.
   final GlobalKey<NavigatorState> navigatorKey;
 
   Route<void>? _route;
@@ -44,7 +47,7 @@ class NavigatorKeyNavigationAdapter implements ProxieNavigationAdapter {
       builder: (_) => DismissWatcher(onDispose: dismissed, child: inspector),
     );
     _route = route;
-    route.popped.whenComplete(dismissed);
+    unawaited(route.popped.whenComplete(dismissed));
     navigator.push(route);
   }
 

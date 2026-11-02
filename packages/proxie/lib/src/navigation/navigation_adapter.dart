@@ -15,6 +15,7 @@ abstract interface class ProxieNavigationAdapter {
   /// Hides the inspector; does nothing when it is not showing.
   void hide();
 
+  /// Whether the inspector page is currently shown.
   bool get isShowing;
 }
 
@@ -80,41 +81,54 @@ sealed class ProxieNavigation {
 
 /// See [ProxieNavigation.overlay].
 final class OverlayNavigation extends ProxieNavigation {
+  /// Creates the overlay navigation choice.
   const OverlayNavigation();
 }
 
 /// See [ProxieNavigation.navigatorKey].
 final class NavigatorKeyNavigation extends ProxieNavigation {
+  /// Creates the choice that pushes onto [key]'s navigator.
   const NavigatorKeyNavigation(this.key);
 
+  /// The key of the navigator the inspector route is pushed onto.
   final GlobalKey<NavigatorState> key;
 }
 
 /// See [ProxieNavigation.custom].
 final class CustomNavigation extends ProxieNavigation {
+  /// Creates the choice that shows the page through [push] and [pop].
   const CustomNavigation({required this.push, required this.pop});
 
+  /// Shows the inspector page in the app's own way.
   final void Function(Widget page) push;
+
+  /// Removes the page [push] showed.
   final void Function() pop;
 }
 
 /// See [ProxieNavigation.adapter].
 final class AdapterNavigation extends ProxieNavigation {
+  /// Creates the choice that delegates to [adapter].
   const AdapterNavigation(this.adapter);
 
+  /// The app-provided adapter that shows and hides the inspector.
   final ProxieNavigationAdapter adapter;
 }
 
 /// Calls [onDispose] when it leaves the tree, so an adapter learns that the
 /// host removed the page.
 class DismissWatcher extends StatefulWidget {
+  /// Wraps [child] and reports when it is disposed.
   const DismissWatcher({
     required this.onDispose,
     required this.child,
     super.key,
   });
 
+  /// Called once when the widget leaves the tree.
   final VoidCallback onDispose;
+
+  /// The page being watched.
   final Widget child;
 
   @override

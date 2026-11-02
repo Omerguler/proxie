@@ -54,7 +54,7 @@ Stream<List<int>> teeStream(
             finished = true;
             onDone(kept.toBytes(), total);
           }
-          controller.close();
+          unawaited(controller.close());
         },
       );
     },

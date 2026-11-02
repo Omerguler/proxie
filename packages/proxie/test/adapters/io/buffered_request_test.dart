@@ -157,8 +157,9 @@ void main() {
   test('abort() before close fails done, sends and records nothing', () async {
     final client = HttpClient();
     final req = await client.postUrl(h.server.url('/echo'));
-    req.write('x');
-    req.abort();
+    req
+      ..write('x')
+      ..abort();
     await expectLater(
       req.done,
       throwsA(

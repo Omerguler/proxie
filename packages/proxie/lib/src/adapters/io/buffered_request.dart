@@ -16,6 +16,8 @@ import 'package:proxie/src/core/engine.dart';
 /// basic `authorization` from the URL's user info, and `content-length: 0`
 /// for GET/HEAD or chunked transfer encoding otherwise.
 class BufferedHttpClientRequest implements HttpClientRequest {
+  /// Creates a request for [method] and [uri] that is sent on `inner` once
+  /// closed, recorded into the engine `engine` returns at that point.
   BufferedHttpClientRequest({
     required this.method,
     required this.uri,
@@ -65,6 +67,9 @@ class BufferedHttpClientRequest implements HttpClientRequest {
   bool _closed = false;
   bool _aborted = false;
   bool _bound = false;
+  // Cancelled in abort(); otherwise it ends by itself (onDone, or
+  // cancelOnError).
+  // ignore: cancel_subscriptions
   StreamSubscription<List<int>>? _boundSource;
   Completer<void>? _boundDone;
   (Object, StackTrace)? _sinkError;
@@ -270,13 +275,15 @@ class BufferedHttpClientRequest implements HttpClientRequest {
       onOpened: _settle,
     );
     _exchange = exchange;
-    exchange.run().then(
-      (res) {
-        if (!_done.isCompleted) _done.complete(res);
-      },
-      onError: (Object e, StackTrace st) {
-        if (!_done.isCompleted) _done.completeError(e, st);
-      },
+    unawaited(
+      exchange.run().then(
+        (res) {
+          if (!_done.isCompleted) _done.complete(res);
+        },
+        onError: (Object e, StackTrace st) {
+          if (!_done.isCompleted) _done.completeError(e, st);
+        },
+      ),
     );
   }
 

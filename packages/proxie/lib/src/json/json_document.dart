@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show immutable;
 import 'package:proxie/src/json/json_nodes.dart';
 import 'package:proxie/src/json/json_parser.dart';
 import 'package:proxie/src/json/json_row.dart';
@@ -44,13 +45,13 @@ class JsonDocument {
   /// Parses UTF-8 JSON [bytes], which are retained and must not be modified
   /// afterwards. Never throws: invalid input yields a document with
   /// [parseError] set and no rows.
-  static JsonDocument tryParse(Uint8List bytes) {
+  factory JsonDocument.tryParse(Uint8List bytes) {
     try {
       return JsonDocument._(null, bytes, parseJson(bytes));
     } on FormatException catch (e) {
       final at = e.offset == null ? '' : ' (at offset ${e.offset})';
       return JsonDocument._('Invalid JSON: ${e.message}$at', null, JsonNodes());
-    } catch (e, st) {
+    } on Object catch (e, st) {
       // Only a bug (or running out of memory) gets here; surface it in debug.
       assert(false, 'JsonDocument.tryParse failed: $e\n$st');
       return JsonDocument._(
@@ -273,7 +274,7 @@ class JsonDocument {
     _checkId(nodeId);
     if (nodeId == 0 || !_n.isContainer(nodeId)) return;
     final wasExpanded = _n.expanded(nodeId);
-    _n.setExpanded(nodeId, !wasExpanded);
+    _n.setExpanded(nodeId, expanded: !wasExpanded);
     final delta = wasExpanded ? -_n.inner[nodeId] : _n.inner[nodeId];
     if (delta == 0) return;
     var a = _n.parent[nodeId];
@@ -295,7 +296,7 @@ class JsonDocument {
       if (_n.deleted(id)) continue;
       final p = _n.parent[id];
       depth[id] = p == 0 ? 0 : depth[p] + 1;
-      _n.setExpanded(id, _n.isContainer(id) && depth[id] < maxDepth);
+      _n.setExpanded(id, expanded: _n.isContainer(id) && depth[id] < maxDepth);
     }
     _recount();
   }
@@ -303,7 +304,7 @@ class JsonDocument {
   /// Collapses every row; the root stays expanded.
   void collapseAll() {
     for (var id = 1; id < _n.length; id++) {
-      _n.setExpanded(id, false);
+      _n.setExpanded(id, expanded: false);
     }
     _recount();
   }
@@ -311,8 +312,7 @@ class JsonDocument {
   /// Recomputes [JsonNodes.inner] bottom-up; relies on children having
   /// larger ids.
   void _recount() {
-    final inner = _n.inner;
-    inner.fillRange(0, _n.length, 0);
+    final inner = _n.inner..fillRange(0, _n.length, 0);
     for (var id = _n.length - 1; id > 0; id--) {
       if (_n.deleted(id)) continue;
       inner[_n.parent[id]] += 1 + (_n.expanded(id) ? inner[id] : 0);
@@ -469,7 +469,12 @@ class JsonDocument {
         if (end - start <= _previewLimit) {
           return String.fromCharCodes(source, start, end);
         }
-        return '${String.fromCharCodes(source, start, start + _previewLimit - 1)}…';
+        final cut = String.fromCharCodes(
+          source,
+          start,
+          start + _previewLimit - 1,
+        );
+        return '$cut…';
       case JsonKind.boolean:
         return _boolean(id) ? 'true' : 'false';
       case JsonKind.nullValue:

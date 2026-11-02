@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:developer' as developer;
 
 import 'package:proxie/src/config.dart';
@@ -23,10 +24,10 @@ class InProcessWorker implements ProxieWorker {
       final session = await store.startSession();
       await const Trim().execute(ctx);
       return InProcessWorker._(ctx, session);
-    } catch (_) {
+    } on Object catch (_) {
       try {
         await store.close();
-      } catch (_) {
+      } on Object catch (_) {
         // The original failure is the one worth reporting.
       }
       rethrow;
@@ -50,14 +51,16 @@ class InProcessWorker implements ProxieWorker {
   @override
   void upsert(ProxieCall call) {
     if (_disposing != null) return;
-    _enqueue(UpsertCall(call)).catchError((Object e, StackTrace st) {
-      developer.log(
-        'Failed to store call ${call.id}',
-        name: 'proxie',
-        error: e,
-        stackTrace: st,
-      );
-    });
+    unawaited(
+      _enqueue(UpsertCall(call)).catchError((Object e, StackTrace st) {
+        developer.log(
+          'Failed to store call ${call.id}',
+          name: 'proxie',
+          error: e,
+          stackTrace: st,
+        );
+      }),
+    );
   }
 
   @override

@@ -16,6 +16,7 @@ Map<String, List<String>> copyHeaders(Map<String, List<String>> headers) => {
 
 /// A captured HTTP request.
 class ProxieRequest {
+  /// Creates a request; [headers] is normalized to lowercase names.
   ProxieRequest({
     required this.method,
     required this.url,
@@ -23,6 +24,7 @@ class ProxieRequest {
     required this.body,
   }) : headers = normalizeHeaders(headers);
 
+  /// Decodes a request written by [toMap].
   factory ProxieRequest.fromMap(Map<dynamic, dynamic> map) => ProxieRequest._(
     map['method'] as String,
     Uri.parse(map['url'] as String),
@@ -33,13 +35,19 @@ class ProxieRequest {
   // Takes headers that are already normalized and unmodifiable.
   ProxieRequest._(this.method, this.url, this.headers, this.body);
 
+  /// The HTTP method, such as `GET`.
   final String method;
+
+  /// The full request URL.
   final Uri url;
 
   /// Header names are lowercase; the map and its lists are unmodifiable.
   final Map<String, List<String>> headers;
+
+  /// The request body.
   final ProxieBody body;
 
+  /// A copy with the given fields replaced.
   ProxieRequest copyWith({
     String? method,
     Uri? url,
@@ -52,6 +60,7 @@ class ProxieRequest {
     body: body ?? this.body,
   );
 
+  /// Encodes this request as plain data for storage and isolate messages.
   Map<String, Object?> toMap() => {
     'method': method,
     'url': url.toString(),

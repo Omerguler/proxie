@@ -56,14 +56,15 @@ void main() {
     test('rules() skips undecodable rows and keeps the valid ones', () async {
       final store = MemoryStore();
       await store.saveRules([validRule]);
-      store.debugInsertRawRule({
-        ...validRule.toMap(),
-        'id': 'bad-kind',
-        'kind': 'futureKind',
-      });
-      store.debugInsertRawRule({...validRule.toMap(), 'name': 42});
-      store.debugInsertRawRule({'garbage': true});
-      store.debugInsertRawRule({...validRule.toMap(), 'id': 'ok2'});
+      store
+        ..debugInsertRawRule({
+          ...validRule.toMap(),
+          'id': 'bad-kind',
+          'kind': 'futureKind',
+        })
+        ..debugInsertRawRule({...validRule.toMap(), 'name': 42})
+        ..debugInsertRawRule({'garbage': true})
+        ..debugInsertRawRule({...validRule.toMap(), 'id': 'ok2'});
       expect((await store.rules()).map((r) => r.id), ['ok', 'ok2']);
     });
 
@@ -74,12 +75,13 @@ void main() {
         'Good',
         const MapLocalAction(failure: SimulatedFailure.timeout),
       );
-      store.debugInsertRawPreset('bad1', {
-        'id': 'bad1',
-        'label': 'x',
-        'action': {'failure': 'nope'},
-      });
-      store.debugInsertRawPreset('bad2', {'id': 'bad2'});
+      store
+        ..debugInsertRawPreset('bad1', {
+          'id': 'bad1',
+          'label': 'x',
+          'action': {'failure': 'nope'},
+        })
+        ..debugInsertRawPreset('bad2', {'id': 'bad2'});
       expect((await store.customPresets()).map((p) => p.id), ['good']);
     });
   });

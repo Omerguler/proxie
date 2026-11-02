@@ -19,7 +19,7 @@ const _simulatedTimeout = 'Request timed out (simulated by Proxie)';
 /// A `package:http` client that records calls into an attached engine.
 ///
 /// Wrap the app's client: `ProxieHttpClient(inner: http.Client())`. While no
-/// engine is attached every request goes straight to [inner] untouched.
+/// engine is attached every request goes straight to `inner` untouched.
 ///
 /// A streamed response is recorded when the app finishes (or cancels) reading
 /// it; one the app never listens to stays pending in the inspector.
@@ -28,6 +28,7 @@ const _simulatedTimeout = 'Request timed out (simulated by Proxie)';
 /// final URL (`BaseResponseWithUrl.url`) but not `IOStreamedResponse`'s
 /// `detachSocket`.
 class ProxieHttpClient extends http.BaseClient implements ProxieCaptureAdapter {
+  /// Wraps [inner], or a new `http.Client` when it is null.
   ProxieHttpClient({http.Client? inner}) : _inner = inner ?? http.Client();
 
   final http.Client _inner;
@@ -51,7 +52,7 @@ class ProxieHttpClient extends http.BaseClient implements ProxieCaptureAdapter {
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
     final engine = _engine;
-    if (engine == null) return _inner.send(request);
+    if (engine == null) return await _inner.send(request);
 
     // Headers are read after finalize(), which may set them (multipart).
     final bytes = await request.finalize().toBytes();
@@ -71,9 +72,16 @@ class ProxieHttpClient extends http.BaseClient implements ProxieCaptureAdapter {
       case AbortRequest(:final error):
         throw http.ClientException(error.message, request.url);
       case Mock(:final action):
-        return _mock(engine, callId, request, action);
+        return await _mock(engine, callId, request, action);
       case Proceed(request: final proceeded):
-        return _proceed(engine, callId, request, captured, proceeded, bytes);
+        return await _proceed(
+          engine,
+          callId,
+          request,
+          captured,
+          proceeded,
+          bytes,
+        );
     }
   }
 
@@ -284,7 +292,7 @@ class ProxieHttpClient extends http.BaseClient implements ProxieCaptureAdapter {
   bool _hasResponseBreakpoint(ProxieEngine engine, ProxieRequest req) {
     try {
       return engine.rules.responseBreakpointFor(req) != null;
-    } catch (_) {
+    } on Object catch (_) {
       // The engine logs and ignores failing rule lookups as well.
       return false;
     }

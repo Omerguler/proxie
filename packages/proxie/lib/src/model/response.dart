@@ -3,6 +3,7 @@ import 'package:proxie/src/model/request.dart';
 
 /// A captured HTTP response.
 class ProxieResponse {
+  /// Creates a response; [headers] is normalized to lowercase names.
   ProxieResponse({
     required this.statusCode,
     required Map<String, List<String>> headers,
@@ -10,6 +11,7 @@ class ProxieResponse {
     this.reasonPhrase,
   }) : headers = normalizeHeaders(headers);
 
+  /// Decodes a response written by [toMap].
   factory ProxieResponse.fromMap(Map<dynamic, dynamic> map) => ProxieResponse._(
     map['statusCode'] as int,
     map['reasonPhrase'] as String?,
@@ -20,13 +22,20 @@ class ProxieResponse {
   // Takes headers that are already normalized and unmodifiable.
   ProxieResponse._(this.statusCode, this.reasonPhrase, this.headers, this.body);
 
+  /// The HTTP status code.
   final int statusCode;
+
+  /// The status line's reason phrase, such as `Not Found`, if known.
   final String? reasonPhrase;
 
   /// Header names are lowercase; the map and its lists are unmodifiable.
   final Map<String, List<String>> headers;
+
+  /// The response body.
   final ProxieBody body;
 
+  /// A copy with the given fields replaced; [clearReasonPhrase] resets the
+  /// reason phrase to null.
   ProxieResponse copyWith({
     int? statusCode,
     String? reasonPhrase,
@@ -42,6 +51,7 @@ class ProxieResponse {
     body: body ?? this.body,
   );
 
+  /// Encodes this response as plain data for storage and isolate messages.
   Map<String, Object?> toMap() => {
     'statusCode': statusCode,
     'reasonPhrase': reasonPhrase,

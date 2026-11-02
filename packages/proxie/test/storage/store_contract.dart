@@ -71,7 +71,7 @@ void runStoreContract(
     late ProxieStore store;
 
     setUp(() async => store = await create(now: () => _now));
-    tearDown(() async => store.close());
+    tearDown(() => store.close());
 
     group('calls', () {
       test('upsert then get returns the same call', () async {

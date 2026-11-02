@@ -37,12 +37,15 @@ int _node(JsonDocument doc, List<Object> path) {
 }
 
 /// Every visible row, labelled with everything a view shows.
-List<String> _labels(JsonDocument doc) => [
-  for (final r in doc.rows(0, doc.visibleCount))
-    '${r.depth} ${r.key ?? (r.index == null ? '-' : '[${r.index}]')} '
-        '${r.kind.name} ${r.preview} ${r.childCount} ${r.expanded} '
-        '${r.missingKeys}',
-];
+List<String> _labels(JsonDocument doc) => doc
+    .rows(0, doc.visibleCount)
+    .map(
+      (r) =>
+          '${r.depth} ${r.key ?? (r.index == null ? '-' : '[${r.index}]')} '
+          '${r.kind.name} ${r.preview} ${r.childCount} ${r.expanded} '
+          '${r.missingKeys}',
+    )
+    .toList();
 
 /// Checks the incremental counts and caches of [doc] against a fresh parse of
 /// its own output with the same rows opened: same rows, previews, missing
@@ -465,8 +468,8 @@ void main() {
 
   group('AddKeyToAll / RemoveKeyFromAll', () {
     test('AddKeyToAll skips non-objects and objects that have the key', () {
-      final doc = _doc('[{"a":1},2,{"k":"keep"},{}]');
-      doc.apply(const AddKeyToAll(0, 'k', {'deep': []}));
+      final doc = _doc('[{"a":1},2,{"k":"keep"},{}]')
+        ..apply(const AddKeyToAll(0, 'k', {'deep': <Object?>[]}));
       expect(
         _enc(doc),
         '[{"a":1,"k":{"deep":[]}},2,{"k":"keep"},{"k":{"deep":[]}}]',
@@ -484,8 +487,7 @@ void main() {
     });
 
     test('nothing to do leaves the document clean', () {
-      final doc = _doc('[{"k":1}]');
-      doc
+      final doc = _doc('[{"k":1}]')
         ..apply(const AddKeyToAll(0, 'k', 2))
         ..apply(const RemoveKeyFromAll(0, 'zz'));
       expect(doc.dirty, isFalse);
@@ -509,16 +511,15 @@ void main() {
       final doc = _doc(
         '[{"s":"x","n":1.5,"b":true,"z":null,"o":{"a":1},"l":[1]},'
         '{"s":2,"extra":"e"},7]',
-      );
-      doc.apply(const NewItemFromSchema(0));
+      )..apply(const NewItemFromSchema(0));
       final items = jsonDecode(_enc(doc)) as List;
       expect(items.last, {
         's': '',
         'n': 0,
         'b': false,
         'z': null,
-        'o': {},
-        'l': [],
+        'o': <String, Object?>{},
+        'l': <Object?>[],
         'extra': '',
       });
       _checkConsistent(doc);
@@ -566,9 +567,10 @@ void main() {
     test('edits that would grow storage beyond maxCapacity throw', () {
       final doc = _doc('[1,2,3]'); // 4 nodes, trimmed to capacity 4
       expect(doc.storedCapacity, 4);
-      doc.maxCapacity = 30;
-      // Growth goes 4 -> 22 -> 49: up to 18 more nodes fit.
-      doc.apply(AddItem(0, List.filled(17, 0)));
+      doc
+        ..maxCapacity = 30
+        // Growth goes 4 -> 22 -> 49: up to 18 more nodes fit.
+        ..apply(AddItem(0, List.filled(17, 0)));
       expect(doc.storedCapacity, 22);
       final before = _enc(doc);
       final edits = <JsonEdit>[
@@ -598,14 +600,16 @@ void main() {
       expect(doc.storedCapacity, 22);
       _checkConsistent(doc);
       // No limit: grows as needed.
-      doc.maxCapacity = null;
-      doc.apply(const AddItem(0, 'x'));
+      doc
+        ..maxCapacity = null
+        ..apply(const AddItem(0, 'x'));
       expect(doc.storedCapacity, greaterThan(22));
     });
 
     test('maxCapacity counts every node an edit adds', () {
-      final doc = _doc('[{"a":1},{"b":2},3]'); // 6 nodes
-      doc.maxCapacity = 6;
+      final doc =
+          _doc('[{"a":1},{"b":2},3]') // 6 nodes
+            ..maxCapacity = 6;
       expect(() => doc.apply(const NewItemFromSchema(0)), throwsStateError);
       expect(() => doc.apply(const AddKeyToAll(0, 'c', 1)), throwsStateError);
       expect(
@@ -704,6 +708,9 @@ void main() {
               expect(doc.apply(edit), doc.visibleCount);
               applied[edit.runtimeType] = (applied[edit.runtimeType] ?? 0) + 1;
               mirror = expected();
+              // Edits document an ArgumentError for nodes they do not apply
+              // to; the fuzz loop counts those as rejected.
+              // ignore: avoid_catching_errors
             } on ArgumentError {
               // Not applicable to this node: nothing changed.
               rejected++;

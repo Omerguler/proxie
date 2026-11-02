@@ -9,13 +9,16 @@ import 'package:proxie/src/storage/store.dart';
 import 'package:proxie/src/worker/isolate_worker.dart';
 import 'package:proxie/src/worker/worker.dart';
 
+/// Native implementation of `spawnProxieWorker` in `worker_factory.dart`:
+/// an isolate over a SQLite store under [supportDir], or over memory when
+/// history is not persisted.
 Future<ProxieWorker> spawnProxieWorker(
   ProxieConfig config, {
   String? supportDir,
   Duration startupTimeout = const Duration(seconds: 30),
 }) async {
   if (!config.persistHistory) {
-    return IsolateWorker.spawn(
+    return await IsolateWorker.spawn(
       config,
       MemoryStore.new,
       startupTimeout: startupTimeout,
@@ -23,7 +26,7 @@ Future<ProxieWorker> spawnProxieWorker(
   }
   // Plugins are unavailable in background isolates: resolve the path here.
   final base = supportDir ?? (await getApplicationSupportDirectory()).path;
-  return IsolateWorker.spawn(
+  return await IsolateWorker.spawn(
     config,
     _sqliteOpener(
       '$base${Platform.pathSeparator}proxie',
