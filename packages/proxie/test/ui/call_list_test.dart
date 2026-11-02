@@ -31,18 +31,25 @@ class FakeWorker implements ProxieWorker {
 
   /// While true, commands wait for [release] before running.
   bool hold = false;
-  final List<Completer<void>> _held = [];
+  final List<(WorkerCommand<Object?>, Completer<void>)> _held = [];
 
   /// While true, [CountCalls] fails.
   bool failCounts = false;
 
+  /// This many next [CountCalls] fail.
+  int failNextCounts = 0;
+
   int get reloads => log.whereType<CountCalls>().length;
 
-  void release() {
-    final held = [..._held];
-    _held.clear();
-    for (final c in held) {
-      c.complete();
+  /// Lets held commands run; only those passing [test] when given.
+  void release([bool Function(WorkerCommand<Object?> cmd)? test]) {
+    final picked = [
+      for (final h in _held)
+        if (test == null || test(h.$1)) h,
+    ];
+    _held.removeWhere(picked.contains);
+    for (final h in picked) {
+      h.$2.complete();
     }
   }
 
@@ -51,10 +58,16 @@ class FakeWorker implements ProxieWorker {
     log.add(cmd);
     if (hold) {
       final gate = Completer<void>();
-      _held.add(gate);
+      _held.add((cmd, gate));
       await gate.future;
     }
-    if (failCounts && cmd is CountCalls) throw StateError('worker gone');
+    if (cmd is CountCalls) {
+      if (failCounts) throw StateError('worker gone');
+      if (failNextCounts > 0) {
+        failNextCounts--;
+        throw StateError('worker busy');
+      }
+    }
     return await cmd.execute(_ctx);
   }
 
@@ -512,11 +525,20 @@ void main() {
     final controller = ListController(worker: worker, calls: calls.stream);
     await tester.pump();
     expect(calls.hasListener, isTrue);
+    // Two calls: the first reloads and starts the cooldown timer, the second
+    // waits for it.
+    calls
+      ..add(call('x', session: 2, at: clock))
+      ..add(call('y', session: 2, at: clock));
+    await tester.pump();
+    final reloads = worker.reloads;
     controller
       ..search('users')
       ..dispose();
     expect(calls.hasListener, isFalse);
-    await tester.pump(const Duration(seconds: 1));
+    // No pump past the cooldown: a timer still pending here fails the test.
+    await tester.pump(const Duration(milliseconds: 10));
+    expect(worker.reloads, reloads);
     expect(worker.queried.where((q) => q.text == 'users'), isEmpty);
   });
 
@@ -565,9 +587,12 @@ void main() {
 
     await engine.onRequest('new', 'http', getRequest('/new'));
     engine.recordResponse('new', okResponse());
-    await tester.pump();
-    await tester.pump();
-    await tester.pump();
+    // Every frame, not only the settled one, keeps the row in place.
+    for (var i = 0; i < 6; i++) {
+      await tester.pump();
+      expect(tester.getTopLeft(anchor).dy, before, reason: 'frame $i');
+    }
+    await tester.pump(const Duration(milliseconds: 300));
     await tester.pump();
     expect(tester.getTopLeft(anchor).dy, before);
     expect(find.text('1 new'), findsOneWidget);
@@ -587,6 +612,108 @@ void main() {
     await tester.pump();
     expect(find.text('/new'), findsOneWidget);
     expect(find.text('1 new'), findsNothing);
+  });
+
+  testWidgets('a reload that shrinks the list keeps scrolled rows still', (
+    tester,
+  ) async {
+    for (var i = 0; i < 200; i++) {
+      await store.upsert(
+        call(
+          'c$i',
+          session: 2,
+          path: '/items/$i',
+          status: 500,
+          at: clock.subtract(Duration(seconds: 200 - i)),
+        ),
+      );
+    }
+    await pumpList(tester);
+    await tester.tap(find.widgetWithText(FilterChip, 'Errors'));
+    await tester.pump();
+    await tester.pump();
+    await tester.drag(find.byType(Scrollable).last, const Offset(0, -3000));
+    await tester.pump();
+    await tester.pump();
+    final anchor = find.text('/items/150');
+    expect(anchor, findsOneWidget);
+    final before = tester.getTopLeft(anchor).dy;
+
+    // The newest call, far above the screen, stops matching the filter.
+    final fixed = call(
+      'c199',
+      session: 2,
+      path: '/items/199',
+      at: clock.subtract(const Duration(seconds: 1)),
+    );
+    await store.upsert(fixed);
+    calls.add(fixed);
+    for (var i = 0; i < 6; i++) {
+      await tester.pump();
+      expect(tester.getTopLeft(anchor).dy, before, reason: 'frame $i');
+    }
+    expect(find.textContaining(' new'), findsNothing);
+  });
+
+  testWidgets('a reload keeps pages that loaded during its flight', (
+    tester,
+  ) async {
+    await addItems(1000);
+    await pumpList(tester);
+    worker.hold = true;
+    final added = call('x', session: 2, path: '/x', at: DateTime.now());
+    await store.upsert(added);
+    calls.add(added);
+    await tester.pump();
+    expect(worker.reloads, 2);
+
+    // Scrolling while the reload is held asks for pages it does not cover.
+    await tester.drag(find.byType(Scrollable).last, const Offset(0, -20000));
+    await tester.pump();
+    await tester.pump();
+    bool deep(WorkerCommand<Object?> c) => c is QueryCalls && c.offset >= 200;
+    final early = worker.log
+        .where(deep)
+        .cast<QueryCalls>()
+        .map((c) => c.offset)
+        .toSet();
+    expect(early, isNotEmpty);
+    worker.release(deep);
+    await tester.pump();
+    worker
+      ..hold = false
+      ..release();
+    await tester.pump();
+    await tester.pump();
+    for (final offset in early) {
+      expect(
+        worker.log.whereType<QueryCalls>().where((c) => c.offset == offset),
+        hasLength(1),
+        reason: 'offset $offset fetched again',
+      );
+    }
+    expect(find.byType(CallRow), findsWidgets);
+  });
+
+  testWidgets('a failed reload still runs the reload asked for meanwhile', (
+    tester,
+  ) async {
+    await store.upsert(call('ok', session: 2, path: '/ok', at: clock));
+    worker.hold = true;
+    await pumpList(tester);
+    // Asked for while the first load is in flight.
+    calls.add(call('ok', session: 2, path: '/ok', at: clock));
+    await tester.pump();
+    worker
+      ..failNextCounts = 1
+      ..hold = false
+      ..release();
+    await tester.pump();
+    await tester.pump();
+    await tester.pump();
+    expect(worker.reloads, 2);
+    expect(find.text("Couldn't load requests"), findsNothing);
+    expect(find.text('/ok'), findsOneWidget);
   });
 
   testWidgets('the inspector shows the call list', (tester) async {

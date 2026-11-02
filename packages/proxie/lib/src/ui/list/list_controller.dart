@@ -53,6 +53,9 @@ class ListController extends ChangeNotifier {
   // Pages with a query in flight (lazy loads and the running reload).
   final Set<int> _requested = {};
   Set<int> _reloadPages = const {};
+  // Pages lazily loaded since the running reload started; its swap keeps
+  // them.
+  final Set<int> _loadedDuringReload = {};
   // The pages the last reload covered; reused while no rows are asked for.
   Set<int> _covered = {0};
   // The row asked for last since the last reload; it is on or near the
@@ -106,6 +109,16 @@ class ListController extends ChangeNotifier {
     }
     final at = i % pageSize;
     return at < page.length ? page[at] : null;
+  }
+
+  /// The index of the loaded call [id], or null when no loaded page holds
+  /// it.
+  int? indexOf(String id) {
+    for (final MapEntry(key: page, value: rows) in _pages.entries) {
+      final i = rows.indexWhere((s) => s.id == id);
+      if (i >= 0) return page * pageSize + i;
+    }
+    return null;
   }
 
   /// The recorded session [id], or null when it is unknown.
@@ -164,6 +177,7 @@ class ListController extends ChangeNotifier {
     _generation++;
     // Rows of the old query must not show while the new ones load.
     _pages = {};
+    _loadedDuringReload.clear();
     _sessionMatches = {};
     _lastAsked = null;
     _covered = {0};
@@ -194,6 +208,7 @@ class ListController extends ChangeNotifier {
         final pages = _pagesToReload().toList()..sort();
         _reloadEpoch++;
         _reloadPages = pages.toSet();
+        _loadedDuringReload.clear();
         _requested.addAll(pages);
         final List<Object?> results;
         final Map<int, int> matches;
@@ -215,7 +230,8 @@ class ListController extends ChangeNotifier {
           _error = e;
           _log('Proxie failed to load the call list', e, st);
           notifyListeners();
-          return;
+          // A reload asked for meanwhile still runs (the loop condition).
+          continue;
         }
         if (_disposed) return;
         // A query change cleared the requests and asked for another reload.
@@ -226,9 +242,11 @@ class ListController extends ChangeNotifier {
         _sessions = {for (final s in results[1]! as List<SessionInfo>) s.id: s};
         _sessionMatches = matches;
         _pages = {
+          for (final p in _loadedDuringReload) p: ?_pages[p],
           for (var i = 0; i < pages.length; i++)
             pages[i]: List.of(results[i + 2]! as List<CallSummary>),
         };
+        _loadedDuringReload.clear();
         _covered = pages.toSet();
         _error = null;
         notifyListeners();
@@ -273,6 +291,7 @@ class ListController extends ChangeNotifier {
               }
               _requested.remove(page);
               _pages[page] = List.of(rows);
+              if (_reloading) _loadedDuringReload.add(page);
               notifyListeners();
             },
             onError: (Object e, StackTrace st) {

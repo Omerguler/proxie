@@ -6,6 +6,7 @@ import 'package:proxie/src/storage/store.dart';
 import 'package:proxie/src/ui/list/call_row.dart';
 import 'package:proxie/src/ui/list/filter_bar.dart';
 import 'package:proxie/src/ui/list/list_controller.dart';
+import 'package:proxie/src/ui/list/scroll_anchor.dart';
 import 'package:proxie/src/worker/worker.dart';
 
 /// The inspector's call list: [FilterBar] over a lazily built list of
@@ -52,27 +53,15 @@ class CallList extends StatefulWidget {
   State<CallList> createState() => _CallListState();
 }
 
-typedef _Anchor = ({String id, double dy});
-
 class _CallListState extends State<CallList> {
   late ListController _controller = _create();
-  final _scroll = ScrollController();
-  final GlobalKey _listKey = GlobalKey();
-  // Rows currently built, by call id, for measuring the scroll anchor.
-  final _rows = <String, BuildContext>{};
+  final _anchor = ScrollAnchor(rowHeight: CallRow.height);
   int _seenGeneration = 0;
   int _seenCount = 0;
-  int _newCalls = 0;
 
   ListController _create([CallQuery query = const CallQuery()]) =>
       ListController(worker: widget.worker, calls: widget.calls, query: query)
         ..addListener(_onListChanged);
-
-  @override
-  void initState() {
-    super.initState();
-    _scroll.addListener(_onScroll);
-  }
 
   @override
   void didUpdateWidget(CallList oldWidget) {
@@ -83,90 +72,31 @@ class _CallListState extends State<CallList> {
       _controller = _create(query);
       _seenGeneration = _controller.generation;
       _seenCount = 0;
-      _newCalls = 0;
+      _anchor.update(newQuery: true, added: 0, indexOf: _controller.indexOf);
     }
   }
 
   @override
   void dispose() {
     _controller.dispose();
-    _scroll.dispose();
+    _anchor.dispose();
     super.dispose();
   }
 
-  void _onScroll() {
-    if (_newCalls > 0 && _scroll.position.pixels <= 0) {
-      setState(() => _newCalls = 0);
-    }
-  }
-
-  // Runs before the next frame, so the rows on screen still have their old
-  // positions and the anchor can be measured.
+  // Runs before the next frame, while the rows on screen still have their
+  // old positions.
   void _onListChanged() {
     final count = _controller.count;
-    if (_controller.generation != _seenGeneration) {
-      _seenGeneration = _controller.generation;
-      _seenCount = count;
-      // The list is rebuilt under a new key and starts at the top.
-      _newCalls = 0;
-      return;
-    }
+    final newQuery = _controller.generation != _seenGeneration;
+    _seenGeneration = _controller.generation;
     final added = count - _seenCount;
     _seenCount = count;
-    if (added <= 0 || !_scroll.hasClients || _scroll.position.pixels <= 0) {
-      return;
-    }
-    final anchor = _findAnchor();
-    setState(() => _newCalls += added);
-    if (anchor == null) return;
-    WidgetsBinding.instance.addPostFrameCallback(
-      (_) => _restore(anchor, added, retry: true),
+    // A new query is shown in a new list (new key) that starts at the top.
+    _anchor.update(
+      newQuery: newQuery,
+      added: added,
+      indexOf: _controller.indexOf,
     );
-  }
-
-  double? _dyOf(String id) {
-    final list = _listKey.currentContext?.findRenderObject();
-    final row = _rows[id]?.findRenderObject();
-    if (list is! RenderBox || row is! RenderBox) return null;
-    if (!row.attached || !row.hasSize) return null;
-    return row.localToGlobal(Offset.zero, ancestor: list).dy;
-  }
-
-  // The first row whose top is on screen.
-  _Anchor? _findAnchor() {
-    _Anchor? best;
-    for (final id in _rows.keys) {
-      final dy = _dyOf(id);
-      if (dy == null || dy < 0) continue;
-      if (best == null || dy < best.dy) best = (id: id, dy: dy);
-    }
-    return best;
-  }
-
-  void _restore(_Anchor anchor, int added, {required bool retry}) {
-    if (!mounted || !_scroll.hasClients) return;
-    final dy = _dyOf(anchor.id);
-    if (dy != null) {
-      final shift = dy - anchor.dy;
-      if (shift != 0) _scroll.jumpTo(_scroll.position.pixels + shift);
-    } else if (retry) {
-      // The anchor moved out of the built rows: estimate, then measure.
-      _scroll.jumpTo(_scroll.position.pixels + added * CallRow.height);
-      WidgetsBinding.instance.addPostFrameCallback(
-        (_) => _restore(anchor, added, retry: false),
-      );
-    }
-  }
-
-  void _toTop() {
-    setState(() => _newCalls = 0);
-    if (_scroll.hasClients) {
-      _scroll.animateTo(
-        0,
-        duration: const Duration(milliseconds: 250),
-        curve: Curves.easeOut,
-      );
-    }
   }
 
   @override
@@ -208,39 +138,33 @@ class _CallListState extends State<CallList> {
   );
 
   Widget _list() => Stack(
-    key: _listKey,
+    key: _anchor.viewportKey,
     children: [
       // A new query gets a new list, scrolled to the top, so no row of the
       // old one is rebuilt (and its page fetched) on the way.
       ListView.builder(
         key: ValueKey(_controller.generation),
-        controller: _scroll,
+        controller: _anchor.scroll,
         itemCount: _controller.count,
         itemBuilder: _item,
       ),
-      if (_newCalls > 0)
-        Positioned(
-          top: 8,
-          left: 0,
-          right: 0,
-          child: Center(
-            child: ActionChip(
-              avatar: const Icon(Icons.arrow_upward, size: 16),
-              label: Text('$_newCalls new'),
-              onPressed: _toTop,
-            ),
-          ),
-        ),
+      Positioned(
+        top: 8,
+        left: 0,
+        right: 0,
+        child: NewCallsPill(anchor: _anchor),
+      ),
     ],
   );
 
   Widget _item(BuildContext context, int i) {
     final call = _controller.rowAt(i);
     if (call == null) return const SizedBox(height: CallRow.height);
-    final row = _Tracked(
+    final row = ScrollAnchorRow(
       key: ValueKey(call.id),
+      anchor: _anchor,
       id: call.id,
-      registry: _rows,
+      index: i,
       child: CallRow(
         call: call,
         selected: call.id == widget.selectedCallId,
@@ -280,42 +204,6 @@ class _CallListState extends State<CallList> {
       q.hideBinary ||
       q.maxSize != null ||
       q.adapters.isNotEmpty;
-}
-
-/// Keeps [registry] pointing at the context of the built row [id].
-class _Tracked extends StatefulWidget {
-  const _Tracked({
-    required this.id,
-    required this.registry,
-    required this.child,
-    super.key,
-  });
-
-  final String id;
-  final Map<String, BuildContext> registry;
-  final Widget child;
-
-  @override
-  State<_Tracked> createState() => _TrackedState();
-}
-
-class _TrackedState extends State<_Tracked> {
-  @override
-  void initState() {
-    super.initState();
-    widget.registry[widget.id] = context;
-  }
-
-  @override
-  void dispose() {
-    if (widget.registry[widget.id] == context) {
-      widget.registry.remove(widget.id);
-    }
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => widget.child;
 }
 
 class _SessionHeader extends StatelessWidget {
