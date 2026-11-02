@@ -9,6 +9,7 @@ import 'package:proxie/src/navigation/navigation_adapter.dart';
 import 'package:proxie/src/navigation/overlay_navigation.dart';
 import 'package:proxie/src/ui/bubble.dart';
 import 'package:proxie/src/ui/inspector_shell.dart';
+import 'package:proxie/src/ui/list/call_list.dart';
 import 'package:proxie/src/worker/worker.dart';
 
 /// The runtime of the active Proxie, or null while inactive. Set by the
@@ -81,6 +82,7 @@ class ProxieRuntime {
             controller: controller,
             splitWidth: config.splitWidth,
             themeMode: config.themeMode,
+            listBuilder: _buildList,
           ),
           onDismissed: _onDismissed,
         );
@@ -95,6 +97,18 @@ class ProxieRuntime {
         _report(e, st, 'while hiding the Proxie inspector');
       }
     }
+  }
+
+  Widget _buildList(BuildContext context) {
+    final inspector = ProxieInspectorController.of(context);
+    return CallList(
+      worker: worker,
+      calls: engine.calls,
+      renderCap: config.renderCap,
+      adapterNames: [for (final a in adapters) a.name],
+      selectedCallId: inspector.selectedCallId,
+      onSelected: inspector.select,
+    );
   }
 
   void _onDismissed() {
