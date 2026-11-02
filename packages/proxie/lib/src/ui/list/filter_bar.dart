@@ -90,7 +90,7 @@ class _FilterBarState extends State<FilterBar> {
                           icon: const Icon(Icons.clear, size: 18),
                           onPressed: () {
                             _search.clear();
-                            _controller.query = q.copyWith(clearText: true);
+                            _controller.clearSearch();
                           },
                         ),
                 ),

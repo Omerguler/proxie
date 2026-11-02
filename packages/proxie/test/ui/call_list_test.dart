@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:proxie/proxie.dart';
 import 'package:proxie/src/ui/list/call_list.dart';
 import 'package:proxie/src/ui/list/call_row.dart';
+import 'package:proxie/src/ui/list/list_controller.dart';
 
 import '../support/ui_harness.dart';
 
@@ -28,10 +29,33 @@ class FakeWorker implements ProxieWorker {
   @override
   void upsert(ProxieCall call) => unawaited(store.upsert(call));
 
+  /// While true, commands wait for [release] before running.
+  bool hold = false;
+  final List<Completer<void>> _held = [];
+
+  /// While true, [CountCalls] fails.
+  bool failCounts = false;
+
+  int get reloads => log.whereType<CountCalls>().length;
+
+  void release() {
+    final held = [..._held];
+    _held.clear();
+    for (final c in held) {
+      c.complete();
+    }
+  }
+
   @override
-  Future<R> run<R>(WorkerCommand<R> cmd) {
+  Future<R> run<R>(WorkerCommand<R> cmd) async {
     log.add(cmd);
-    return cmd.execute(_ctx);
+    if (hold) {
+      final gate = Completer<void>();
+      _held.add(gate);
+      await gate.future;
+    }
+    if (failCounts && cmd is CountCalls) throw StateError('worker gone');
+    return await cmd.execute(_ctx);
   }
 
   @override
@@ -71,6 +95,8 @@ ProxieCall call(
       : const Duration(milliseconds: 42),
   tags: tags,
 );
+
+const _minute = Duration(minutes: 1);
 
 void main() {
   final epoch = DateTime(2020, 1, 2, 10, 5);
@@ -138,7 +164,7 @@ void main() {
     await tester.drag(find.byType(Scrollable).last, const Offset(0, -8000));
     await tester.pump();
     await tester.pump();
-    expect(worker.log.whereType<QueryCalls>().map((c) => c.offset), {0, 100});
+    expect(worker.log.whereType<QueryCalls>().map((c) => c.offset), [0, 100]);
     expect(find.byType(CallRow).evaluate().length, lessThan(40));
   });
 
@@ -319,6 +345,248 @@ void main() {
 
     await tester.tap(find.text('/missing'));
     expect(selected, 'a');
+  });
+
+  Future<void> addItems(int n) async {
+    for (var i = 0; i < n; i++) {
+      await store.upsert(
+        call(
+          'c$i',
+          session: 2,
+          path: '/items/$i',
+          at: clock.subtract(Duration(seconds: n - i)),
+        ),
+      );
+    }
+  }
+
+  Future<ProxieEngine> pumpWithEngine(WidgetTester tester) async {
+    final engine = ProxieEngine(
+      config: const ProxieConfig(),
+      sink: worker,
+      sessionId: 2,
+    );
+    addTearDown(engine.dispose);
+    await pumpList(tester, stream: engine.calls);
+    return engine;
+  }
+
+  testWidgets('stream-driven reloads are throttled to one per 250 ms', (
+    tester,
+  ) async {
+    final engine = await pumpWithEngine(tester);
+    expect(worker.reloads, 1);
+    for (var i = 0; i < 10; i++) {
+      await engine.onRequest('n$i', 'http', getRequest('/n/$i'));
+    }
+    await tester.pump();
+    await tester.pump();
+    // The first change reloads at once; the rest wait for the interval.
+    expect(worker.reloads, 2);
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(worker.reloads, 2);
+    await tester.pump(const Duration(milliseconds: 60));
+    await tester.pump();
+    expect(worker.reloads, 3);
+    expect(find.text('/n/9'), findsOneWidget);
+    await tester.pump(const Duration(seconds: 1));
+    expect(worker.reloads, 3);
+  });
+
+  testWidgets('a reload covers only the pages around the viewport', (
+    tester,
+  ) async {
+    await addItems(1000);
+    final engine = await pumpWithEngine(tester);
+    for (var i = 0; i < 5; i++) {
+      await tester.drag(find.byType(Scrollable).last, const Offset(0, -9000));
+      await tester.pump();
+      await tester.pump();
+    }
+    worker.log.clear();
+    await engine.onRequest('new', 'http', getRequest('/new'));
+    await tester.pump();
+    await tester.pump();
+    final offsets = worker.log.whereType<QueryCalls>().map((c) => c.offset);
+    expect(offsets.length, lessThanOrEqualTo(2));
+    expect(offsets, isNot(contains(0)));
+  });
+
+  testWidgets('a query change reloads page 0 only and hides old rows', (
+    tester,
+  ) async {
+    await addItems(300);
+    await pumpList(tester);
+    await tester.drag(find.byType(Scrollable).last, const Offset(0, -8000));
+    await tester.pump();
+    await tester.pump();
+    expect(worker.log.whereType<QueryCalls>().map((c) => c.offset), [0, 100]);
+
+    worker
+      ..log.clear()
+      ..hold = true;
+    final get = find.widgetWithText(FilterChip, 'GET');
+    await tester.ensureVisible(get);
+    await tester.tap(get);
+    await tester.pump();
+    // The old query's rows are gone while the new ones load.
+    expect(find.byType(CallRow), findsNothing);
+    worker
+      ..hold = false
+      ..release();
+    await tester.pump();
+    await tester.pump();
+    expect(worker.log.whereType<QueryCalls>().map((c) => c.offset), [0]);
+    expect(find.text('/items/299'), findsOneWidget);
+  });
+
+  testWidgets('results for an old query are dropped', (tester) async {
+    await store.upsert(call('ok', session: 2, path: '/ok', at: clock));
+    worker.hold = true;
+    await pumpList(tester);
+    await tester.tap(find.widgetWithText(FilterChip, 'Errors'));
+    await tester.pump();
+    // The first load (unfiltered) answers after the query changed.
+    worker.release();
+    await tester.pump();
+    expect(find.text('/ok'), findsNothing);
+    worker
+      ..hold = false
+      ..release();
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('/ok'), findsNothing);
+    expect(find.text('No matching requests'), findsOneWidget);
+  });
+
+  testWidgets('a chip tapped while typing keeps the pending search', (
+    tester,
+  ) async {
+    await pumpList(tester);
+    await tester.enterText(find.byType(TextField), 'users');
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(find.widgetWithText(FilterChip, 'Errors'));
+    await tester.pump();
+    await tester.pump();
+    expect(worker.queried.last.text, 'users');
+    expect(worker.queried.last.status, StatusFilter.errors);
+    await tester.pump(const Duration(seconds: 1));
+    expect(worker.queried.last.text, 'users');
+  });
+
+  testWidgets('a failed load shows an error with retry', (tester) async {
+    await store.upsert(call('ok', session: 2, path: '/ok', at: clock));
+    worker.failCounts = true;
+    await pumpList(tester);
+    expect(find.text('No requests yet'), findsNothing);
+    expect(find.text("Couldn't load requests"), findsOneWidget);
+
+    worker.failCounts = false;
+    await tester.tap(find.widgetWithText(TextButton, 'Retry'));
+    await tester.pump();
+    await tester.pump();
+    expect(find.text("Couldn't load requests"), findsNothing);
+    expect(find.text('/ok'), findsOneWidget);
+  });
+
+  testWidgets('session headers show filtered counts out of the total', (
+    tester,
+  ) async {
+    await store.upsert(call('p0', path: '/p0', at: epoch, status: 500));
+    await store.upsert(call('p1', path: '/p1', at: epoch.add(_minute)));
+    await store.upsert(
+      call('p2', path: '/p2', at: epoch.add(_minute * 2), status: 404),
+    );
+    await pumpList(tester);
+    expect(find.text('2020-01-02 10:05 — 3 calls'), findsOneWidget);
+    await tester.tap(find.widgetWithText(FilterChip, 'Errors'));
+    await tester.pump();
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('2020-01-02 10:05 — 2 of 3 calls'), findsOneWidget);
+  });
+
+  testWidgets('dispose cancels the search timer and the subscription', (
+    tester,
+  ) async {
+    final controller = ListController(worker: worker, calls: calls.stream);
+    await tester.pump();
+    expect(calls.hasListener, isTrue);
+    controller
+      ..search('users')
+      ..dispose();
+    expect(calls.hasListener, isFalse);
+    await tester.pump(const Duration(seconds: 1));
+    expect(worker.queried.where((q) => q.text == 'users'), isEmpty);
+  });
+
+  testWidgets('2xx, 3xx and 5xx status colors', (tester) async {
+    await store.upsert(
+      call('a', session: 2, path: '/a', status: 201, at: clock),
+    );
+    await store.upsert(
+      call(
+        'b',
+        session: 2,
+        path: '/b',
+        status: 304,
+        at: clock.subtract(_minute),
+      ),
+    );
+    await store.upsert(
+      call(
+        'c',
+        session: 2,
+        path: '/c',
+        status: 503,
+        at: clock.subtract(_minute * 2),
+      ),
+    );
+    await pumpList(tester);
+    const colors = ProxieColors();
+    Color? colorOf(String text) =>
+        tester.widget<Text>(find.text(text)).style?.color;
+    expect(colorOf('201'), colors.success);
+    expect(colorOf('304'), colors.redirect);
+    expect(colorOf('503'), colors.serverError);
+  });
+
+  testWidgets('new calls keep scrolled rows still; the pill goes to the top', (
+    tester,
+  ) async {
+    await addItems(200);
+    final engine = await pumpWithEngine(tester);
+    await tester.drag(find.byType(Scrollable).last, const Offset(0, -3000));
+    await tester.pump();
+    await tester.pump();
+    final anchor = find.text('/items/150');
+    expect(anchor, findsOneWidget);
+    final before = tester.getTopLeft(anchor).dy;
+
+    await engine.onRequest('new', 'http', getRequest('/new'));
+    engine.recordResponse('new', okResponse());
+    await tester.pump();
+    await tester.pump();
+    await tester.pump();
+    await tester.pump();
+    expect(tester.getTopLeft(anchor).dy, before);
+    expect(find.text('1 new'), findsOneWidget);
+
+    await tester.tap(find.text('1 new'));
+    await tester.pumpAndSettle();
+    expect(find.text('/new'), findsOneWidget);
+    expect(find.text('1 new'), findsNothing);
+  });
+
+  testWidgets('at the top, new calls show without a pill', (tester) async {
+    await addItems(20);
+    final engine = await pumpWithEngine(tester);
+    await engine.onRequest('new', 'http', getRequest('/new'));
+    engine.recordResponse('new', okResponse());
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('/new'), findsOneWidget);
+    expect(find.text('1 new'), findsNothing);
   });
 
   testWidgets('the inspector shows the call list', (tester) async {
