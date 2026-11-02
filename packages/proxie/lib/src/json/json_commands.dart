@@ -248,6 +248,36 @@ class JsonReveal extends WorkerCommand<int> {
       _JsonDocs.of(ctx).get(docId).reveal(nodeId);
 }
 
+/// The number of rows document [docId] shows now, e.g. after [JsonReveal]
+/// expanded some.
+class JsonVisibleCount extends WorkerCommand<int> {
+  /// Creates a command that counts the visible rows of [docId].
+  const JsonVisibleCount(this.docId);
+
+  /// The document to count.
+  final String docId;
+
+  @override
+  Future<int> execute(WorkerContext ctx) async =>
+      _JsonDocs.of(ctx).get(docId).visibleCount;
+}
+
+/// The whole value of scalar [nodeId]; see [JsonDocument.scalarText].
+class JsonScalarText extends WorkerCommand<String> {
+  /// Creates a command that reads scalar [nodeId] of document [docId].
+  const JsonScalarText(this.docId, this.nodeId);
+
+  /// The document holding the node.
+  final String docId;
+
+  /// The scalar node to read.
+  final int nodeId;
+
+  @override
+  Future<String> execute(WorkerContext ctx) async =>
+      _JsonDocs.of(ctx).get(docId).scalarText(nodeId);
+}
+
 /// Releases a document; unknown ids are ignored.
 class CloseJson extends WorkerCommand<void> {
   /// Creates a command that closes document [docId].

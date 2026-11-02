@@ -19,11 +19,22 @@ class ProxieColors extends ThemeExtension<ProxieColors> {
     this.pending = const Color(0xFF7D8590),
     this.accentStart = const Color(0xFF7C5CFF),
     this.accentEnd = const Color(0xFF20C3FF),
+    this.jsonKey = const Color(0xFF7EE787),
+    this.jsonString = const Color(0xFFA5D6FF),
+    this.jsonNumber = const Color(0xFFFFA657),
   });
 
   /// The colors of the nearest Proxie theme, or the defaults.
   factory ProxieColors.of(BuildContext context) =>
       Theme.of(context).extension<ProxieColors>() ?? const ProxieColors();
+
+  /// The defaults of the light theme: the dark defaults with JSON colors
+  /// that read on a light surface.
+  static const ProxieColors light = ProxieColors(
+    jsonKey: Color(0xFF116329),
+    jsonString: Color(0xFF0A3069),
+    jsonNumber: Color(0xFF953800),
+  );
 
   /// GET.
   final Color get;
@@ -57,6 +68,15 @@ class ProxieColors extends ThemeExtension<ProxieColors> {
 
   /// The last color of [accentGradient].
   final Color accentEnd;
+
+  /// JSON member names.
+  final Color jsonKey;
+
+  /// JSON strings.
+  final Color jsonString;
+
+  /// JSON numbers, and `true`, `false` and `null`.
+  final Color jsonNumber;
 
   /// The accent gradient, top-left to bottom-right.
   LinearGradient get accentGradient => LinearGradient(
@@ -99,6 +119,9 @@ class ProxieColors extends ThemeExtension<ProxieColors> {
     Color? pending,
     Color? accentStart,
     Color? accentEnd,
+    Color? jsonKey,
+    Color? jsonString,
+    Color? jsonNumber,
   }) => ProxieColors(
     get: get ?? this.get,
     post: post ?? this.post,
@@ -111,6 +134,9 @@ class ProxieColors extends ThemeExtension<ProxieColors> {
     pending: pending ?? this.pending,
     accentStart: accentStart ?? this.accentStart,
     accentEnd: accentEnd ?? this.accentEnd,
+    jsonKey: jsonKey ?? this.jsonKey,
+    jsonString: jsonString ?? this.jsonString,
+    jsonNumber: jsonNumber ?? this.jsonNumber,
   );
 
   @override
@@ -129,6 +155,9 @@ class ProxieColors extends ThemeExtension<ProxieColors> {
       pending: l(pending, other.pending),
       accentStart: l(accentStart, other.accentStart),
       accentEnd: l(accentEnd, other.accentEnd),
+      jsonKey: l(jsonKey, other.jsonKey),
+      jsonString: l(jsonString, other.jsonString),
+      jsonNumber: l(jsonNumber, other.jsonNumber),
     );
   }
 }
@@ -158,8 +187,8 @@ abstract final class ProxieTheme {
   };
 
   static ThemeData _build(Brightness brightness) {
-    const colors = ProxieColors();
     final dark = brightness == Brightness.dark;
+    final colors = dark ? const ProxieColors() : ProxieColors.light;
     final scheme =
         ColorScheme.fromSeed(
           seedColor: colors.accentStart,
@@ -190,7 +219,7 @@ abstract final class ProxieTheme {
         scrolledUnderElevation: 0,
         centerTitle: false,
       ),
-      extensions: const [colors],
+      extensions: [colors],
     );
   }
 }

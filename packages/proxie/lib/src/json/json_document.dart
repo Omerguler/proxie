@@ -338,6 +338,35 @@ class JsonDocument {
   /// document that did not parse, finds nothing.
   List<int> search(String query, {int limit = 500}) => _search(query, limit);
 
+  /// The whole value of scalar [nodeId] as text, unlike the shortened
+  /// [JsonRow.preview]: a string's decoded text, a number's lexeme, or
+  /// `true`, `false` or `null`. Throws an [ArgumentError] for a container.
+  String scalarText(int nodeId) {
+    _checkId(nodeId);
+    final start = _n.valueStart[nodeId];
+    return switch (_n.kind(nodeId)) {
+      JsonKind.object || JsonKind.array => throw ArgumentError.value(
+        nodeId,
+        'nodeId',
+        'Not a scalar',
+      ),
+      JsonKind.string ||
+      JsonKind.number when _edited(nodeId) => _values[nodeId]! as String,
+      JsonKind.string => decodeJsonString(
+        _source!,
+        start,
+        escaped: _n.flags[nodeId] & escapedFlag != 0,
+      ),
+      JsonKind.number => String.fromCharCodes(
+        _source!,
+        start,
+        jsonNumberEnd(_source, start),
+      ),
+      JsonKind.boolean => _boolean(nodeId) ? 'true' : 'false',
+      JsonKind.nullValue => 'null',
+    };
+  }
+
   /// Expands every ancestor of [nodeId] and returns the row that shows it.
   /// Throws an [ArgumentError] for a container root, which has no row.
   int reveal(int nodeId) => _reveal(nodeId);

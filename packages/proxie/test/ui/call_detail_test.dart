@@ -9,6 +9,8 @@ import 'package:proxie/src/runtime.dart';
 import 'package:proxie/src/ui/detail/body_view.dart';
 import 'package:proxie/src/ui/detail/call_detail.dart';
 import 'package:proxie/src/ui/detail/copy_actions.dart';
+import 'package:proxie/src/ui/json/json_tree_view.dart';
+import 'package:proxie/src/ui/json/raw_text_view.dart';
 
 import '../support/ui_harness.dart';
 
@@ -25,6 +27,7 @@ class _Worker implements ProxieWorker {
   /// While non-null, [GetCall] throws this.
   Error? failWith;
   int gets = 0;
+  final List<WorkerCommand<Object?>> log = [];
 
   @override
   int get sessionId => 1;
@@ -34,6 +37,7 @@ class _Worker implements ProxieWorker {
 
   @override
   Future<R> run<R>(WorkerCommand<R> cmd) async {
+    log.add(cmd);
     if (cmd is GetCall) {
       gets++;
       final error = failWith;
@@ -143,8 +147,10 @@ void main() {
         ),
       ),
     );
-    await tester.pump();
-    await tester.pump();
+    // The call, then its body's lines or tree rows, each a worker trip.
+    for (var i = 0; i < 6; i++) {
+      await tester.pump();
+    }
   }
 
   Future<void> openTab(WidgetTester tester, String label) async {
@@ -289,6 +295,7 @@ void main() {
 
     await tester.tap(find.text('Show'));
     await tester.pump();
+    await tester.pump();
     expect(find.text('Show'), findsNothing);
     expect(find.byKey(const ValueKey('proxie-raw-text')), findsOneWidget);
   });
@@ -310,17 +317,19 @@ void main() {
     expect(find.textContaining('Truncated'), findsOneWidget);
     await tester.tap(find.text('Show'));
     await tester.pump();
+    await tester.pump();
     expect(find.text('partial'), findsOneWidget);
     expect(find.textContaining('Truncated'), findsOneWidget);
   });
 
-  testWidgets('json goes through the jsonBuilder seam; raw text without it', (
+  testWidgets('json goes through the jsonBuilder seam; a tree without it', (
     tester,
   ) async {
     final json = _body(utf8.encode('{"id":1}'), 'application/json');
     await store.upsert(_call(response: _response(json)));
     await pumpDetail(tester);
-    expect(find.text('{"id":1}'), findsOneWidget);
+    expect(find.byType(JsonTreeView), findsOneWidget);
+    expect(find.textContaining('id: 1', findRichText: true), findsOneWidget);
 
     await pumpDetail(
       tester,
@@ -335,7 +344,10 @@ void main() {
     expect(find.text('No body'), findsOneWidget);
 
     await openTab(tester, 'Request');
-    expect(find.text('{"name":"ada"}'), findsOneWidget);
+    expect(
+      find.textContaining('name: "ada"', findRichText: true),
+      findsOneWidget,
+    );
   });
 
   testWidgets('headers and timing tabs show their data', (tester) async {
@@ -411,6 +423,7 @@ void main() {
     calls.add(done);
     await tester.pump();
     await tester.pump();
+    await tester.pump();
     expect(find.text('Waiting for response…'), findsNothing);
     expect(find.text('done!'), findsOneWidget);
   });
@@ -484,7 +497,7 @@ void main() {
   testWidgets('body text is decoded once per body, not on every build', (
     tester,
   ) async {
-    final body = _CountingBody('hello');
+    final body = _body(utf8.encode('hello'), 'text/plain');
     late StateSetter rebuild;
     await tester.pumpWidget(
       MaterialApp(
@@ -493,6 +506,7 @@ void main() {
             builder: (context, setState) {
               rebuild = setState;
               return BodyView(
+                worker: worker,
                 body: body,
                 renderCap: 100,
                 revealed: false,
@@ -508,10 +522,11 @@ void main() {
       await tester.pump();
     }
     expect(find.text('hello'), findsOneWidget);
-    expect(body.decodes, 1);
+    // Decoded and split in the worker, once.
+    expect(worker.log.whereType<RawTextLines>(), hasLength(1));
   });
 
-  testWidgets('chunks cut at a line end lay out without a blank line', (
+  testWidgets('lines ending in a break lay out without a blank line', (
     tester,
   ) async {
     final text = 'a\n${'b' * 2000}';
@@ -519,14 +534,14 @@ void main() {
       _call(response: _response(_body(utf8.encode(text), 'text/plain'))),
     );
     await pumpDetail(tester);
-    final first = tester.getSize(find.byKey(const ValueKey('proxie-chunk-0')));
+    final first = tester.getSize(find.byKey(const ValueKey('proxie-line-0')));
     final paragraph = tester.getSize(find.text('a\n')).height;
     // The paragraph holds the text line and the empty line after the break;
     // only the first takes space.
     expect(first.height, closeTo(paragraph / 2, 1));
   });
 
-  testWidgets('copying a selection across chunks gives back the exact text', (
+  testWidgets('copying a selection across lines gives back the exact text', (
     tester,
   ) async {
     mockClipboard(tester);
@@ -538,10 +553,10 @@ void main() {
       _call(response: _response(_body(utf8.encode(text), 'text/plain'))),
     );
     await pumpDetail(tester);
-    expect(find.byKey(const ValueKey('proxie-chunk-2')), findsOneWidget);
+    expect(find.byKey(const ValueKey('proxie-line-3')), findsOneWidget);
 
     // Select all, then copy, as the keyboard shortcuts would.
-    final inside = tester.element(find.byKey(const ValueKey('proxie-chunk-0')));
+    final inside = tester.element(find.byKey(const ValueKey('proxie-line-0')));
     Actions.invoke(
       inside,
       const SelectAllTextIntent(SelectionChangedCause.keyboard),
@@ -583,6 +598,7 @@ void main() {
     final edited = c.copyWith(tags: {CallTag.edited});
     await store.upsert(edited);
     calls.add(edited);
+    await tester.pump();
     await tester.pump();
     await tester.pump();
     expect(find.widgetWithText(Tab, 'Edits'), findsOneWidget);
@@ -749,22 +765,4 @@ void main() {
     expect(clipboard, ['https://api.test/users?page=2']);
     expect(find.text('URL copied'), findsOneWidget);
   });
-}
-
-/// A text body that counts how often it is decoded.
-class _CountingBody extends ProxieBody {
-  _CountingBody(String text)
-    : super(
-        bytes: Uint8List.fromList(utf8.encode(text)),
-        kind: BodyKind.text,
-        contentType: 'text/plain',
-      );
-
-  int decodes = 0;
-
-  @override
-  String? get text {
-    decodes++;
-    return super.text;
-  }
 }

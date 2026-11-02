@@ -10,6 +10,7 @@ import 'package:proxie/src/ui/detail/body_view.dart';
 import 'package:proxie/src/ui/detail/copy_actions.dart';
 import 'package:proxie/src/ui/detail/headers_tab.dart';
 import 'package:proxie/src/ui/detail/timing_tab.dart';
+import 'package:proxie/src/ui/json/json_tree_view.dart';
 import 'package:proxie/src/ui/sections.dart';
 import 'package:proxie/src/ui/theme.dart';
 import 'package:proxie/src/worker/commands.dart';
@@ -49,7 +50,7 @@ class CallDetail extends StatefulWidget {
   /// Targets of the rule and resend buttons; null ones are hidden.
   final ProxieDetailActions actions;
 
-  /// Builds JSON bodies; null shows them as raw text.
+  /// Builds JSON bodies; null shows them as a read-only [JsonBodyView].
   final BodyJsonBuilder? jsonBuilder;
 
   @override
@@ -150,11 +151,20 @@ class _CallDetailState extends State<CallDetail> with TickerProviderStateMixin {
 
   Widget _body(String side, ProxieBody body) => BodyView(
     key: ValueKey('$side-body'),
+    worker: widget.worker,
     body: body,
     renderCap: widget.renderCap,
     revealed: _revealed.contains(side),
     onShow: () => setState(() => _revealed.add(side)),
-    jsonBuilder: widget.jsonBuilder,
+    jsonBuilder:
+        widget.jsonBuilder ??
+        (context, body) => JsonBodyView(
+          key: ValueKey('$side-json'),
+          worker: widget.worker,
+          callId: widget.callId,
+          which: side,
+          body: body,
+        ),
   );
 
   // One fetch at a time; changes arriving meanwhile cause one more fetch.

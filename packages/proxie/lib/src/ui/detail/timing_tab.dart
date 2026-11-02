@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'package:proxie/src/model/call.dart';
-import 'package:proxie/src/ui/detail/body_view.dart';
+import 'package:proxie/src/ui/json/raw_text_view.dart';
 
 /// Readable duration: `850 ms` below ten seconds, else `12.3 s`.
 String formatDuration(Duration d) {

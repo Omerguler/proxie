@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:proxie/proxie.dart';
+import 'package:proxie/src/ui/json/raw_text_view.dart';
 import 'package:proxie/src/worker/isolate_worker.dart';
 
 ProxieBody _body(String s, {String type = 'application/json', int? cap}) =>
@@ -388,5 +389,49 @@ void main() {
         ),
       ),
     );
+  });
+
+  test('visible count and whole scalar text', () async {
+    // A JSON escape, so the string is decoded from its source text.
+    final long = 'é\\n${'x' * 300}';
+    await store.upsert(
+      _call(
+        'c1',
+        response: _body(
+          '{"list":[{"s":"$long","n":12345678901234567890,"b":false,'
+          '"z":null}]}',
+        ),
+      ),
+    );
+    final h = await open('c1', JsonBodySide.response);
+    expect(await JsonVisibleCount(h.docId).execute(ctx), 1);
+    // Nodes: root 0, list 1, item 2, then s 3, n 4, b 5, z 6.
+    expect(await JsonReveal(h.docId, 3).execute(ctx), 2);
+    expect(await JsonVisibleCount(h.docId).execute(ctx), 6);
+    Future<String> text(int id) => JsonScalarText(h.docId, id).execute(ctx);
+    expect(await text(3), 'é\n${'x' * 300}');
+    expect(await text(4), '12345678901234567890');
+    expect(await text(5), 'false');
+    expect(await text(6), 'null');
+    await expectLater(text(2), throwsArgumentError);
+    await JsonApply(h.docId, const SetValue(3, 'new')).execute(ctx);
+    await JsonApply(
+      h.docId,
+      const SetValue(4, JsonNumber('1e400')),
+    ).execute(ctx);
+    expect(await text(3), 'new');
+    expect(await text(4), '1e400');
+  });
+
+  test('raw text lines cross the isolate boundary', () async {
+    final worker = await IsolateWorker.spawn(
+      const ProxieConfig(persistHistory: false),
+      MemoryStore.new,
+    );
+    addTearDown(worker.dispose);
+    final lines = await worker.run(
+      RawTextLines(Uint8List.fromList(utf8.encode('[1]')), prettyJson: true),
+    );
+    expect(lines, ['[\n', '  1\n', ']']);
   });
 }
