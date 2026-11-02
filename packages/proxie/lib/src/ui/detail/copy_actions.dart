@@ -47,18 +47,20 @@ String headersText(ProxieCall call) {
 }
 
 /// Writes [text] to the clipboard and confirms with "[what] copied" in the
-/// nearest [ScaffoldMessenger]. A clipboard failure is logged and reported
-/// in the same place, never thrown.
+/// nearest [ScaffoldMessenger], adding "(truncated)" when [truncated] (only
+/// the captured part of a body was copied). A clipboard failure is logged
+/// and reported in the same place, never thrown.
 Future<void> copyToClipboard(
   BuildContext context,
   String text,
-  String what,
-) async {
+  String what, {
+  bool truncated = false,
+}) async {
   final messenger = ScaffoldMessenger.maybeOf(context);
   String message;
   try {
     await Clipboard.setData(ClipboardData(text: text));
-    message = '$what copied';
+    message = '$what copied${truncated ? ' (truncated)' : ''}';
   } on Object catch (e, st) {
     developer.log(
       'Proxie could not write to the clipboard',
@@ -94,22 +96,29 @@ class CopyMenu extends StatelessWidget {
     final response = call.response;
     // Texts are produced on selection only: cURL and body text decode up to
     // the whole body.
-    final items = <(String, String, String? Function()?)>[
-      ('Copy cURL', 'cURL', () => toCurl(call.request)),
-      ('Copy URL', 'URL', call.request.url.toString),
-      ('Copy request body', 'Request body', _bodyText(call.request.body)),
+    // (menu label, feedback name, text producer, copies a truncated body)
+    final items = <(String, String, String? Function()?, bool)>[
+      ('Copy cURL', 'cURL', () => toCurl(call.request), false),
+      ('Copy URL', 'URL', call.request.url.toString, false),
+      (
+        'Copy request body',
+        'Request body',
+        _bodyText(call.request.body),
+        call.request.body.truncated,
+      ),
       (
         'Copy response body',
         'Response body',
         response == null ? null : _bodyText(response.body),
+        response?.body.truncated ?? false,
       ),
-      ('Copy headers', 'Headers', () => headersText(call)),
+      ('Copy headers', 'Headers', () => headersText(call), false),
     ];
     return PopupMenuButton<int>(
       tooltip: 'Copy',
       icon: const Icon(Icons.copy_all_outlined),
       onSelected: (i) {
-        final (_, what, produce) = items[i];
+        final (_, what, produce, truncated) = items[i];
         final text = produce?.call();
         if (text == null) {
           ScaffoldMessenger.maybeOf(
@@ -117,7 +126,7 @@ class CopyMenu extends StatelessWidget {
           )?.showSnackBar(SnackBar(content: Text("$what isn't text")));
           return;
         }
-        unawaited(copyToClipboard(context, text, what));
+        unawaited(copyToClipboard(context, text, what, truncated: truncated));
       },
       itemBuilder: (context) => [
         for (var i = 0; i < items.length; i++)

@@ -5,9 +5,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:proxie/proxie.dart';
+import 'package:proxie/src/runtime.dart';
 import 'package:proxie/src/ui/detail/body_view.dart';
 import 'package:proxie/src/ui/detail/call_detail.dart';
 import 'package:proxie/src/ui/detail/copy_actions.dart';
+
+import '../support/ui_harness.dart';
 
 /// Runs commands straight against a [MemoryStore].
 class _Worker implements ProxieWorker {
@@ -218,10 +221,39 @@ void main() {
     expect(big.split('\n'), hasLength(4096 ~/ 16));
   });
 
-  test('textChunks splits lines and cuts long ones', () {
-    expect(textChunks('a\n\nbc'), ['a', '', 'bc']);
-    expect(textChunks('abcdefg', maxChunk: 3), ['abc', 'def', 'g']);
+  test('textChunks rejoins to the text and prefers line ends', () {
     expect(textChunks(''), ['']);
+    expect(textChunks('short'), ['short']);
+    expect(textChunks('aaa\nbbb\nccc', maxChunk: 5), ['aaa\n', 'bbb\n', 'ccc']);
+    expect(textChunks('a\nb\nc', maxChunk: 4), ['a\nb\n', 'c']);
+    expect(textChunks('abcd efghij', maxChunk: 6), ['abcd ', 'efghij']);
+    expect(textChunks('abcdefg', maxChunk: 3), ['abc', 'def', 'g']);
+  });
+
+  test('textChunks never splits a surrogate pair', () {
+    // a, b, then the two code units of the emoji.
+    expect(textChunks('ab\u{1F600}cd', maxChunk: 3), ['ab', '\u{1F600}c', 'd']);
+    final text = List.filled(3000, '\u{1F600}').join();
+    final chunks = textChunks(text, maxChunk: 2001);
+    expect(chunks.join(), text);
+    for (final c in chunks) {
+      expect(c.codeUnitAt(0), isNot(inInclusiveRange(0xDC00, 0xDFFF)));
+      expect(
+        c.codeUnitAt(c.length - 1),
+        isNot(inInclusiveRange(0xD800, 0xDBFF)),
+      );
+    }
+  });
+
+  test('textChunks keeps every character for mixed input', () {
+    final text = [
+      for (var i = 0; i < 50; i++) 'line $i ${'w' * (i * 97)}\n\n\t x',
+    ].join();
+    for (final max in [3, 17, 100, 2000]) {
+      final chunks = textChunks(text, maxChunk: max);
+      expect(chunks.join(), text, reason: 'maxChunk $max');
+      expect(chunks.every((c) => c.length <= max), isTrue);
+    }
   });
 
   testWidgets('image with broken bytes falls back to the hex view', (
@@ -448,4 +480,291 @@ void main() {
     expect(find.byTooltip('Map Local from this response'), findsNothing);
     expect(find.byTooltip('Breakpoint on this URL'), findsOneWidget);
   });
+
+  testWidgets('body text is decoded once per body, not on every build', (
+    tester,
+  ) async {
+    final body = _CountingBody('hello');
+    late StateSetter rebuild;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: StatefulBuilder(
+            builder: (context, setState) {
+              rebuild = setState;
+              return BodyView(
+                body: body,
+                renderCap: 100,
+                revealed: false,
+                onShow: () {},
+              );
+            },
+          ),
+        ),
+      ),
+    );
+    for (var i = 0; i < 3; i++) {
+      rebuild(() {});
+      await tester.pump();
+    }
+    expect(find.text('hello'), findsOneWidget);
+    expect(body.decodes, 1);
+  });
+
+  testWidgets('chunks cut at a line end lay out without a blank line', (
+    tester,
+  ) async {
+    final text = 'a\n${'b' * 2000}';
+    await store.upsert(
+      _call(response: _response(_body(utf8.encode(text), 'text/plain'))),
+    );
+    await pumpDetail(tester);
+    final first = tester.getSize(find.byKey(const ValueKey('proxie-chunk-0')));
+    final paragraph = tester.getSize(find.text('a\n')).height;
+    // The paragraph holds the text line and the empty line after the break;
+    // only the first takes space.
+    expect(first.height, closeTo(paragraph / 2, 1));
+  });
+
+  testWidgets('copying a selection across chunks gives back the exact text', (
+    tester,
+  ) async {
+    mockClipboard(tester);
+    addTearDown(tester.view.reset);
+    tester.view.physicalSize = const Size(2400, 4000);
+    tester.view.devicePixelRatio = 1;
+    final text = '${'x' * 1500}\n${'y' * 1500}\n${'z' * 2500}';
+    await store.upsert(
+      _call(response: _response(_body(utf8.encode(text), 'text/plain'))),
+    );
+    await pumpDetail(tester);
+    expect(find.byKey(const ValueKey('proxie-chunk-2')), findsOneWidget);
+
+    // Select all, then copy, as the keyboard shortcuts would.
+    final inside = tester.element(find.byKey(const ValueKey('proxie-chunk-0')));
+    Actions.invoke(
+      inside,
+      const SelectAllTextIntent(SelectionChangedCause.keyboard),
+    );
+    await tester.pump();
+    Actions.invoke(inside, CopySelectionTextIntent.copy);
+    await tester.pump();
+    expect(clipboard.single, text);
+  });
+
+  testWidgets('the selected tab and the Show choice survive a tab change', (
+    tester,
+  ) async {
+    ProxieSections.addDetailTab(
+      ProxieDetailTab(
+        id: 'edited',
+        label: 'Edits',
+        appliesTo: (call) => call.tags.contains(CallTag.edited),
+        build: (context, call) => const Text('edits'),
+      ),
+    );
+    final big = ProxieBody(
+      bytes: Uint8List(6 * 1024 * 1024)..fillRange(0, 6 * 1024 * 1024, 0x61),
+      kind: BodyKind.text,
+      contentType: 'text/plain',
+    );
+    final c = _call(response: _response(big));
+    await store.upsert(c);
+    await pumpDetail(tester);
+    await tester.tap(find.text('Show'));
+    await tester.pump();
+
+    // Leaving the tab and coming back keeps the body shown.
+    await openTab(tester, 'Timing');
+    await openTab(tester, 'Response');
+    expect(find.byKey(const ValueKey('proxie-raw-text')), findsOneWidget);
+
+    // A new tab appearing keeps the selected tab and the choice.
+    final edited = c.copyWith(tags: {CallTag.edited});
+    await store.upsert(edited);
+    calls.add(edited);
+    await tester.pump();
+    await tester.pump();
+    expect(find.widgetWithText(Tab, 'Edits'), findsOneWidget);
+    expect(find.byKey(const ValueKey('proxie-raw-text')), findsOneWidget);
+
+    // So does a tab going away while another one is selected.
+    await openTab(tester, 'Headers');
+    final plain = edited.copyWith(tags: {});
+    await store.upsert(plain);
+    calls.add(plain);
+    await tester.pump();
+    await tester.pump();
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(Tab, 'Edits'), findsNothing);
+    expect(find.text('x-trace'), findsOneWidget);
+  });
+
+  testWidgets('the selected tab falls back when its tab goes away', (
+    tester,
+  ) async {
+    ProxieSections.addDetailTab(
+      ProxieDetailTab(
+        id: 'edited',
+        label: 'Edits',
+        appliesTo: (call) => call.tags.contains(CallTag.edited),
+        build: (context, call) => const Text('edits'),
+      ),
+    );
+    final c = _call(
+      response: _response(_body(utf8.encode('body'), 'text/plain')),
+    ).copyWith(tags: {CallTag.edited});
+    await store.upsert(c);
+    await pumpDetail(tester);
+    await openTab(tester, 'Edits');
+    expect(find.text('edits'), findsOneWidget);
+
+    final plain = c.copyWith(tags: {});
+    await store.upsert(plain);
+    calls.add(plain);
+    await tester.pump();
+    await tester.pump();
+    await tester.pumpAndSettle();
+    expect(find.text('edits'), findsNothing);
+    // The last tab left, Timing, is selected.
+    expect(find.text('Started'), findsOneWidget);
+  });
+
+  testWidgets('a faulty registered tab is reported once per detail', (
+    tester,
+  ) async {
+    var checks = 0;
+    ProxieSections.addDetailTab(
+      ProxieDetailTab(
+        id: 'broken',
+        label: 'Broken',
+        appliesTo: (call) {
+          checks++;
+          throw StateError('bad tab');
+        },
+        build: (context, call) => const Text('broken'),
+      ),
+    );
+    final reports = <FlutterErrorDetails>[];
+    final previous = FlutterError.onError;
+    FlutterError.onError = reports.add;
+    try {
+      final c = _call(response: _response(_body([], null)));
+      await store.upsert(c);
+      await pumpDetail(tester);
+      for (var i = 0; i < 3; i++) {
+        calls.add(c);
+        await tester.pump();
+        await tester.pump();
+      }
+    } finally {
+      FlutterError.onError = previous;
+    }
+    expect(checks, greaterThan(1));
+    expect(reports, hasLength(1));
+    expect(reports.single.exception, isA<StateError>());
+  });
+
+  testWidgets('copying a truncated body says so', (tester) async {
+    mockClipboard(tester);
+    final body = ProxieBody(
+      bytes: Uint8List.fromList(utf8.encode('partial')),
+      kind: BodyKind.text,
+      contentType: 'text/plain',
+      truncated: true,
+      originalLength: 9000000,
+    );
+    await store.upsert(_call(response: _response(body)));
+    await pumpDetail(tester);
+
+    await chooseCopy(tester, 'Copy response body');
+    expect(clipboard, ['partial']);
+    expect(find.text('Response body copied (truncated)'), findsOneWidget);
+  });
+
+  testWidgets('a failed refresh keeps the call and offers Retry', (
+    tester,
+  ) async {
+    final c = _call(
+      response: _response(_body(utf8.encode('v1'), 'text/plain')),
+    );
+    await store.upsert(c);
+    await pumpDetail(tester);
+    expect(find.text('v1'), findsOneWidget);
+
+    worker.failWith = StateError('worker busy');
+    calls.add(c);
+    await tester.pump();
+    await tester.pump();
+    expect(find.text("Couldn't refresh this request"), findsOneWidget);
+    expect(find.text('v1'), findsOneWidget);
+
+    worker.failWith = null;
+    await store.upsert(
+      c.copyWith(response: _response(_body(utf8.encode('v2'), 'text/plain'))),
+    );
+    await tester.tap(find.text('Retry'));
+    await tester.pump();
+    await tester.pump();
+    expect(find.text("Couldn't refresh this request"), findsNothing);
+    expect(find.text('v2'), findsOneWidget);
+  });
+
+  testWidgets('the inspector shows the detail of the selected call', (
+    tester,
+  ) async {
+    addTearDown(tester.view.reset);
+    setViewSize(tester, tabletSize);
+    await initProxie(tester);
+    addTearDown(() => tester.runAsync(Proxie.shutdown));
+    await tester.pumpWidget(hostApp());
+    final runtime = proxieActive.value!;
+    final c = _call(
+      response: _response(_body(utf8.encode('from the worker'), 'text/plain')),
+    );
+    await tester.runAsync(() async {
+      runtime.worker.upsert(c);
+      // Commands run in order, so this returns after the upsert.
+      await runtime.worker.run(const ListSessions());
+    });
+    Proxie.open();
+    await tester.pumpAndSettle();
+
+    runtime.controller.select(c.id);
+    for (
+      var i = 0;
+      i < 50 && find.text('from the worker').evaluate().isEmpty;
+      i++
+    ) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 20)),
+      );
+      await tester.pump();
+    }
+    expect(find.byType(CallDetail), findsOneWidget);
+    expect(find.text('from the worker'), findsOneWidget);
+
+    mockClipboard(tester);
+    await chooseCopy(tester, 'Copy URL');
+    expect(clipboard, ['https://api.test/users?page=2']);
+    expect(find.text('URL copied'), findsOneWidget);
+  });
+}
+
+/// A text body that counts how often it is decoded.
+class _CountingBody extends ProxieBody {
+  _CountingBody(String text)
+    : super(
+        bytes: Uint8List.fromList(utf8.encode(text)),
+        kind: BodyKind.text,
+        contentType: 'text/plain',
+      );
+
+  int decodes = 0;
+
+  @override
+  String? get text {
+    decodes++;
+    return super.text;
+  }
 }

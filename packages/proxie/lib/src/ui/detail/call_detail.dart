@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:developer' as developer;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import 'package:proxie/src/model/body.dart';
 import 'package:proxie/src/model/call.dart';
 import 'package:proxie/src/ui/detail/body_view.dart';
 import 'package:proxie/src/ui/detail/copy_actions.dart';
@@ -54,13 +56,24 @@ class CallDetail extends StatefulWidget {
   State<CallDetail> createState() => _CallDetailState();
 }
 
-class _CallDetailState extends State<CallDetail> {
+class _CallDetailState extends State<CallDetail> with TickerProviderStateMixin {
   StreamSubscription<ProxieCall>? _sub;
   ProxieCall? _call;
   bool _loaded = false;
   Object? _error;
   bool _fetching = false;
   bool _again = false;
+
+  // Tab selection by id, so it survives tabs coming and going.
+  TabController? _tabController;
+  List<String> _tabIds = const [];
+  String _selectedTab = 'response';
+
+  // Bodies ('request', 'response') whose "Show" was tapped.
+  final Set<String> _revealed = {};
+
+  // Registered tabs whose appliesTo threw; each is reported once.
+  final Set<String> _reportedTabs = {};
 
   @override
   void initState() {
@@ -81,6 +94,7 @@ class _CallDetailState extends State<CallDetail> {
       _call = null;
       _loaded = false;
       _error = null;
+      _revealed.clear();
       unawaited(_load());
     }
   }
@@ -103,8 +117,45 @@ class _CallDetailState extends State<CallDetail> {
   @override
   void dispose() {
     unawaited(_sub?.cancel());
+    _tabController?.dispose();
     super.dispose();
   }
+
+  TabController _controllerFor(List<String> ids) {
+    final current = _tabController;
+    if (current != null && listEquals(ids, _tabIds)) return current;
+    var index = ids.indexOf(_selectedTab);
+    // The selected tab went away: keep the position, clamped.
+    if (index < 0) index = (current?.index ?? 0).clamp(0, ids.length - 1);
+    _tabIds = ids;
+    _selectedTab = ids[index];
+    final next = TabController(
+      length: ids.length,
+      initialIndex: index,
+      vsync: this,
+    )..addListener(_onTabChanged);
+    _tabController = next;
+    if (current != null) {
+      current.removeListener(_onTabChanged);
+      // The old tab bar lets go of it in this frame.
+      WidgetsBinding.instance.addPostFrameCallback((_) => current.dispose());
+    }
+    return next;
+  }
+
+  void _onTabChanged() {
+    final c = _tabController;
+    if (c != null) _selectedTab = _tabIds[c.index];
+  }
+
+  Widget _body(String side, ProxieBody body) => BodyView(
+    key: ValueKey('$side-body'),
+    body: body,
+    renderCap: widget.renderCap,
+    revealed: _revealed.contains(side),
+    onShow: () => setState(() => _revealed.add(side)),
+    jsonBuilder: widget.jsonBuilder,
+  );
 
   // One fetch at a time; changes arriving meanwhile cause one more fetch.
   Future<void> _load() async {
@@ -178,49 +229,40 @@ class _CallDetailState extends State<CallDetail> {
   Widget _tabs(BuildContext context, ProxieCall call) {
     final tabs = <(String, String, WidgetBuilder)>[
       ('response', 'Response', (_) => _responseTab(call)),
-      (
-        'request',
-        'Request',
-        (_) => BodyView(
-          key: const ValueKey('request-body'),
-          body: call.request.body,
-          renderCap: widget.renderCap,
-          jsonBuilder: widget.jsonBuilder,
-        ),
-      ),
+      ('request', 'Request', (_) => _body('request', call.request.body)),
       ('headers', 'Headers', (_) => HeadersTab(call: call)),
       ('timing', 'Timing', (_) => TimingTab(call: call)),
       for (final tab in ProxieSections.detailTabs)
         if (_applies(tab, call))
           ('custom:${tab.id}', tab.label, (c) => tab.build(c, call)),
     ];
-    return DefaultTabController(
-      // A changed set of tabs needs a new controller of the right length.
-      key: ValueKey(tabs.map((t) => t.$1).join('|')),
-      length: tabs.length,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          TabBar(
-            isScrollable: true,
-            tabAlignment: TabAlignment.start,
-            tabs: [for (final t in tabs) Tab(text: t.$2)],
+    final controller = _controllerFor([for (final t in tabs) t.$1]);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        TabBar(
+          controller: controller,
+          isScrollable: true,
+          tabAlignment: TabAlignment.start,
+          tabs: [for (final t in tabs) Tab(text: t.$2)],
+        ),
+        Expanded(
+          child: TabBarView(
+            controller: controller,
+            children: [for (final t in tabs) Builder(builder: t.$3)],
           ),
-          Expanded(
-            child: TabBarView(
-              children: [for (final t in tabs) Builder(builder: t.$3)],
-            ),
-          ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
-  static bool _applies(ProxieDetailTab tab, ProxieCall call) {
+  bool _applies(ProxieDetailTab tab, ProxieCall call) {
     try {
       return tab.appliesTo(call);
     } on Object catch (e, st) {
-      // A faulty registered tab is reported and left out, never fatal.
+      // A faulty registered tab is left out, never fatal, and reported once
+      // rather than on every refresh.
+      if (!_reportedTabs.add(tab.id)) return false;
       FlutterError.reportError(
         FlutterErrorDetails(
           exception: e,
@@ -246,14 +288,7 @@ class _CallDetailState extends State<CallDetail> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         if (error != null) _ErrorView(error, compact: true),
-        Expanded(
-          child: BodyView(
-            key: const ValueKey('response-body'),
-            body: response.body,
-            renderCap: widget.renderCap,
-            jsonBuilder: widget.jsonBuilder,
-          ),
-        ),
+        Expanded(child: _body('response', response.body)),
       ],
     );
   }
