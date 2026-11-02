@@ -226,6 +226,11 @@ abstract final class Proxie {
   /// transitions (otherwise a back gesture can pop the app's route along
   /// with closing the inspector) and for apps calling [init] after
   /// `runApp`. An observer can only be added to one navigator.
+  ///
+  /// The hold is a pop entry on the app's top route: if a back press reaches
+  /// the app's navigator while the inspector is open, a `PopScope` on that
+  /// route sees `onPopInvokedWithResult(false, null)` even though Proxie
+  /// handled the press by closing the inspector.
   static NavigatorObserver get navigatorObserver =>
       kProxieEnabled ? proxieNavigatorObserver : _inertObserver;
 

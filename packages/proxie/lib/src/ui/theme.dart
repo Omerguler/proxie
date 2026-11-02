@@ -192,7 +192,8 @@ abstract final class ProxieTheme {
 
 /// Puts [child] in Proxie's theme for [mode], and supplies what Proxie's
 /// Material widgets need when the host does not: a [MediaQuery] (from the
-/// view), Material/Cupertino/Widgets localizations (English defaults) and
+/// view), Material/Cupertino/Widgets localizations (English defaults,
+/// whatever the host's locale) and
 /// a [Directionality] (the host's, else left-to-right). Lets `Proxie.wrap`
 /// work under a `WidgetsApp`, a `CupertinoApp` or no app at all.
 class ProxieThemed extends StatelessWidget {
@@ -221,9 +222,11 @@ class ProxieThemed extends StatelessWidget {
           MaterialLocalizations,
         ) ==
         null) {
+      // The default delegates only support English, so the fallback is
+      // always en_US whatever the host's locale; the Directionality inside
+      // keeps the host's text direction.
       result = Localizations(
-        locale:
-            Localizations.maybeLocaleOf(context) ?? const Locale('en', 'US'),
+        locale: const Locale('en', 'US'),
         delegates: const [
           DefaultMaterialLocalizations.delegate,
           DefaultCupertinoLocalizations.delegate,

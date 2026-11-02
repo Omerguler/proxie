@@ -23,8 +23,10 @@ class ProxieHost extends StatefulWidget {
 
 class _ProxieHostState extends State<ProxieHost> {
   ProxieRuntime? _runtime;
-  // The app's last NavigationNotification, and whether Proxie is speaking
-  // for the back button instead (overlay inspector open).
+  OverlayNavigationAdapter? _overlay;
+  // The app's own back state from its last NavigationNotification, and
+  // whether Proxie is speaking for the back button instead (overlay
+  // inspector showing).
   bool _appCanHandlePop = false;
   bool _overlayOpen = false;
 
@@ -38,7 +40,7 @@ class _ProxieHostState extends State<ProxieHost> {
   @override
   void dispose() {
     proxieActive.removeListener(_onRuntime);
-    _runtime?.controller.removeListener(_onOpenChanged);
+    _overlay?.removeListener(_onOpenChanged);
     super.dispose();
   }
 
@@ -49,21 +51,31 @@ class _ProxieHostState extends State<ProxieHost> {
 
   void _attach(ProxieRuntime? runtime) {
     if (identical(runtime, _runtime)) return;
-    _runtime?.controller.removeListener(_onOpenChanged);
+    _overlay?.removeListener(_onOpenChanged);
     _runtime = runtime;
-    runtime?.controller.addListener(_onOpenChanged);
+    final nav = runtime?.navigation;
+    _overlay = nav is OverlayNavigationAdapter ? nav : null;
+    _overlay?.addListener(_onOpenChanged);
     _onOpenChanged();
   }
 
+  // Follows the adapter rather than the controller: the adapter notifies
+  // after its guard released the app route, so the app's real back state
+  // has been recorded by then.
   void _onOpenChanged() {
-    final runtime = _runtime;
-    final open =
-        runtime != null && runtime.isOverlay && runtime.controller.isOpen;
+    final open = _overlay?.isShowing ?? false;
     if (open == _overlayOpen) return;
     setState(() => _overlayOpen = open);
     NavigationNotification(
       canHandlePop: open || _appCanHandlePop,
     ).dispatch(context);
+  }
+
+  void _onAppNotification(NavigationNotification n) {
+    // While the guard blocks an app route, the app's navigator reports the
+    // block (can handle pop), not its own state.
+    if (_overlay?.blocksAppNavigation ?? false) return;
+    _appCanHandlePop = n.canHandlePop;
   }
 
   @override
@@ -78,7 +90,7 @@ class _ProxieHostState extends State<ProxieHost> {
           excluding: _overlayOpen,
           child: NotificationListener<NavigationNotification>(
             onNotification: (n) {
-              _appCanHandlePop = n.canHandlePop;
+              _onAppNotification(n);
               // Swallowed while Proxie speaks for the back button.
               return _overlayOpen;
             },

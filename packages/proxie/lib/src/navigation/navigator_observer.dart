@@ -26,6 +26,12 @@ final proxieNavigatorObserver = ProxieNavigatorObserver();
 /// While engaged, keeps the app's top route from popping (back button and
 /// predictive back gestures) and reports each attempt to the `onBack`
 /// callback instead. Follows the top route as the app navigates.
+///
+/// The block is an ordinary [PopEntry] on the app's route, so when an
+/// attempt reaches the app's navigator (`maybePop`, e.g. a back press the
+/// app's navigator sees first), the route's other pop entries are invoked
+/// too: an app `PopScope` on that route gets
+/// `onPopInvokedWithResult(false, null)` although Proxie handled the press.
 class HostPopGuard {
   HostPopGuard(this.observer);
 
@@ -35,6 +41,11 @@ class HostPopGuard {
   ModalRoute<dynamic>? _route;
 
   bool get isEngaged => _entry != null;
+
+  /// Whether a blocking entry sits on an app route right now. While true,
+  /// the app navigator's NavigationNotifications report the block, not the
+  /// app's own state.
+  bool get isBlocking => _route != null;
 
   void engage(VoidCallback onBack) {
     if (_entry != null) return;
@@ -59,14 +70,18 @@ class HostPopGuard {
     if (identical(target, _route)) return;
     _unregister(entry);
     if (target != null) {
-      target.registerPopEntry(entry);
+      // Set first: the notification registering dispatches is the block's.
       _route = target;
+      target.registerPopEntry(entry);
     }
   }
 
   void _unregister(_BlockingPopEntry entry) {
-    _route?.unregisterPopEntry(entry);
+    final route = _route;
+    // Cleared first: the notification unregistering dispatches is the app's
+    // real state again.
     _route = null;
+    route?.unregisterPopEntry(entry);
   }
 }
 

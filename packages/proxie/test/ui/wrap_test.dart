@@ -1,4 +1,5 @@
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -26,6 +27,45 @@ class _RecordingAdapter implements ProxieNavigationAdapter {
     hides++;
     isShowing = false;
   }
+}
+
+class _RtlWidgetsLocalizations extends DefaultWidgetsLocalizations {
+  const _RtlWidgetsLocalizations();
+
+  static const LocalizationsDelegate<WidgetsLocalizations> delegate =
+      _RtlDelegate();
+
+  @override
+  TextDirection get textDirection => TextDirection.rtl;
+}
+
+class _RtlDelegate extends LocalizationsDelegate<WidgetsLocalizations> {
+  const _RtlDelegate();
+
+  @override
+  bool isSupported(Locale locale) => locale.languageCode == 'ar';
+
+  @override
+  Future<WidgetsLocalizations> load(Locale locale) =>
+      SynchronousFuture(const _RtlWidgetsLocalizations());
+
+  @override
+  bool shouldReload(_RtlDelegate old) => false;
+}
+
+class _AnyCupertinoDelegate
+    extends LocalizationsDelegate<CupertinoLocalizations> {
+  const _AnyCupertinoDelegate();
+
+  @override
+  bool isSupported(Locale locale) => true;
+
+  @override
+  Future<CupertinoLocalizations> load(Locale locale) =>
+      SynchronousFuture(const DefaultCupertinoLocalizations());
+
+  @override
+  bool shouldReload(_AnyCupertinoDelegate old) => false;
 }
 
 Future<void> _backGesture(WidgetTester tester, String method) async {
@@ -226,6 +266,88 @@ void main() {
       await tester.runAsync(Proxie.shutdown);
     });
 
+    testWidgets('under WidgetsApp with a non-English locale', (tester) async {
+      addTearDown(tester.view.reset);
+      setViewSize(tester, phoneSize);
+      await initProxie(tester);
+      await tester.pumpWidget(
+        WidgetsApp(
+          color: const Color(0xFF000000),
+          locale: const Locale('tr'),
+          supportedLocales: const [Locale('tr')],
+          builder: Proxie.wrap,
+          pageRouteBuilder: <T>(settings, builder) => PageRouteBuilder<T>(
+            settings: settings,
+            pageBuilder: (context, _, _) => builder(context),
+          ),
+          home: const Text('ev'),
+        ),
+      );
+      await tester.tap(bubbleButton);
+      await tester.pumpAndSettle();
+      expect(shellFinder, findsOneWidget);
+      await tester.tap(find.byTooltip('Close'));
+      await tester.pumpAndSettle();
+      expect(shellFinder, findsNothing);
+      await tester.runAsync(Proxie.shutdown);
+    });
+
+    testWidgets('under CupertinoApp with a non-English locale', (tester) async {
+      addTearDown(tester.view.reset);
+      setViewSize(tester, phoneSize);
+      await initProxie(tester);
+      await tester.pumpWidget(
+        const CupertinoApp(
+          locale: Locale('tr'),
+          supportedLocales: [Locale('tr')],
+          // Cupertino-only localizations for tr, as a real app would have;
+          // no Material ones.
+          localizationsDelegates: [_AnyCupertinoDelegate()],
+          builder: Proxie.wrap,
+          home: CupertinoPageScaffold(child: Text('ev')),
+        ),
+      );
+      await tester.tap(bubbleButton);
+      await tester.pumpAndSettle();
+      expect(shellFinder, findsOneWidget);
+      controllerIn(tester).select('a');
+      await tester.pumpAndSettle();
+      await tester.tap(find.byType(BackButton));
+      await tester.pumpAndSettle();
+      expect(find.text('No requests yet'), findsOneWidget);
+      await tester.runAsync(Proxie.shutdown);
+    });
+
+    testWidgets('under an rtl WidgetsApp locale keeps rtl', (tester) async {
+      addTearDown(tester.view.reset);
+      setViewSize(tester, phoneSize);
+      await initProxie(tester);
+      await tester.pumpWidget(
+        WidgetsApp(
+          color: const Color(0xFF000000),
+          locale: const Locale('ar'),
+          supportedLocales: const [Locale('ar')],
+          localizationsDelegates: const [_RtlWidgetsLocalizations.delegate],
+          builder: Proxie.wrap,
+          pageRouteBuilder: <T>(settings, builder) => PageRouteBuilder<T>(
+            settings: settings,
+            pageBuilder: (context, _, _) => builder(context),
+          ),
+          home: const Text('home'),
+        ),
+      );
+      Proxie.open();
+      await tester.pumpAndSettle();
+      expect(
+        Directionality.of(tester.element(find.text('No requests yet'))),
+        TextDirection.rtl,
+      );
+      await tester.tap(find.byTooltip('Close'));
+      await tester.pumpAndSettle();
+      expect(shellFinder, findsNothing);
+      await tester.runAsync(Proxie.shutdown);
+    });
+
     testWidgets('keeps the host text direction', (tester) async {
       addTearDown(tester.view.reset);
       setViewSize(tester, phoneSize);
@@ -269,6 +391,9 @@ void main() {
       await tester.runAsync(Proxie.shutdown);
     });
 
+    // This cannot isolate the ExcludeSemantics wrapper: the inspector
+    // route's BlockSemantics also drops the host's nodes. Kept as a guard on
+    // the behaviour.
     testWidgets('the host is hidden from semantics while the overlay is '
         'open', (tester) async {
       addTearDown(tester.view.reset);
@@ -382,8 +507,12 @@ void main() {
         ),
       );
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      final key = GlobalKey<NavigatorState>();
       await initProxie(tester);
-      await tester.pumpWidget(hostApp());
+      // With the observer, so the guard's own notifications are in play.
+      await tester.pumpWidget(
+        hostApp(navigatorKey: key, observers: [Proxie.navigatorObserver]),
+      );
       await tester.pumpAndSettle();
       calls.clear();
 
@@ -394,6 +523,27 @@ void main() {
       await tester.tap(find.byTooltip('Close'));
       await tester.pumpAndSettle();
       expect(calls.last, isFalse, reason: "the app's single route can't pop");
+
+      // The app navigates while the inspector is open: on close the app's
+      // new state is sent, not the guard's or the stale one.
+      Proxie.open();
+      await tester.pumpAndSettle();
+      key.currentState!.push(
+        MaterialPageRoute<void>(builder: (_) => const Text('pushed')),
+      );
+      await tester.pumpAndSettle();
+      expect(calls.last, isTrue);
+      await tester.tap(find.byTooltip('Close'));
+      await tester.pumpAndSettle();
+      expect(calls.last, isTrue, reason: 'the app can pop its pushed route');
+
+      Proxie.open();
+      await tester.pumpAndSettle();
+      key.currentState!.pop();
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Close'));
+      await tester.pumpAndSettle();
+      expect(calls.last, isFalse, reason: 'back to a single route');
       await tester.runAsync(Proxie.shutdown);
     });
   });

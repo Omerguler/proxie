@@ -33,6 +33,11 @@ class OverlayNavigationAdapter extends ChangeNotifier
   VoidCallback? _onDismissed;
   bool _observing = false;
 
+  /// Whether the guard currently blocks an app route, so the app
+  /// navigator's NavigationNotifications describe the block rather than the
+  /// app.
+  bool get blocksAppNavigation => _guard.isBlocking;
+
   /// The inspector page while showing.
   Widget? get page => _page;
 

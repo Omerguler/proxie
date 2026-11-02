@@ -40,7 +40,7 @@ export 'src/storage/store.dart';
 export 'src/ui/bubble.dart' show ProxieBubble;
 export 'src/ui/inspector_shell.dart';
 export 'src/ui/sections.dart';
-export 'src/ui/theme.dart';
+export 'src/ui/theme.dart' hide ProxieThemed;
 export 'src/worker/commands.dart';
 export 'src/worker/worker.dart';
 export 'src/worker/worker_factory.dart';
