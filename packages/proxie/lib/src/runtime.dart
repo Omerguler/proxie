@@ -8,6 +8,7 @@ import 'package:proxie/src/core/engine.dart';
 import 'package:proxie/src/navigation/navigation_adapter.dart';
 import 'package:proxie/src/navigation/overlay_navigation.dart';
 import 'package:proxie/src/ui/bubble.dart';
+import 'package:proxie/src/ui/detail/call_detail.dart';
 import 'package:proxie/src/ui/inspector_shell.dart';
 import 'package:proxie/src/ui/list/call_list.dart';
 import 'package:proxie/src/worker/worker.dart';
@@ -83,6 +84,7 @@ class ProxieRuntime {
             splitWidth: config.splitWidth,
             themeMode: config.themeMode,
             listBuilder: _buildList,
+            detailBuilder: _buildDetail,
           ),
           onDismissed: _onDismissed,
         );
@@ -110,6 +112,13 @@ class ProxieRuntime {
       onSelected: inspector.select,
     );
   }
+
+  Widget _buildDetail(BuildContext context, String callId) => CallDetail(
+    worker: worker,
+    calls: engine.calls,
+    callId: callId,
+    renderCap: config.renderCap,
+  );
 
   void _onDismissed() {
     if (!_disposed) controller.close();
