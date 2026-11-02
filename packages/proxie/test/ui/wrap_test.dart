@@ -520,9 +520,17 @@ void main() {
       await tester.pumpAndSettle();
       expect(calls.last, isTrue);
 
+      calls.clear();
       await tester.tap(find.byTooltip('Close'));
       await tester.pumpAndSettle();
-      expect(calls.last, isFalse, reason: "the app's single route can't pop");
+      // The close dispatch and the guard's release notification both report
+      // false; a transient true here would be the stale guard value.
+      expect(calls, isNotEmpty);
+      expect(
+        calls,
+        everyElement(isFalse),
+        reason: "the app's single route can't pop, with no transient true",
+      );
 
       // The app navigates while the inspector is open: on close the app's
       // new state is sent, not the guard's or the stale one.

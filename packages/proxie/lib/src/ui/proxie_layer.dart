@@ -59,9 +59,10 @@ class _ProxieHostState extends State<ProxieHost> {
     _onOpenChanged();
   }
 
-  // Follows the adapter rather than the controller: the adapter notifies
-  // after its guard released the app route, so the app's real back state
-  // has been recorded by then.
+  // Follows the adapter rather than the controller. Route notifications are
+  // dispatched post-frame, so on close this sends the last state recorded
+  // before the guard engaged; the guard's release notification then follows
+  // with the app's current back state.
   void _onOpenChanged() {
     final open = _overlay?.isShowing ?? false;
     if (open == _overlayOpen) return;
