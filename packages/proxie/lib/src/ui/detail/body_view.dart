@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'package:proxie/src/core/body_classifier.dart' show isLatin1Text;
 import 'package:proxie/src/model/body.dart';
+import 'package:proxie/src/ui/common.dart';
 import 'package:proxie/src/ui/json/raw_text_view.dart';
 import 'package:proxie/src/worker/worker.dart';
 

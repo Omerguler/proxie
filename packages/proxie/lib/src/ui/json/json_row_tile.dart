@@ -49,6 +49,7 @@ List<JsonRowAction> jsonRowActions(JsonRow row, ArraySchema? schema) {
   return [
     if (!container) JsonRowAction.editValue,
     if (row.key != null) JsonRowAction.rename,
+    // The root (shown in the tree's header) cannot be deleted.
     if (row.nodeId != 0) JsonRowAction.delete,
     if (row.index != null) JsonRowAction.duplicate,
     if (row.kind == JsonKind.object) JsonRowAction.addKey,
@@ -64,6 +65,9 @@ List<JsonRowAction> jsonRowActions(JsonRow row, ArraySchema? schema) {
 /// the value preview colored by kind, the schema of an array, and (when
 /// [editable]) `+ key` chips for missing members and an edit menu, also
 /// opened by a long press.
+///
+/// With [header] it shows the top-level object or array above the tree:
+/// no indentation or expander, and it does not toggle.
 class JsonRowTile extends StatefulWidget {
   /// Creates the tile of [row].
   const JsonRowTile({
@@ -71,6 +75,7 @@ class JsonRowTile extends StatefulWidget {
     required this.editable,
     super.key,
     this.schema,
+    this.header = false,
     this.highlighted = false,
     this.onToggle,
     this.onAddMissingKey,
@@ -85,6 +90,9 @@ class JsonRowTile extends StatefulWidget {
 
   /// The schema of an array row.
   final ArraySchema? schema;
+
+  /// Whether this is the header for the top-level value.
+  final bool header;
 
   /// Whether this row is the revealed search match.
   final bool highlighted;
@@ -113,6 +121,7 @@ class _JsonRowTileState extends State<JsonRowTile> {
     final muted = theme.colorScheme.onSurfaceVariant;
     final style = theme.textTheme.bodySmall?.copyWith(fontFamily: 'monospace');
     final container = row.kind == JsonKind.object || row.kind == JsonKind.array;
+    final header = widget.header;
     final valueColor = switch (row.kind) {
       JsonKind.string => colors.jsonString,
       JsonKind.number ||
@@ -126,6 +135,7 @@ class _JsonRowTileState extends State<JsonRowTile> {
     final schema = widget.schema;
     final key = row.key;
     final index = row.index;
+    final label = key ?? (index != null ? '[$index]' : 'root');
     final text = Text.rich(
       TextSpan(
         children: [
@@ -138,6 +148,11 @@ class _JsonRowTileState extends State<JsonRowTile> {
           ] else if (index != null)
             TextSpan(
               text: '[$index]: ',
+              style: TextStyle(color: muted),
+            )
+          else if (header)
+            TextSpan(
+              text: 'root: ',
               style: TextStyle(color: muted),
             ),
           TextSpan(
@@ -165,52 +180,67 @@ class _JsonRowTileState extends State<JsonRowTile> {
       softWrap: false,
       overflow: TextOverflow.ellipsis,
     );
-    return Material(
-      color: widget.highlighted
-          ? theme.colorScheme.primary.withValues(alpha: 0.18)
-          : Colors.transparent,
-      child: InkWell(
-        onTap: container ? widget.onToggle : null,
-        onLongPress: actions.isEmpty
-            ? null
-            : () => _menu.currentState?.showButtonMenu(),
-        child: SizedBox(
-          height: jsonRowExtent,
-          child: Row(
-            children: [
-              SizedBox(width: 4 + jsonIndent * row.depth),
-              SizedBox(
-                width: 18,
-                child: container
-                    ? Icon(
-                        row.expanded
-                            ? Icons.arrow_drop_down
-                            : Icons.arrow_right,
-                        size: 18,
-                        color: muted,
-                      )
-                    : null,
-              ),
-              Expanded(child: text),
-              if (actions.isNotEmpty)
-                PopupMenuButton<JsonRowAction>(
-                  key: _menu,
-                  tooltip: 'Edit',
-                  padding: EdgeInsets.zero,
-                  iconSize: 16,
-                  constraints: const BoxConstraints(minWidth: 180),
-                  icon: Icon(Icons.more_vert, color: muted),
-                  style: const ButtonStyle(
-                    minimumSize: WidgetStatePropertyAll(Size(28, 28)),
-                    fixedSize: WidgetStatePropertyAll(Size(28, 28)),
-                  ),
-                  onSelected: widget.onAction,
-                  itemBuilder: (context) => [
-                    for (final a in actions)
-                      PopupMenuItem(value: a, child: Text(a.label)),
-                  ],
+    final highlighted = widget.highlighted;
+    return Semantics(
+      expanded: container && !header ? row.expanded : null,
+      selected: highlighted,
+      child: Material(
+        color: highlighted
+            ? theme.colorScheme.primary.withValues(alpha: 0.18)
+            : Colors.transparent,
+        child: InkWell(
+          onTap: container && !header ? widget.onToggle : null,
+          onLongPress: actions.isEmpty
+              ? null
+              : () => _menu.currentState?.showButtonMenu(),
+          child: SizedBox(
+            height: jsonRowExtent,
+            child: Row(
+              children: [
+                // The search match is marked by more than its color.
+                Container(
+                  width: 3,
+                  color: highlighted
+                      ? theme.colorScheme.primary
+                      : Colors.transparent,
                 ),
-            ],
+                SizedBox(width: header ? 9 : 1 + jsonIndent * row.depth),
+                if (!header)
+                  SizedBox(
+                    width: 18,
+                    child: container
+                        ? Icon(
+                            row.expanded
+                                ? Icons.arrow_drop_down
+                                : Icons.arrow_right,
+                            size: 18,
+                            color: muted,
+                          )
+                        : null,
+                  ),
+                Expanded(child: text),
+                if (actions.isNotEmpty)
+                  PopupMenuButton<JsonRowAction>(
+                    key: _menu,
+                    tooltip: 'Edit $label',
+                    padding: EdgeInsets.zero,
+                    iconSize: 16,
+                    constraints: const BoxConstraints(minWidth: 180),
+                    icon: Icon(Icons.more_vert, color: muted),
+                    // As wide as a full tap target; rows are 28 high, and the
+                    // whole row opens the same menu on a long press.
+                    style: const ButtonStyle(
+                      minimumSize: WidgetStatePropertyAll(Size(48, 28)),
+                      fixedSize: WidgetStatePropertyAll(Size(48, 28)),
+                    ),
+                    onSelected: widget.onAction,
+                    itemBuilder: (context) => [
+                      for (final a in actions)
+                        PopupMenuItem(value: a, child: Text(a.label)),
+                    ],
+                  ),
+              ],
+            ),
           ),
         ),
       ),
@@ -227,22 +257,29 @@ class _MissingKeyChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.only(left: 6),
-      child: Material(
-        color: theme.colorScheme.surfaceContainer,
-        shape: StadiumBorder(
-          side: BorderSide(color: theme.colorScheme.outlineVariant),
-        ),
-        child: InkWell(
-          customBorder: const StadiumBorder(),
-          onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-            child: Text(
-              '+ $label',
-              style: theme.textTheme.labelSmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
+    return Semantics(
+      container: true,
+      button: true,
+      label: 'Add key $label',
+      excludeSemantics: true,
+      child: Padding(
+        padding: const EdgeInsets.only(left: 6),
+        child: Material(
+          color: theme.colorScheme.surfaceContainer,
+          shape: StadiumBorder(
+            side: BorderSide(color: theme.colorScheme.outlineVariant),
+          ),
+          child: InkWell(
+            customBorder: const StadiumBorder(),
+            onTap: onTap,
+            child: Padding(
+              // As tall as a 28 px row allows, for a larger tap target.
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              child: Text(
+                '+ $label',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
               ),
             ),
           ),

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
@@ -15,7 +16,8 @@ final _numberGrammar = RegExp(
 
 /// Reads [text] as a value of [kind]: a string as typed, a number by the
 /// JSON grammar (kept exactly as a [JsonNumber]), `true` / `false`, null,
-/// or JSON text for an object or array. Returns the value, or an error
+/// or JSON text for an object or array (numbers inside kept exactly too;
+/// a repeated member name is an error). Returns the value, or an error
 /// message.
 ({Object? value, String? error}) parseJsonValue(JsonKind kind, String text) {
   switch (kind) {
@@ -37,20 +39,25 @@ final _numberGrammar = RegExp(
       return (value: null, error: null);
     case JsonKind.object:
     case JsonKind.array:
-      final Object? decoded;
+      // Parsed by Proxie's own parser, so numbers keep their exact text
+      // (as JsonNumber) and repeated member names are caught.
+      final doc = JsonDocument.tryParse(Uint8List.fromList(utf8.encode(text)));
+      final parseError = doc.parseError;
+      if (parseError != null) return (value: null, error: parseError);
+      final Object? value;
       try {
-        decoded = jsonDecode(text);
+        value = doc.valueOf(0);
       } on FormatException catch (e) {
-        return (value: null, error: 'Invalid JSON: ${e.message}');
+        return (value: null, error: e.message);
       }
-      final ok = kind == JsonKind.object ? decoded is Map : decoded is List;
+      final ok = kind == JsonKind.object ? value is Map : value is List;
       if (!ok) {
         return (
           value: null,
           error: kind == JsonKind.object ? 'Not an object' : 'Not an array',
         );
       }
-      return (value: decoded, error: null);
+      return (value: value, error: null);
   }
 }
 

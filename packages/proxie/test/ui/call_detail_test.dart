@@ -10,7 +10,7 @@ import 'package:proxie/src/ui/detail/body_view.dart';
 import 'package:proxie/src/ui/detail/call_detail.dart';
 import 'package:proxie/src/ui/detail/copy_actions.dart';
 import 'package:proxie/src/ui/json/json_tree_view.dart';
-import 'package:proxie/src/ui/json/raw_text_view.dart';
+import 'package:proxie/src/ui/json/text_lines.dart';
 
 import '../support/ui_harness.dart';
 

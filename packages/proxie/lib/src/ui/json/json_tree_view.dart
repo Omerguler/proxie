@@ -3,10 +3,12 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import 'package:proxie/src/json/json_commands.dart';
 import 'package:proxie/src/json/json_document.dart';
 import 'package:proxie/src/json/json_row.dart';
 import 'package:proxie/src/json/json_schema.dart';
 import 'package:proxie/src/model/body.dart';
+import 'package:proxie/src/ui/common.dart';
 import 'package:proxie/src/ui/json/json_row_tile.dart';
 import 'package:proxie/src/ui/json/json_tree_controller.dart';
 import 'package:proxie/src/ui/json/raw_text_view.dart';
@@ -67,11 +69,20 @@ class _JsonTreeViewState extends State<JsonTreeView> {
     setState(() {});
     final row = _c.takeReveal();
     if (row == null) return;
-    // Jumps once the list has laid out with the new row count.
+    // Jumps once the list has laid out with the new row count, unless the
+    // row is already in view.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !_scroll.hasClients) return;
       final position = _scroll.position;
-      _scroll.jumpTo(math.min(row * jsonRowExtent, position.maxScrollExtent));
+      final top = row * jsonRowExtent;
+      if (top >= position.pixels &&
+          top + jsonRowExtent <= position.pixels + position.viewportDimension) {
+        return;
+      }
+      // From the row count: the list's own extent may not have caught up
+      // with a count that changed in this frame.
+      final end = _c.visibleCount * jsonRowExtent - position.viewportDimension;
+      _scroll.jumpTo(math.min(top, math.max(0, end)));
     });
   }
 
@@ -94,6 +105,7 @@ class _JsonTreeViewState extends State<JsonTreeView> {
         break;
     }
     final editError = _c.editError;
+    final root = _c.root;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -101,6 +113,7 @@ class _JsonTreeViewState extends State<JsonTreeView> {
         if (editError != null)
           _EditErrorBar(message: editError, onDismiss: _c.clearEditError),
         const Divider(height: 1),
+        if (root != null) ...[_rootHeader(root), const Divider(height: 1)],
         Expanded(
           child: ListView.builder(
             key: const ValueKey('proxie-json-tree'),
@@ -131,6 +144,20 @@ class _JsonTreeViewState extends State<JsonTreeView> {
     );
   }
 
+  // The top-level object or array, which has no row of its own: its
+  // summary, an array's schema, and (when editable) the root's edits.
+  Widget _rootHeader(JsonRow root) {
+    final schema = root.kind == JsonKind.array ? _c.schemaOf(0) : null;
+    return JsonRowTile(
+      key: const ValueKey('proxie-json-root'),
+      row: root,
+      header: true,
+      editable: _c.editable,
+      schema: schema,
+      onAction: (a) => unawaited(_onAction(root, schema, a)),
+    );
+  }
+
   Widget _searchBar(BuildContext context) {
     final theme = Theme.of(context);
     final matches = _c.matches;
@@ -154,12 +181,16 @@ class _JsonTreeViewState extends State<JsonTreeView> {
             ),
           ),
           if (_c.query.isNotEmpty)
-            Text(
-              matches.isEmpty
-                  ? 'No matches'
-                  : '${_c.matchIndex + 1}/${matches.length}',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
+            Semantics(
+              liveRegion: true,
+              child: Text(
+                matches.isEmpty
+                    ? 'No matches'
+                    : '${_c.matchIndex + 1}/${matches.length}'
+                          '${_c.matchesCapped ? '+' : ''}',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
               ),
             ),
           if (matches.length > 1) ...[
@@ -256,6 +287,7 @@ class JsonBodyView extends StatefulWidget {
     required this.body,
     super.key,
     this.editable = false,
+    this.scope = OpenJson.viewScope,
   });
 
   /// Where the document is opened.
@@ -267,12 +299,16 @@ class JsonBodyView extends StatefulWidget {
   /// `'request'` or `'response'`.
   final String which;
 
-  /// The body, for the raw view; a body of another length or truncation
-  /// (a pending call's response arriving) opens the document again.
+  /// The body, for the raw view; another body (a pending call's response
+  /// arriving, a reload) opens the document again, which the worker
+  /// answers with the open document when the bytes are unchanged.
   final ProxieBody body;
 
   /// Whether the tree offers edits.
   final bool editable;
+
+  /// Which copy of the document is open; see [OpenJson.scope].
+  final String scope;
 
   @override
   State<JsonBodyView> createState() => _JsonBodyViewState();
@@ -282,12 +318,15 @@ class _JsonBodyViewState extends State<JsonBodyView> {
   late JsonTreeController _controller = _create();
   late JsonTreeStatus _status = _controller.status;
   bool _raw = false;
+  // Whether the raw view was opened once; it then stays alive offstage.
+  bool _rawShown = false;
 
   JsonTreeController _create() => JsonTreeController(
     widget.worker,
     widget.callId,
     widget.which,
     editable: widget.editable,
+    scope: widget.scope,
   )..addListener(_changed);
 
   // The tree rebuilds itself; this view only swaps in the invalid state.
@@ -305,7 +344,8 @@ class _JsonBodyViewState extends State<JsonBodyView> {
         o.callId != w.callId ||
         o.which != w.which ||
         o.editable != w.editable ||
-        o.body.bytes.length != w.body.bytes.length ||
+        o.scope != w.scope ||
+        !identical(o.body.bytes, w.body.bytes) ||
         o.body.truncated != w.body.truncated) {
       // The tree lets go of the old controller in this frame.
       final old = _controller..removeListener(_changed);
@@ -351,25 +391,40 @@ class _JsonBodyViewState extends State<JsonBodyView> {
         ],
       );
     }
-    final toggle = IconButton(
-      tooltip: _raw ? 'Tree view' : 'Raw text',
-      icon: Icon(_raw ? Icons.account_tree_outlined : Icons.notes),
-      onPressed: () => setState(() => _raw = !_raw),
-    );
-    if (!_raw) {
-      return JsonTreeView(
-        key: ObjectKey(_controller),
-        controller: _controller,
-        actions: [toggle],
-      );
-    }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Align(alignment: Alignment.centerRight, child: toggle),
-        const Divider(height: 1),
-        Expanded(child: _rawText(pretty: true)),
+    // Both views stay alive, so switching keeps the tree's scroll and
+    // search and does not split the raw text again.
+    final tree = JsonTreeView(
+      key: ObjectKey(_controller),
+      controller: _controller,
+      actions: [
+        IconButton(
+          tooltip: 'Raw text',
+          icon: const Icon(Icons.notes),
+          onPressed: () => setState(() => _raw = _rawShown = true),
+        ),
       ],
+    );
+    final raw = !_rawShown
+        ? const SizedBox.shrink()
+        : Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Align(
+                alignment: Alignment.centerRight,
+                child: IconButton(
+                  tooltip: 'Tree view',
+                  icon: const Icon(Icons.account_tree_outlined),
+                  onPressed: () => setState(() => _raw = false),
+                ),
+              ),
+              const Divider(height: 1),
+              Expanded(child: _rawText(pretty: true)),
+            ],
+          );
+    return IndexedStack(
+      index: _raw ? 1 : 0,
+      sizing: StackFit.expand,
+      children: [tree, raw],
     );
   }
 }

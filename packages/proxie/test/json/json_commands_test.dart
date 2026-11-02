@@ -3,7 +3,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:proxie/proxie.dart';
-import 'package:proxie/src/ui/json/raw_text_view.dart';
+import 'package:proxie/src/ui/json/text_lines.dart';
 import 'package:proxie/src/worker/isolate_worker.dart';
 
 ProxieBody _body(String s, {String type = 'application/json', int? cap}) =>
@@ -421,6 +421,46 @@ void main() {
     ).execute(ctx);
     expect(await text(3), 'new');
     expect(await text(4), '1e400');
+  });
+
+  test('documents are kept per scope; a reopen reports dirty', () async {
+    await store.upsert(_call('c1', response: _body('[1]')));
+    final view = await open('c1', JsonBodySide.response);
+    final edit = await const OpenJson(
+      'c1',
+      JsonBodySide.response,
+      scope: 'edit:rule',
+    ).execute(ctx);
+    expect(edit.docId, isNot(view.docId));
+    await JsonApply(edit.docId, const DuplicateItem(1)).execute(ctx);
+    final viewAgain = await open('c1', JsonBodySide.response);
+    expect(viewAgain.docId, view.docId);
+    expect(viewAgain.dirty, isFalse);
+    expect(viewAgain.visibleCount, 1);
+    final editAgain = await const OpenJson(
+      'c1',
+      JsonBodySide.response,
+      scope: 'edit:rule',
+    ).execute(ctx);
+    expect(editAgain.docId, edit.docId);
+    expect(editAgain.dirty, isTrue);
+    expect(editAgain.visibleCount, 2);
+  });
+
+  test('root row and value of a document', () async {
+    await store.upsert(
+      _call('c1', response: _body('{"n":12345678901234567890,"l":[true]}')),
+    );
+    final h = await open('c1', JsonBodySide.response);
+    final root = await JsonRootRow(h.docId).execute(ctx);
+    expect(root!.nodeId, 0);
+    expect(root.kind, JsonKind.object);
+    expect(root.preview, '{2 keys}');
+    final doc = openDocs().single;
+    expect(doc.valueOf(0), {
+      'n': const JsonNumber('12345678901234567890'),
+      'l': [true],
+    });
   });
 
   test('raw text lines cross the isolate boundary', () async {

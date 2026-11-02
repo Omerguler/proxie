@@ -35,12 +35,15 @@ enum JsonTreeStatus {
 /// [retry], or as [editError] for an edit the document refused.
 class JsonTreeController extends ChangeNotifier {
   /// Opens the [which] (`'request'` or `'response'`) body of call [callId]
-  /// in [worker]. [editable] says whether the view offers edits.
+  /// in [worker]. [editable] says whether the view offers edits; [scope]
+  /// picks the copy of the document (see [OpenJson.scope]): read-only
+  /// views share [OpenJson.viewScope], each editor passes its own.
   JsonTreeController(
     this.worker,
     this.callId,
     this.which, {
     required this.editable,
+    this.scope = OpenJson.viewScope,
   }) : side = JsonBodySide.values.byName(which) {
     unawaited(_serial(_open));
   }
@@ -50,6 +53,9 @@ class JsonTreeController extends ChangeNotifier {
 
   /// Windows kept in memory; the least recently used are dropped.
   static const int maxWindows = 8;
+
+  /// The most matches a search returns (the default of [JsonSearch]).
+  static const int searchLimit = 500;
 
   /// Where the document lives.
   final ProxieWorker worker;
@@ -65,6 +71,11 @@ class JsonTreeController extends ChangeNotifier {
 
   /// Whether the view offers edits.
   final bool editable;
+
+  /// Which copy of the document is open; see [OpenJson.scope].
+  final String scope;
+
+  JsonRow? _root;
 
   JsonTreeStatus _status = JsonTreeStatus.loading;
   String? _docId;
@@ -129,6 +140,13 @@ class JsonTreeController extends ChangeNotifier {
   /// Index into [matches] of the revealed match; -1 when none.
   int get matchIndex => _matchIndex;
 
+  /// Whether [matches] stopped at [searchLimit], so there may be more.
+  bool get matchesCapped => _matches.length >= searchLimit;
+
+  /// The top-level object or array as a row, for a header above the tree;
+  /// null for a scalar root or while the document is not ready.
+  JsonRow? get root => _root;
+
   /// The node id of the revealed match, if any.
   int? get currentMatch => _matchIndex < 0 || _matchIndex >= _matches.length
       ? null
@@ -172,7 +190,20 @@ class JsonTreeController extends ChangeNotifier {
             },
             onError: (Object e, StackTrace st) {
               _schemaFetching.remove(nodeId);
-              if (generation == _generation) _fail(e, st);
+              if (_disposed || generation != _generation) return;
+              if (_isClosed(e)) {
+                _fail(e, st);
+                return;
+              }
+              // A schema is a hint: the tree stays usable without one.
+              developer.log(
+                'Proxie could not infer a JSON schema',
+                name: 'proxie',
+                error: e,
+                stackTrace: st,
+              );
+              _schemas[nodeId] = null;
+              _notify();
             },
           ),
     );
@@ -203,6 +234,7 @@ class JsonTreeController extends ChangeNotifier {
       return;
     }
     try {
+      // JsonSearch's default limit is [searchLimit].
       final ids = await worker.run(JsonSearch(docId, q));
       if (_disposed) return;
       _matches = ids;
@@ -296,13 +328,19 @@ class JsonTreeController extends ChangeNotifier {
     _reset();
     _notify();
     try {
-      final handle = await worker.run(OpenJson(callId, side));
+      final handle = await worker.run(OpenJson(callId, side, scope: scope));
+      if (_disposed) return;
+      final root = handle.parseError == null
+          ? await worker.run(JsonRootRow(handle.docId))
+          : null;
       if (_disposed) return;
       _docId = handle.docId;
       _visibleCount = handle.visibleCount;
       _truncated = handle.truncated;
       _parseError = handle.parseError;
-      _edited = false;
+      _root = _containerOrNull(root);
+      // A document reopened in the same scope keeps its edits.
+      _edited = handle.dirty;
       _status = handle.parseError == null
           ? JsonTreeStatus.ready
           : JsonTreeStatus.invalid;
@@ -321,6 +359,7 @@ class JsonTreeController extends ChangeNotifier {
     _matches = const [];
     _matchIndex = -1;
     _pendingReveal = null;
+    _root = null;
   }
 
   void _fetch(int w) {
@@ -370,7 +409,7 @@ class JsonTreeController extends ChangeNotifier {
         count = await op(docId);
       } on Object catch (e, st) {
         // A refused edit leaves the document as it was.
-        if (edit && !_isClosed(e) && e is ProxieWorkerException) {
+        if (edit && _isRefused(e)) {
           _editFailed(e, st);
         } else {
           _fail(e, st);
@@ -418,7 +457,9 @@ class JsonTreeController extends ChangeNotifier {
       for (final w in wanted)
         worker.run(JsonRows(docId, w * windowSize, windowSize)),
     ]);
+    final root = await worker.run(JsonRootRow(docId));
     if (_disposed) return;
+    _root = _containerOrNull(root);
     _generation++;
     _windows.clear();
     _lastWindow = -1;
@@ -430,12 +471,12 @@ class JsonTreeController extends ChangeNotifier {
   }
 
   void _editFailed(Object e, StackTrace st) {
-    if (_isClosed(e) || e is! ProxieWorkerException) {
+    if (!_isRefused(e)) {
       _fail(e, st);
       return;
     }
     if (_disposed) return;
-    _editError = e.message;
+    _editError = (e as ProxieWorkerException).message;
     _notify();
   }
 
@@ -470,6 +511,18 @@ class JsonTreeController extends ChangeNotifier {
     super.dispose();
   }
 }
+
+JsonRow? _containerOrNull(JsonRow? row) =>
+    row != null && (row.kind == JsonKind.object || row.kind == JsonKind.array)
+    ? row
+    : null;
+
+/// Whether [e] is the document refusing an edit or a read (a bad node or
+/// value, or the size limit), which leaves it unchanged; anything else is
+/// a worker failure.
+bool _isRefused(Object e) =>
+    e is ProxieWorkerException &&
+    const {'ArgumentError', 'RangeError', 'StateError'}.contains(e.type);
 
 bool _isClosed(Object? e) =>
     e is JsonDocumentClosed ||

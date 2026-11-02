@@ -338,6 +338,47 @@ class JsonDocument {
   /// document that did not parse, finds nothing.
   List<int> search(String query, {int limit = 500}) => _search(query, limit);
 
+  /// The top-level value as a row (depth 0, no key or index); null when
+  /// the document did not parse.
+  JsonRow? rootRow() => _n.length == 0 ? null : _row(0, 0);
+
+  /// The value under [nodeId] as JSON data for a [JsonEdit]: maps, lists,
+  /// strings, bools, null, and numbers as [JsonNumber] so their text is
+  /// kept exactly. Throws a [FormatException] when an object repeats a
+  /// member name, which a [Map] cannot hold.
+  Object? valueOf(int nodeId) {
+    _checkId(nodeId);
+    Object? leaf(int id) => switch (_n.kind(id)) {
+      JsonKind.object => <String, Object?>{},
+      JsonKind.array => <Object?>[],
+      JsonKind.string => scalarText(id),
+      JsonKind.number => JsonNumber(scalarText(id)),
+      JsonKind.boolean => _boolean(id),
+      JsonKind.nullValue => null,
+    };
+    final root = leaf(nodeId);
+    // Containers whose children are still to be filled in; iterative, so
+    // any depth is fine.
+    final pending = <(int, Object?)>[(nodeId, root)];
+    while (pending.isNotEmpty) {
+      final (id, container) = pending.removeLast();
+      for (var c = _n.firstChild[id]; c != -1; c = _n.nextSibling[c]) {
+        final value = leaf(c);
+        if (container is Map<String, Object?>) {
+          final key = _n.keys[_n.keyOrIndex[c]];
+          if (container.containsKey(key)) {
+            throw FormatException('Duplicate member name "$key"');
+          }
+          container[key] = value;
+        } else {
+          (container! as List<Object?>).add(value);
+        }
+        if (_n.isContainer(c)) pending.add((c, value));
+      }
+    }
+    return root;
+  }
+
   /// The whole value of scalar [nodeId] as text, unlike the shortened
   /// [JsonRow.preview]: a string's decoded text, a number's lexeme, or
   /// `true`, `false` or `null`. Throws an [ArgumentError] for a container.

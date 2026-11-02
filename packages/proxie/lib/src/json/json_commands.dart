@@ -45,6 +45,7 @@ class JsonHandle {
     required this.visibleCount,
     required this.truncated,
     this.parseError,
+    this.dirty = false,
   });
 
   /// Names the document in later commands; valid until [CloseJson] or
@@ -59,15 +60,29 @@ class JsonHandle {
 
   /// Whether the body was cut at capture.
   final bool truncated;
+
+  /// Whether the document returned already holds edits (it was reopened
+  /// in the same scope after edits; see [OpenJson.scope]).
+  final bool dirty;
 }
 
 /// Parses the [side] body of call [callId] into a document held by the
 /// worker. Bodies of any kind are attempted, since JSON is often
-/// mislabeled. Reopening an unchanged body returns the document already
-/// open for it, expansion state included.
+/// mislabeled. Documents are kept per (callId, side, [scope]): reopening
+/// an unchanged body in the same scope returns the document already open
+/// for it, edits and expansion state included, while another scope gets
+/// its own copy.
 class OpenJson extends WorkerCommand<JsonHandle> {
-  /// Creates a command that opens the [side] body of call [callId].
-  const OpenJson(this.callId, this.side);
+  /// Creates a command that opens the [side] body of call [callId] in
+  /// [scope].
+  const OpenJson(this.callId, this.side, {this.scope = viewScope});
+
+  /// The scope read-only views share.
+  static const viewScope = 'view';
+
+  /// Which copy of the document to open: read-only views share
+  /// [viewScope]; each editor uses its own, so its edits stay in it.
+  final String scope;
 
   /// The id of the call whose body is opened.
   final String callId;
@@ -94,7 +109,7 @@ class OpenJson extends WorkerCommand<JsonHandle> {
         body = response.body;
     }
     final docs = _JsonDocs.of(ctx);
-    final source = '$callId\u0000${side.name}';
+    final source = '$callId\u0000${side.name}\u0000$scope';
     final (docId, doc) =
         docs.reuse(source, body.bytes) ??
         docs.add(source, body.bytes, JsonDocument.tryParse(body.bytes));
@@ -105,6 +120,7 @@ class OpenJson extends WorkerCommand<JsonHandle> {
           ? null
           : (body.truncated ? truncatedError : doc.parseError),
       truncated: body.truncated,
+      dirty: doc.dirty,
     );
   }
 }
@@ -278,6 +294,21 @@ class JsonScalarText extends WorkerCommand<String> {
       _JsonDocs.of(ctx).get(docId).scalarText(nodeId);
 }
 
+/// The top-level value of document [docId] as a row (depth 0, no key or
+/// index), so a view can show a header for a root object or array; see
+/// [JsonDocument.rootRow].
+class JsonRootRow extends WorkerCommand<JsonRow?> {
+  /// Creates a command that reads the root of document [docId].
+  const JsonRootRow(this.docId);
+
+  /// The document to read.
+  final String docId;
+
+  @override
+  Future<JsonRow?> execute(WorkerContext ctx) async =>
+      _JsonDocs.of(ctx).get(docId).rootRow();
+}
+
 /// Releases a document; unknown ids are ignored.
 class CloseJson extends WorkerCommand<void> {
   /// Creates a command that closes document [docId].
@@ -294,7 +325,7 @@ class CloseJson extends WorkerCommand<void> {
 class _Entry {
   _Entry(this.source, this.bytes, this.nodes);
 
-  /// `callId \0 side`.
+  /// `callId \0 side \0 scope`.
   final String source;
 
   /// The body; null when it did not parse, as nothing needs it then.
@@ -320,7 +351,7 @@ class _JsonDocs {
   /// Open doc ids, least recently used first.
   final Map<String, _Entry> _open = {};
 
-  /// Doc id per `callId \0 side`.
+  /// Doc id per `callId \0 side \0 scope`.
   final Map<String, String> _bySource = {};
   int _nextId = 0;
   int _nodes = 0;

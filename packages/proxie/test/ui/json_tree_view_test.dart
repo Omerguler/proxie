@@ -10,6 +10,7 @@ import 'package:proxie/src/ui/json/json_row_tile.dart';
 import 'package:proxie/src/ui/json/json_tree_controller.dart';
 import 'package:proxie/src/ui/json/json_tree_view.dart';
 import 'package:proxie/src/ui/json/raw_text_view.dart';
+import 'package:proxie/src/ui/json/text_lines.dart';
 import 'package:proxie/src/ui/json/value_editor.dart';
 
 /// Runs commands straight against a [MemoryStore], wrapping failures as
@@ -27,6 +28,10 @@ class _Worker implements ProxieWorker {
   /// Commands for which this returns true fail instead of running.
   bool Function(WorkerCommand<Object?> cmd)? failWhen;
 
+  /// What a command matched by [failWhen] throws; a raw [StateError]
+  /// (as from a disposed worker) when null.
+  Exception? failure;
+
   Iterable<T> sentOf<T>() => sent.whereType<T>();
 
   @override
@@ -38,7 +43,11 @@ class _Worker implements ProxieWorker {
   @override
   Future<R> run<R>(WorkerCommand<R> cmd) async {
     sent.add(cmd);
-    if (failWhen?.call(cmd) ?? false) throw StateError('worker down');
+    if (failWhen?.call(cmd) ?? false) {
+      final e = failure;
+      if (e != null) throw e;
+      throw StateError('worker down');
+    }
     try {
       return await cmd.execute(ctx);
     } on Object catch (e, st) {
@@ -86,6 +95,12 @@ Future<void> _settle(WidgetTester tester, [int frames = 8]) async {
   }
 }
 
+/// The tree's rows, without the root header.
+final Finder _rows = find.descendant(
+  of: find.byKey(const ValueKey('proxie-json-tree')),
+  matching: find.byType(JsonRowTile),
+);
+
 String _rowText(WidgetTester tester, int nodeId) {
   final tile = tester.widget<JsonRowTile>(
     find.byWidgetPredicate((w) => w is JsonRowTile && w.row.nodeId == nodeId),
@@ -106,13 +121,16 @@ void main() {
     WidgetTester tester,
     String json, {
     bool editable = true,
+    String scope = OpenJson.viewScope,
+    bool upsert = true,
   }) async {
-    await store.upsert(_call(json));
+    if (upsert) await store.upsert(_call(json));
     final controller = JsonTreeController(
       worker,
       'c1',
       'response',
       editable: editable,
+      scope: scope,
     );
     addTearDown(controller.dispose);
     await tester.pumpWidget(_app(JsonTreeView(controller: controller)));
@@ -129,7 +147,7 @@ void main() {
     final c = await pumpTree(tester, json);
     expect(c.status, JsonTreeStatus.ready);
     expect(c.visibleCount, 40000);
-    final built = find.byType(JsonRowTile).evaluate().length;
+    final built = _rows.evaluate().length;
     expect(built, greaterThan(10));
     expect(built, lessThan(60));
     // Only the windows on screen were fetched.
@@ -142,7 +160,7 @@ void main() {
     tester,
   ) async {
     final c = await pumpTree(tester, '{"a":{"b":1}}');
-    expect(tester.getSize(find.byType(JsonRowTile).first).height, 28);
+    expect(tester.getSize(_rows.first).height, 28);
     await c.toggle(1);
     await _settle(tester);
     final a = tester.getTopLeft(find.textContaining('a: ', findRichText: true));
@@ -152,11 +170,11 @@ void main() {
 
   testWidgets('tapping a container toggles it', (tester) async {
     await pumpTree(tester, '{"user":{"id":1,"name":"ada"}}');
-    expect(find.byType(JsonRowTile), findsOneWidget);
-    await tester.tap(find.byType(JsonRowTile));
+    expect(_rows, findsOneWidget);
+    await tester.tap(_rows);
     await _settle(tester);
     expect(worker.sentOf<JsonToggle>(), hasLength(1));
-    expect(find.byType(JsonRowTile), findsNWidgets(3));
+    expect(_rows, findsNWidgets(3));
   });
 
   testWidgets('array headers show the schema', (tester) async {
@@ -186,7 +204,7 @@ void main() {
   testWidgets('the duplicate menu action sends DuplicateItem', (tester) async {
     final c = await pumpTree(tester, '[{"id":1},{"id":2}]');
     expect(c.visibleCount, 2);
-    await tester.tap(find.byTooltip('Edit').first);
+    await tester.tap(find.byTooltip('Edit [0]'));
     await tester.pumpAndSettle();
     expect(find.text('Delete'), findsOneWidget);
     expect(find.text('Add key'), findsOneWidget);
@@ -201,7 +219,7 @@ void main() {
 
   testWidgets('a long press opens the same menu', (tester) async {
     await pumpTree(tester, '{"a":1}');
-    await tester.longPress(find.byType(JsonRowTile));
+    await tester.longPress(_rows);
     await tester.pumpAndSettle();
     expect(find.text('Edit value'), findsOneWidget);
     expect(find.text('Rename key'), findsOneWidget);
@@ -213,7 +231,7 @@ void main() {
   ) async {
     final long = 'x' * 300;
     final c = await pumpTree(tester, '{"a":"$long","n":12345678901234567890}');
-    await tester.tap(find.byTooltip('Edit').first);
+    await tester.tap(find.byTooltip('Edit a'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Edit value'));
     await tester.pumpAndSettle();
@@ -234,7 +252,7 @@ void main() {
   testWidgets('add key and array actions reach the worker', (tester) async {
     final c = await pumpTree(tester, '{"o":{},"list":[{"id":1,"x":true}]}');
     // Add key to the object row.
-    await tester.tap(find.byTooltip('Edit').first);
+    await tester.tap(find.byTooltip('Edit o'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Add key'));
     await tester.pumpAndSettle();
@@ -247,14 +265,14 @@ void main() {
     await _settle(tester);
 
     // Remove "x" from all items of the array row.
-    await tester.tap(find.byTooltip('Edit').last);
+    await tester.tap(find.byTooltip('Edit list'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Remove key from all'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('x'));
     await _settle(tester);
 
-    await tester.tap(find.byTooltip('Edit').last);
+    await tester.tap(find.byTooltip('Edit list'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('New item from schema'));
     await _settle(tester);
@@ -282,7 +300,7 @@ void main() {
     await tester.tap(find.byTooltip('Dismiss'));
     await tester.pump();
     expect(c.editError, isNull);
-    expect(find.byType(JsonRowTile), findsNWidgets(2));
+    expect(_rows, findsNWidgets(2));
   });
 
   testWidgets('search jumps to the revealed row', (tester) async {
@@ -321,10 +339,10 @@ void main() {
 
   testWidgets('read-only trees offer no edits', (tester) async {
     await pumpTree(tester, '[{"id":1,"avatar":"a"},{"id":2}]', editable: false);
-    expect(find.byType(JsonRowTile), findsNWidgets(2));
-    expect(find.byTooltip('Edit'), findsNothing);
+    expect(_rows, findsNWidgets(2));
+    expect(find.byTooltip(RegExp('^Edit')), findsNothing);
     expect(find.text('+ avatar'), findsNothing);
-    await tester.longPress(find.byType(JsonRowTile).first);
+    await tester.longPress(_rows.first);
     await tester.pumpAndSettle();
     expect(find.text('Delete'), findsNothing);
   });
@@ -341,7 +359,7 @@ void main() {
     await tester.tap(find.text('Retry'));
     await _settle(tester);
     expect(c.status, JsonTreeStatus.ready);
-    expect(find.byType(JsonRowTile), findsOneWidget);
+    expect(_rows, findsOneWidget);
   });
 
   testWidgets('a closed document shows Retry, which reopens it', (
@@ -351,7 +369,7 @@ void main() {
     final docId = worker.sentOf<JsonRows>().first.docId;
     await CloseJson(docId).execute(worker.ctx);
 
-    await tester.tap(find.byType(JsonRowTile));
+    await tester.tap(_rows);
     await _settle(tester);
     expect(c.status, JsonTreeStatus.failed);
     expect(c.closed, isTrue);
@@ -360,7 +378,7 @@ void main() {
     await tester.tap(find.text('Retry'));
     await _settle(tester);
     expect(c.status, JsonTreeStatus.ready);
-    expect(find.byType(JsonRowTile), findsOneWidget);
+    expect(_rows, findsOneWidget);
   });
 
   testWidgets('revert drops the edits', (tester) async {
@@ -390,7 +408,7 @@ void main() {
     );
     await _settle(tester);
     expect(find.byType(JsonTreeView), findsOneWidget);
-    expect(find.byTooltip('Edit'), findsNothing);
+    expect(find.byTooltip(RegExp('^Edit')), findsNothing);
     expect(find.textContaining('user: ', findRichText: true), findsOneWidget);
 
     await tester.tap(find.byTooltip('Raw text'));
@@ -443,6 +461,321 @@ void main() {
     expect(find.text('{"a":'), findsOneWidget);
   });
 
+  testWidgets('a root array gets a header with its schema and array edits', (
+    tester,
+  ) async {
+    final c = await pumpTree(tester, '[{"id":1,"avatar":"a"},{"id":2}]');
+    final header = find.byKey(const ValueKey('proxie-json-root'));
+    expect(
+      find.descendant(
+        of: header,
+        matching: find.textContaining(
+          '{id: number, avatar?: string}',
+          findRichText: true,
+        ),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: header,
+        matching: find.textContaining('[2 items]', findRichText: true),
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(find.byTooltip('Edit root'));
+    await tester.pumpAndSettle();
+    expect(find.text('Add key to all'), findsOneWidget);
+    expect(find.text('Remove key from all'), findsOneWidget);
+    expect(find.text('New item from schema'), findsOneWidget);
+    expect(find.text('Delete'), findsNothing);
+    await tester.tap(find.text('Add key to all'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const ValueKey('proxie-key-field')), 'k');
+    await tester.enterText(
+      find.byKey(const ValueKey('proxie-value-field')),
+      'v',
+    );
+    await tester.tap(find.text('Save'));
+    await _settle(tester);
+    expect(
+      utf8.decode(await c.encode()),
+      '[{"id":1,"avatar":"a","k":"v"},{"id":2,"k":"v"}]',
+    );
+
+    await tester.tap(find.byTooltip('Edit root'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('New item from schema'));
+    await _settle(tester);
+    // The header follows the edit.
+    expect(
+      find.descendant(
+        of: header,
+        matching: find.textContaining('[3 items]', findRichText: true),
+      ),
+      findsOneWidget,
+    );
+    expect(_rows, findsNWidgets(3));
+  });
+
+  testWidgets('a root object header offers Add key', (tester) async {
+    final c = await pumpTree(tester, '{"a":1}');
+    await tester.tap(find.byTooltip('Edit root'));
+    await tester.pumpAndSettle();
+    expect(find.text('Add key'), findsOneWidget);
+    expect(find.text('Rename key'), findsNothing);
+    await tester.tap(find.text('Add key'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const ValueKey('proxie-key-field')), 'b');
+    await tester.tap(find.byKey(const ValueKey('proxie-kind-field')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Number').last);
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('proxie-value-field')),
+      '12345678901234567890',
+    );
+    await tester.tap(find.text('Save'));
+    await _settle(tester);
+    expect(utf8.decode(await c.encode()), '{"a":1,"b":12345678901234567890}');
+  });
+
+  testWidgets('a read-only header shows the schema but no menu', (
+    tester,
+  ) async {
+    await pumpTree(tester, '[{"id":1}]', editable: false);
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('proxie-json-root')),
+        matching: find.textContaining('{id: number}', findRichText: true),
+      ),
+      findsOneWidget,
+    );
+    expect(find.byTooltip(RegExp('^Edit')), findsNothing);
+  });
+
+  testWidgets('a scalar root has no header', (tester) async {
+    await pumpTree(tester, '42');
+    expect(find.byKey(const ValueKey('proxie-json-root')), findsNothing);
+    expect(_rows, findsOneWidget);
+  });
+
+  testWidgets('edits in an editor scope stay out of the view scope', (
+    tester,
+  ) async {
+    final editor = await pumpTree(tester, '[1]', scope: 'edit:rule');
+    await editor.apply(const DuplicateItem(1));
+    await _settle(tester);
+    expect(utf8.decode(await editor.encode()), '[1,1]');
+
+    final view = await pumpTree(tester, '[1]', upsert: false);
+    expect(view.visibleCount, 1);
+    expect(view.edited, isFalse);
+    expect(utf8.decode(await view.encode()), '[1]');
+    expect(find.text('Revert'), findsNothing);
+  });
+
+  testWidgets('reopening an edited scope keeps it dirty, with Revert', (
+    tester,
+  ) async {
+    final first = await pumpTree(tester, '[1]', scope: 'edit:rule');
+    await first.apply(const DuplicateItem(1));
+    await _settle(tester);
+
+    final again = await pumpTree(
+      tester,
+      '[1]',
+      scope: 'edit:rule',
+      upsert: false,
+    );
+    expect(again.edited, isTrue);
+    expect(again.visibleCount, 2);
+    expect(find.text('Revert'), findsOneWidget);
+  });
+
+  testWidgets('a worker failure during an edit is not a refused edit', (
+    tester,
+  ) async {
+    final c = await pumpTree(tester, '[1]');
+    worker
+      ..failure = const ProxieWorkerException(
+        type: 'SqliteException',
+        message: 'disk I/O error',
+        stackTrace: '',
+      )
+      ..failWhen = (cmd) => cmd is JsonApply;
+    await c.apply(const DuplicateItem(1));
+    await _settle(tester);
+    expect(c.status, JsonTreeStatus.failed);
+    expect(c.editError, isNull);
+    expect(find.text('Retry'), findsOneWidget);
+  });
+
+  testWidgets('a failed schema fetch leaves the tree usable', (tester) async {
+    worker.failWhen = (cmd) => cmd is JsonSchema;
+    final c = await pumpTree(tester, '[{"id":1}]');
+    expect(c.status, JsonTreeStatus.ready);
+    expect(c.hasSchema(0), isTrue);
+    expect(c.schemaOf(0), isNull);
+    expect(find.textContaining('{id', findRichText: true), findsNothing);
+    expect(_rows, findsOneWidget);
+  });
+
+  testWidgets('next and previous wrap around the matches', (tester) async {
+    final c = await pumpTree(tester, '[{"k":1},{"k":2},{"k":3}]');
+    await c.search('k');
+    await _settle(tester);
+    expect(c.matches, hasLength(3));
+    expect(c.matchIndex, 0);
+    await tester.tap(find.byTooltip('Next match'));
+    await _settle(tester);
+    await tester.tap(find.byTooltip('Next match'));
+    await _settle(tester);
+    expect(find.text('3/3'), findsOneWidget);
+    await tester.tap(find.byTooltip('Next match'));
+    await _settle(tester);
+    expect(c.matchIndex, 0);
+    await tester.tap(find.byTooltip('Previous match'));
+    await _settle(tester);
+    expect(c.matchIndex, 2);
+    final tile = tester.widget<JsonRowTile>(
+      find.byWidgetPredicate((w) => w is JsonRowTile && w.highlighted),
+    );
+    expect(tile.row.preview, '3');
+  });
+
+  testWidgets('a match in view does not scroll; one at the end clamps', (
+    tester,
+  ) async {
+    final json = jsonEncode([
+      {'near': 1},
+      for (var i = 1; i < 1000; i++) {'id': i},
+      {'far': 1},
+    ]);
+    final c = await pumpTree(tester, json);
+    final position = tester
+        .state<ScrollableState>(
+          find.descendant(
+            of: find.byKey(const ValueKey('proxie-json-tree')),
+            matching: find.byType(Scrollable),
+          ),
+        )
+        .position;
+    await c.search('near');
+    await _settle(tester);
+    expect(c.currentMatch, isNotNull);
+    expect(position.pixels, 0);
+
+    await c.search('far');
+    await _settle(tester);
+    expect(position.pixels, position.maxScrollExtent);
+    expect(position.maxScrollExtent, lessThan(1001 * 28.0));
+  });
+
+  testWidgets('a capped search says so', (tester) async {
+    final c = await pumpTree(
+      tester,
+      jsonEncode([for (var i = 0; i < 600; i++) 'hit']),
+    );
+    await c.search('hit');
+    await _settle(tester);
+    expect(c.matches, hasLength(JsonTreeController.searchLimit));
+    expect(find.text('1/500+'), findsOneWidget);
+  });
+
+  testWidgets('rows expose their name, state and chips to accessibility', (
+    tester,
+  ) async {
+    final handle = tester.ensureSemantics();
+    await pumpTree(tester, '[{"id":1,"avatar":"a"},{"id":2}]');
+    expect(find.byTooltip('Edit [0]'), findsOneWidget);
+    expect(
+      tester.getSemantics(find.text('+ avatar')),
+      isSemantics(label: 'Add key avatar', isButton: true),
+    );
+    expect(
+      tester.getSemantics(find.byKey(const ValueKey(1))),
+      isSemantics(
+        label: '[0]: {2 keys}',
+        hasExpandedState: true,
+        isExpanded: false,
+        hasSelectedState: true,
+        isSelected: false,
+      ),
+    );
+    handle.dispose();
+  });
+
+  testWidgets('switching tree and raw keeps both views', (tester) async {
+    await store.upsert(_call('{"a":1}'));
+    await tester.pumpWidget(
+      _app(
+        JsonBodyView(
+          worker: worker,
+          callId: 'c1',
+          which: 'response',
+          body: _call('{"a":1}').response!.body,
+        ),
+      ),
+    );
+    await _settle(tester);
+    await tester.enterText(
+      find.byKey(const ValueKey('proxie-json-search')),
+      'a',
+    );
+    await tester.tap(find.byTooltip('Raw text'));
+    await _settle(tester);
+    await tester.tap(find.byTooltip('Tree view'));
+    await _settle(tester);
+    await tester.tap(find.byTooltip('Raw text'));
+    await _settle(tester);
+    expect(worker.sentOf<RawTextLines>(), hasLength(1));
+    await tester.tap(find.byTooltip('Tree view'));
+    await _settle(tester);
+    expect(find.text('a'), findsOneWidget); // the search text survived
+    expect(worker.sentOf<OpenJson>(), hasLength(1));
+  });
+
+  testWidgets('a same-length body change opens the document again', (
+    tester,
+  ) async {
+    Widget view(String json) => _app(
+      JsonBodyView(
+        worker: worker,
+        callId: 'c1',
+        which: 'response',
+        body: _call(json).response!.body,
+      ),
+    );
+    await store.upsert(_call('{"a":1}'));
+    await tester.pumpWidget(view('{"a":1}'));
+    await _settle(tester);
+    await store.upsert(_call('{"a":2}'));
+    await tester.pumpWidget(view('{"a":2}'));
+    await _settle(tester);
+    expect(find.textContaining('a: 2', findRichText: true), findsOneWidget);
+  });
+
+  testWidgets('the call detail raw view is read-only', (tester) async {
+    await store.upsert(_call('{"a":1}'));
+    await tester.pumpWidget(
+      _app(
+        CallDetail(
+          worker: worker,
+          calls: const Stream.empty(),
+          callId: 'c1',
+          renderCap: 5 * 1024 * 1024,
+        ),
+      ),
+    );
+    await _settle(tester);
+    await tester.tap(find.byTooltip('Raw text'));
+    await _settle(tester);
+    expect(find.byKey(const ValueKey('proxie-raw-text')), findsOneWidget);
+    expect(find.byType(TextField), findsNothing);
+    expect(find.text('Edit anyway'), findsNothing);
+  });
+
   group('RawTextView', () {
     Future<void> pumpRaw(
       WidgetTester tester,
@@ -489,6 +822,54 @@ void main() {
       await pumpRaw(tester, Uint8List.fromList(utf8.encode('hello')));
       expect(find.text('Edit anyway'), findsNothing);
       expect(find.byType(TextField), findsOneWidget);
+    });
+
+    testWidgets('a reload keeps the lines until new ones arrive', (
+      tester,
+    ) async {
+      Widget view(String text) => _app(
+        RawTextView(
+          worker: worker,
+          bytes: Uint8List.fromList(utf8.encode(text)),
+        ),
+      );
+      await tester.pumpWidget(view('first'));
+      await _settle(tester);
+      // Equal bytes in a new list: nothing is split again.
+      await tester.pumpWidget(view('first'));
+      await _settle(tester);
+      expect(worker.sentOf<RawTextLines>(), hasLength(1));
+      // New bytes: the old text stays up for the frame the worker takes.
+      await tester.pumpWidget(view('second'));
+      expect(find.text('first'), findsOneWidget);
+      await _settle(tester);
+      expect(find.text('second'), findsOneWidget);
+      expect(worker.sentOf<RawTextLines>(), hasLength(2));
+    });
+
+    testWidgets('pieces of a long line are not colored mid-token', (
+      tester,
+    ) async {
+      final json = '{"a":"${'x' * 3000}"}';
+      await tester.pumpWidget(
+        _app(
+          RawTextView(
+            worker: worker,
+            bytes: Uint8List.fromList(utf8.encode(json)),
+            prettyJson: true,
+          ),
+        ),
+      );
+      await _settle(tester);
+      Text line(int i) => tester.widget<Text>(
+        find.descendant(
+          of: find.byKey(ValueKey('proxie-line-$i')),
+          matching: find.byType(Text),
+        ),
+      );
+      expect(line(1).textSpan, isNotNull); // starts the line: colored
+      expect(line(2).textSpan, isNull); // continues it: plain
+      expect(line(2).data, startsWith('x'));
     });
 
     testWidgets('a worker failure shows Retry', (tester) async {
@@ -581,8 +962,17 @@ void main() {
     expect(parseJsonValue(JsonKind.number, '1.').error, isNotNull);
     expect(parseJsonValue(JsonKind.boolean, 'false').value, false);
     expect(parseJsonValue(JsonKind.nullValue, 'x').value, isNull);
-    expect(parseJsonValue(JsonKind.object, '{"a":1}').value, {'a': 1});
+    expect(parseJsonValue(JsonKind.object, '{"a":1}').value, {
+      'a': const JsonNumber('1'),
+    });
     expect(parseJsonValue(JsonKind.object, '[1]').error, 'Not an object');
     expect(parseJsonValue(JsonKind.array, '[').error, startsWith('Invalid'));
+    expect(parseJsonValue(JsonKind.array, '[12345678901234567890]').value, [
+      const JsonNumber('12345678901234567890'),
+    ]);
+    expect(
+      parseJsonValue(JsonKind.object, '{"a":1,"a":2}').error,
+      contains('Duplicate'),
+    );
   });
 }
