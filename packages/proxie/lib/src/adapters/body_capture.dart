@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 
-import '../model/body.dart';
+import 'package:proxie/src/model/body.dart';
 
 /// Streams [source] through unchanged while keeping a copy of its first
 /// bytes for capture.
@@ -54,7 +54,7 @@ Stream<List<int>> teeStream(
             finished = true;
             onDone(kept.toBytes(), total);
           }
-          controller.close();
+          unawaited(controller.close());
         },
       );
     },

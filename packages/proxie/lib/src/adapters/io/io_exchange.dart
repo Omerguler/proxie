@@ -2,18 +2,18 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
-import '../../core/decision.dart';
-import '../../core/engine.dart';
-import '../../core/rule.dart';
-import '../../model/body.dart';
-import '../../model/call.dart';
-import '../../model/request.dart';
-import '../../model/response.dart';
-import '../body_capture.dart';
-import '../capture_marker.dart';
-import 'buffered_request.dart';
-import 'proxie_client_response.dart';
-import 'http_tokens.dart';
+import 'package:proxie/src/adapters/body_capture.dart';
+import 'package:proxie/src/adapters/capture_marker.dart';
+import 'package:proxie/src/adapters/io/buffered_request.dart';
+import 'package:proxie/src/adapters/io/http_tokens.dart';
+import 'package:proxie/src/adapters/io/proxie_client_response.dart';
+import 'package:proxie/src/core/decision.dart';
+import 'package:proxie/src/core/engine.dart';
+import 'package:proxie/src/core/rule.dart';
+import 'package:proxie/src/model/body.dart';
+import 'package:proxie/src/model/call.dart';
+import 'package:proxie/src/model/request.dart';
+import 'package:proxie/src/model/response.dart';
 
 const _simulatedNoConnection = 'Connection failed (simulated by Proxie)';
 const _simulatedTimeout = 'Request timed out (simulated by Proxie)';
@@ -22,13 +22,14 @@ const _simulatedTimeout = 'Request timed out (simulated by Proxie)';
 /// the request, then sends it to the real client, answers from a Map Local
 /// rule, or fails it, and hands back the response for the app.
 ///
-/// With no [engine] the request is sent to [inner] as given, unrecorded.
+/// With no `engine` the request is sent to `inner` as given, unrecorded.
 ///
 /// A response is fully buffered only when a response breakpoint matches the
 /// (possibly edited) request; otherwise it streams through with a copy of at
 /// most `teeCap` bytes recorded when the app finishes reading. A streamed
 /// response the app never listens to leaves the call pending.
 class IoExchange {
+  /// Creates the exchange for [request] with its buffered body [bytes].
   IoExchange({
     required BufferedHttpClientRequest request,
     required HttpClient inner,
@@ -75,10 +76,12 @@ class IoExchange {
     real?.abort(error, stackTrace);
   }
 
+  /// Records and sends the request, or answers or fails it per the
+  /// engine's decision, and returns the response for the app.
   Future<HttpClientResponse> run() async {
     final engine = _engine;
     if (engine == null) {
-      return _send(_request.method, _request.uri, null, _bytes);
+      return await _send(_request.method, _request.uri, null, _bytes);
     }
     final callId = engine.newCallId();
     _callId = callId;
@@ -98,9 +101,9 @@ class IoExchange {
       case AbortRequest(:final error):
         throw HttpException(error.message, uri: _request.uri);
       case Mock(:final action):
-        return _mock(engine, callId, action);
+        return await _mock(engine, callId, action);
       case Proceed(request: final proceeded):
-        return _proceed(engine, callId, captured, proceeded);
+        return await _proceed(engine, callId, captured, proceeded);
     }
   }
 
@@ -242,6 +245,8 @@ class IoExchange {
     final abortError = _abortError;
     if (abortError != null) {
       out.abort(abortError);
+      // abort() takes any Object; rethrow it as given, as dart:io does.
+      // ignore: only_throw_errors
       throw abortError;
     }
     out
@@ -265,7 +270,7 @@ class IoExchange {
     }
     if (bytes.isNotEmpty) out.add(bytes);
     _bytes = Uint8List(0);
-    return out.close();
+    return await out.close();
   });
 
   /// Makes [target]'s headers equal [wanted], keeping the names' spelling
@@ -371,7 +376,7 @@ class IoExchange {
   bool _hasResponseBreakpoint(ProxieEngine engine, ProxieRequest req) {
     try {
       return engine.rules.responseBreakpointFor(req) != null;
-    } catch (_) {
+    } on Object catch (_) {
       // The engine logs and ignores failing rule lookups as well.
       return false;
     }
@@ -379,6 +384,8 @@ class IoExchange {
 
   void _checkNotAborted() {
     final error = _abortError;
+    // abort() takes any Object; rethrow it as given, as dart:io does.
+    // ignore: only_throw_errors
     if (error != null) throw error;
   }
 }

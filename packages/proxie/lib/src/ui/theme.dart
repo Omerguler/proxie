@@ -1,8 +1,12 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+
+import 'package:proxie/src/config.dart';
 
 /// Proxie's semantic colors, attached to [ProxieTheme] as a theme extension.
 @immutable
 class ProxieColors extends ThemeExtension<ProxieColors> {
+  /// Creates a color set; every color has a default.
   const ProxieColors({
     this.get = const Color(0xFF58A6FF),
     this.post = const Color(0xFF3FB950),
@@ -16,6 +20,10 @@ class ProxieColors extends ThemeExtension<ProxieColors> {
     this.accentStart = const Color(0xFF7C5CFF),
     this.accentEnd = const Color(0xFF20C3FF),
   });
+
+  /// The colors of the nearest Proxie theme, or the defaults.
+  factory ProxieColors.of(BuildContext context) =>
+      Theme.of(context).extension<ProxieColors>() ?? const ProxieColors();
 
   /// GET.
   final Color get;
@@ -44,7 +52,10 @@ class ProxieColors extends ThemeExtension<ProxieColors> {
   /// Calls without a response yet; also other methods and status codes.
   final Color pending;
 
+  /// The first color of [accentGradient].
   final Color accentStart;
+
+  /// The last color of [accentGradient].
   final Color accentEnd;
 
   /// The accent gradient, top-left to bottom-right.
@@ -74,10 +85,6 @@ class ProxieColors extends ThemeExtension<ProxieColors> {
     if (code >= 500) return serverError;
     return pending;
   }
-
-  /// The colors of the nearest Proxie theme, or the defaults.
-  static ProxieColors of(BuildContext context) =>
-      Theme.of(context).extension<ProxieColors>() ?? const ProxieColors();
 
   @override
   ProxieColors copyWith({
@@ -135,7 +142,20 @@ abstract final class ProxieTheme {
   /// The default theme.
   static ThemeData dark() => _dark;
 
+  /// The light theme.
   static ThemeData light() => _light;
+
+  /// The theme for [mode]; [ProxieThemeMode.system] picks by
+  /// [platformBrightness] (never by the host app's theme).
+  static ThemeData resolve(
+    ProxieThemeMode mode,
+    Brightness platformBrightness,
+  ) => switch (mode) {
+    ProxieThemeMode.dark => _dark,
+    ProxieThemeMode.light => _light,
+    ProxieThemeMode.system =>
+      platformBrightness == Brightness.dark ? _dark : _light,
+  };
 
   static ThemeData _build(Brightness brightness) {
     const colors = ProxieColors();
@@ -172,5 +192,61 @@ abstract final class ProxieTheme {
       ),
       extensions: const [colors],
     );
+  }
+}
+
+/// Puts [child] in Proxie's theme for [mode], and supplies what Proxie's
+/// Material widgets need when the host does not: a [MediaQuery] (from the
+/// view), Material/Cupertino/Widgets localizations (English defaults,
+/// whatever the host's locale) and
+/// a [Directionality] (the host's, else left-to-right). Lets `Proxie.wrap`
+/// work under a `WidgetsApp`, a `CupertinoApp` or no app at all.
+class ProxieThemed extends StatelessWidget {
+  /// Creates the wrapper that themes [child] by [mode].
+  const ProxieThemed({required this.mode, required this.child, super.key});
+
+  /// Which of Proxie's themes applies.
+  final ProxieThemeMode mode;
+
+  /// The Proxie UI to theme.
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final direction = Directionality.maybeOf(context) ?? TextDirection.ltr;
+    Widget result = Directionality(
+      textDirection: direction,
+      child: Builder(
+        builder: (context) => Theme(
+          data: ProxieTheme.resolve(
+            mode,
+            MediaQuery.platformBrightnessOf(context),
+          ),
+          child: child,
+        ),
+      ),
+    );
+    if (Localizations.of<MaterialLocalizations>(
+          context,
+          MaterialLocalizations,
+        ) ==
+        null) {
+      // The default delegates only support English, so the fallback is
+      // always en_US whatever the host's locale; the Directionality inside
+      // keeps the host's text direction.
+      result = Localizations(
+        locale: const Locale('en', 'US'),
+        delegates: const [
+          DefaultMaterialLocalizations.delegate,
+          DefaultCupertinoLocalizations.delegate,
+          DefaultWidgetsLocalizations.delegate,
+        ],
+        child: result,
+      );
+    }
+    if (MediaQuery.maybeOf(context) == null) {
+      result = MediaQuery.fromView(view: View.of(context), child: result);
+    }
+    return result;
   }
 }

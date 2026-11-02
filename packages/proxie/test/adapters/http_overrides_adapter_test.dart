@@ -58,7 +58,7 @@ void main() {
   test('inside runMarkedCaptured nothing is captured', () async {
     final body = await runMarkedCaptured(() async {
       final res = await h.send('GET', '/json');
-      return readText(res);
+      return await readText(res);
     });
     expect(body, '{"hello":"world"}');
     await pumpEventQueue();
@@ -243,8 +243,7 @@ void main() {
       final fake = _FakeClient();
       HttpOverrides.global = _FixedOverrides(fake);
       h.adapter.attach(h.engine);
-      final client = HttpClient();
-      client.close(force: true);
+      final client = HttpClient()..close(force: true);
       expect(fake.closedForce, isTrue);
       expect(() => client.getUrl(h.server.url('/json')), throwsStateError);
 
@@ -302,8 +301,9 @@ void main() {
     final s = stub.ProxieHttpOverridesAdapter();
     expect(s.name, 'io');
     expect(s.supportsReplay, isFalse);
-    s.attach(h.engine);
-    s.detach();
+    s
+      ..attach(h.engine)
+      ..detach();
     expect(
       () => s.replay(
         ProxieRequest(

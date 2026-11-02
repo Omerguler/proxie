@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:proxie/proxie.dart';
@@ -21,7 +23,7 @@ void main() {
     fakeAsync((async) {
       final c = BreakpointController();
       BreakpointResolution? got;
-      c.pause(_paused('a')).then((r) => got = r);
+      unawaited(c.pause(_paused('a')).then((r) => got = r));
       final edited = ExecuteRequest(_req().copyWith(method: 'POST'));
       c.resolve('a', edited);
       async.flushMicrotasks();
@@ -34,7 +36,7 @@ void main() {
     fakeAsync((async) {
       final c = BreakpointController();
       for (final id in ['a', 'b', 'c']) {
-        c.pause(_paused(id));
+        unawaited(c.pause(_paused(id)));
       }
       expect(c.pending.map((p) => p.callId), ['a', 'b', 'c']);
       c.resolve('b', const Abort());
@@ -46,7 +48,7 @@ void main() {
     fakeAsync((async) {
       final c = BreakpointController();
       BreakpointResolution? got;
-      c.pause(_paused('a')).then((r) => got = r);
+      unawaited(c.pause(_paused('a')).then((r) => got = r));
       async.elapse(const Duration(seconds: 59));
       expect(got, isNull);
       expect(c.pending, hasLength(1));
@@ -57,8 +59,7 @@ void main() {
   });
 
   test('resolve for an unknown id is a no-op', () {
-    final c = BreakpointController();
-    c.resolve('nope', const Abort());
+    final c = BreakpointController()..resolve('nope', const Abort());
     expect(c.pending, isEmpty);
   });
 
@@ -66,8 +67,8 @@ void main() {
     fakeAsync((async) {
       final c = BreakpointController();
       BreakpointResolution? first;
-      c.pause(_paused('a')).then((r) => first = r);
-      c.pause(_paused('a'));
+      unawaited(c.pause(_paused('a')).then((r) => first = r));
+      unawaited(c.pause(_paused('a')));
       async.flushMicrotasks();
       expect(first, isA<ContinueUnchanged>());
       expect(c.pending, hasLength(1));
@@ -78,7 +79,7 @@ void main() {
     fakeAsync((async) {
       final c = BreakpointController();
       BreakpointResolution? got;
-      c.pause(_paused('a')).then((r) => got = r);
+      unawaited(c.pause(_paused('a')).then((r) => got = r));
       var closed = false;
       c.changes.listen((_) {}, onDone: () => closed = true);
       c.dispose();
@@ -94,7 +95,7 @@ void main() {
       final c = BreakpointController();
       final seen = <int>[];
       c.changes.listen((l) => seen.add(l.length));
-      c.pause(_paused('a'));
+      unawaited(c.pause(_paused('a')));
       c.resolve('a', const ContinueUnchanged());
       async.flushMicrotasks();
       expect(seen, [1, 0]);

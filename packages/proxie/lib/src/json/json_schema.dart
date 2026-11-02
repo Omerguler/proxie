@@ -1,7 +1,8 @@
-import 'json_row.dart';
+import 'package:proxie/src/json/json_row.dart';
 
 /// One member seen in the objects of an array.
 class InferredField {
+  /// Creates a field seen in [presentIn] of [total] objects.
   InferredField({
     required this.key,
     required Set<JsonKind> kinds,
@@ -9,6 +10,7 @@ class InferredField {
     required this.total,
   }) : kinds = Set.unmodifiable(kinds);
 
+  /// The member name.
   final String key;
 
   /// Kinds of its values, in first-seen order; unmodifiable.
@@ -26,6 +28,7 @@ class InferredField {
 
 /// The shape of the objects in an array; other items are ignored.
 class ArraySchema {
+  /// Creates a schema with [fields], copied into an unmodifiable list.
   ArraySchema(List<InferredField> fields) : fields = List.unmodifiable(fields);
 
   /// In first-seen order across the objects; unmodifiable.
@@ -35,8 +38,7 @@ class ArraySchema {
   String describe() {
     final parts = [
       for (final f in fields)
-        '${f.key}${f.optional ? '?' : ''}: '
-            '${[for (final k in f.kinds) _kindName(k)].join('|')}',
+        '${f.key}${f.optional ? '?' : ''}: ${f.kinds.map(_kindName).join('|')}',
     ];
     return '{${parts.join(', ')}}';
   }
@@ -50,7 +52,7 @@ String _kindName(JsonKind kind) =>
 
 /// Accumulates an [ArraySchema] from an array's objects, member by member.
 class ArraySchemaBuilder {
-  /// [keyNames] maps the key ids given to [addMember] to member names.
+  /// `keyNames` maps the key ids given to [addMember] to member names.
   ArraySchemaBuilder(this._keyNames);
 
   final List<String> _keyNames;

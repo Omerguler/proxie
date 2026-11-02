@@ -1,7 +1,7 @@
-import '../config.dart';
-import '../storage/memory_store.dart';
-import 'in_process_worker.dart';
-import 'worker.dart';
+import 'package:proxie/src/config.dart';
+import 'package:proxie/src/storage/memory_store.dart';
+import 'package:proxie/src/worker/in_process_worker.dart';
+import 'package:proxie/src/worker/worker.dart';
 
 /// Web has no isolates or files: commands run in-process over memory.
 Future<ProxieWorker> spawnProxieWorker(

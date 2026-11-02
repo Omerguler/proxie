@@ -69,7 +69,7 @@ void main() {
     });
 
     test('member names are matched decoded', () {
-      final doc = _doc(r'{"Key":1,"Ünï":2,"plain":3}');
+      final doc = _doc('{"Key":1,"Ünï":2,"plain":3}');
       expect(_find(doc, 'key'), [
         ['Key'],
       ]);
@@ -268,13 +268,12 @@ void main() {
             body: ProxieBody.from(
               Uint8List.fromList(utf8.encode('{"a":{"b":"Find me"},"c":1}')),
               'application/json',
-              cap: defaultBodyCap,
             ),
           ),
           startedAt: DateTime.utc(2026),
         ),
       );
-      final h = await OpenJson('c1', JsonBodySide.request).execute(ctx);
+      final h = await const OpenJson('c1', JsonBodySide.request).execute(ctx);
       final hits = await JsonSearch(h.docId, 'FIND').execute(ctx);
       expect(hits, hasLength(1));
       expect(await JsonSearch(h.docId, 'a', limit: 0).execute(ctx), isEmpty);
@@ -283,11 +282,11 @@ void main() {
       final rows = await JsonRows(h.docId, row, 1).execute(ctx);
       expect(rows.single.nodeId, hits.single);
       expect(
-        () => JsonSearch('x', 'a').execute(ctx),
+        () => const JsonSearch('x', 'a').execute(ctx),
         throwsA(isA<JsonDocumentClosed>()),
       );
       expect(
-        () => JsonReveal('x', 1).execute(ctx),
+        () => const JsonReveal('x', 1).execute(ctx),
         throwsA(isA<JsonDocumentClosed>()),
       );
     });

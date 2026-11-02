@@ -1,13 +1,17 @@
-import '../config.dart';
-import '../core/engine.dart';
-import '../model/call.dart';
-import '../storage/store.dart';
+import 'package:proxie/src/config.dart';
+import 'package:proxie/src/core/engine.dart';
+import 'package:proxie/src/model/call.dart';
+import 'package:proxie/src/storage/store.dart';
 
 /// What a [WorkerCommand] runs against inside the worker.
 class WorkerContext {
+  /// Creates the context for commands running against [store].
   WorkerContext({required this.store, required this.config});
 
+  /// Where calls, rules and presets are kept.
   final ProxieStore store;
+
+  /// The settings the worker was started with.
   final ProxieConfig config;
 
   /// Long-lived worker-side state shared between commands (e.g. parsed
@@ -21,6 +25,7 @@ class WorkerContext {
 /// Commands and their results cross an isolate boundary on native, so they
 /// must hold only sendable objects (no ports, sockets or native handles).
 abstract class WorkerCommand<R> {
+  /// Lets subclasses be const.
   const WorkerCommand();
 
   /// Must complete. Commands run one at a time, so one that never completes
@@ -30,6 +35,7 @@ abstract class WorkerCommand<R> {
 
 /// A failure inside the worker, carrying the original error's details.
 class ProxieWorkerException implements Exception {
+  /// Creates an exception from the original error's details.
   const ProxieWorkerException({
     required this.type,
     required this.message,

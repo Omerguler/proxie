@@ -92,7 +92,7 @@ void _onPause(
   sub = engine.breakpoints.changes.listen((pending) {
     for (final p in pending) {
       if (p.phase == phase) {
-        sub.cancel();
+        unawaited(sub.cancel());
         engine.breakpoints.resolve(p.callId, resolve(p));
         return;
       }
@@ -190,7 +190,10 @@ void main() {
       url('/echo'),
       data: {'a': 1, 'b': 'two'},
     );
-    expect(jsonDecode(res.data['body'] as String), {'a': 1, 'b': 'two'});
+    expect(jsonDecode((res.data as Map)['body'] as String), {
+      'a': 1,
+      'b': 'two',
+    });
     await pumpEventQueue();
     final req = sink.last.request;
     expect(req.method, 'POST');
@@ -205,7 +208,7 @@ void main() {
       data: {'a': '1', 'b': 'x y'},
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
-    final sent = res.data['body'] as String;
+    final sent = (res.data as Map)['body'] as String;
     expect(sent, 'a=1&b=x+y');
     await pumpEventQueue();
     expect(sink.last.request.body.text, sent);
@@ -258,7 +261,7 @@ void main() {
         headers: {Headers.contentLengthHeader: 4},
       ),
     );
-    expect(res.data['body'], 'abcd');
+    expect((res.data as Map)['body'], 'abcd');
     await pumpEventQueue();
     final body = sink.last.request.body;
     expect(body.text, 'streamed body');
@@ -725,7 +728,7 @@ void main() {
     late StreamSubscription<List<PausedCall>> sub;
     sub = engine.breakpoints.changes.listen((pending) {
       if (pending.isNotEmpty) {
-        sub.cancel();
+        unawaited(sub.cancel());
         token.cancel('bye');
       }
     });

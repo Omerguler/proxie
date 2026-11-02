@@ -140,11 +140,11 @@ class TestServer {
         res.statusCode = HttpStatus.notFound;
       }
       await res.close();
-    } catch (_) {
+    } on Object catch (_) {
       // The client went away mid-response; nothing to do.
       try {
         await res.close();
-      } catch (_) {}
+      } on Object catch (_) {}
     }
   }
 }

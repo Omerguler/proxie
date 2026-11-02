@@ -1,20 +1,19 @@
 import 'package:flutter/foundation.dart';
 
-import '../core/presets.dart';
-import '../core/rule.dart';
-import '../model/body.dart';
-import '../model/call.dart';
-import 'call_query.dart';
-import 'store.dart';
+import 'package:proxie/src/core/presets.dart';
+import 'package:proxie/src/core/rule.dart';
+import 'package:proxie/src/model/body.dart';
+import 'package:proxie/src/model/call.dart';
+import 'package:proxie/src/storage/call_query.dart';
+import 'package:proxie/src/storage/store.dart';
 
 class _Entry {
-  _Entry._(this.map, this.call) : summary = CallSummary.fromCall(call);
-
   /// Stores an independent serialized copy of [source].
   factory _Entry(ProxieCall source) {
     final map = source.toMap();
     return _Entry._(map, ProxieCall.fromMap(map));
   }
+  _Entry._(this.map, this.call) : summary = CallSummary.fromCall(call);
 
   final Map<String, Object?> map;
   final ProxieCall call;
@@ -26,6 +25,7 @@ class _Entry {
 /// Like a database it stores serialized copies, so later mutation of objects
 /// passed in or handed out never changes what is stored.
 class MemoryStore implements ProxieStore {
+  /// Creates an empty store; [now] stands in for the clock in tests.
   MemoryStore({DateTime Function()? now}) : _now = now ?? DateTime.now;
 
   final DateTime Function() _now;
@@ -139,6 +139,9 @@ class MemoryStore implements ProxieStore {
         out.add(ProxieRule.fromMap(ProxieRule.fromMap(m).toMap()));
       } on Exception {
         // Skip rules that no longer decode (e.g. written by a newer version).
+        // Stored rows are decoded with casts, so a wrongly typed field shows
+        // up as a TypeError; skip that row like any other undecodable one.
+        // ignore: avoid_catching_errors
       } on TypeError {
         // A wrongly typed field in a stored row.
       }
@@ -156,16 +159,19 @@ class MemoryStore implements ProxieStore {
     final out = <ResponsePreset>[];
     for (final m in _presets.values) {
       try {
-        final action = MapLocalAction.fromMap(m['action'] as Map);
+        final action = MapLocalAction.fromMap(m['action']! as Map);
         out.add(
           ResponsePreset(
-            id: m['id'] as String,
-            label: m['label'] as String,
+            id: m['id']! as String,
+            label: m['label']! as String,
             build: (_) => MapLocalAction.fromMap(action.toMap()),
           ),
         );
       } on Exception {
         // Skip presets that no longer decode.
+        // Stored rows are decoded with casts, so a wrongly typed field shows
+        // up as a TypeError; skip that row like any other undecodable one.
+        // ignore: avoid_catching_errors
       } on TypeError {
         // A wrongly typed field in a stored row.
       }

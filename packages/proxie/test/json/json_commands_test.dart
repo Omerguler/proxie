@@ -29,7 +29,7 @@ ProxieCall _call(String id, {ProxieBody? request, ProxieBody? response}) =>
       startedAt: DateTime.utc(2026),
     );
 
-final _closed = throwsA(isA<JsonDocumentClosed>());
+final Matcher _closed = throwsA(isA<JsonDocumentClosed>());
 
 /// A JSON array of [n] zeros: n + 1 nodes.
 ProxieBody _zeros(int n) => ProxieBody(
@@ -88,9 +88,9 @@ void main() {
   });
 
   test('unknown docs throw JsonDocumentClosed', () async {
-    expect(() => JsonRows('x', 0, 1).execute(ctx), _closed);
-    expect(() => JsonToggle('x', 0).execute(ctx), _closed);
-    expect(() => JsonSchema('x', 0).execute(ctx), _closed);
+    expect(() => const JsonRows('x', 0, 1).execute(ctx), _closed);
+    expect(() => const JsonToggle('x', 0).execute(ctx), _closed);
+    expect(() => const JsonSchema('x', 0).execute(ctx), _closed);
     expect(
       const JsonDocumentClosed('x').toString(),
       'JsonDocumentClosed: no open JSON document x',
@@ -242,8 +242,8 @@ void main() {
     );
     // The stored body is not touched by edits.
     expect(utf8.decode((await store.get('c1'))!.response!.body.bytes), src);
-    expect(() => JsonApply('x', const DeleteNode(1)).execute(ctx), _closed);
-    expect(() => JsonEncode('x').execute(ctx), _closed);
+    expect(() => const JsonApply('x', DeleteNode(1)).execute(ctx), _closed);
+    expect(() => const JsonEncode('x').execute(ctx), _closed);
   });
 
   test('JsonApply and JsonEncode on an unparsed body throw', () async {
@@ -317,7 +317,7 @@ void main() {
     worker.upsert(
       _call('c1', response: _body('{"l":[{"id":1,"x":"a"},{"id":2}],"k":0}')),
     );
-    final h = await worker.run(OpenJson('c1', JsonBodySide.response));
+    final h = await worker.run(const OpenJson('c1', JsonBodySide.response));
     Future<int> apply(JsonEdit e) => worker.run(JsonApply(h.docId, e));
     final top = await worker.run(JsonRows(h.docId, 0, 2));
     final l = top[0].nodeId;
@@ -370,11 +370,11 @@ void main() {
     );
     addTearDown(worker.dispose);
     worker.upsert(_call('c1', response: _body('{"a":{"b":1}}')));
-    final h = await worker.run(OpenJson('c1', JsonBodySide.response));
+    final h = await worker.run(const OpenJson('c1', JsonBodySide.response));
     final rows = await worker.run(JsonRows(h.docId, 0, 5));
     expect(rows.single.key, 'a');
     expect(await worker.run(JsonToggle(h.docId, rows.single.nodeId)), 2);
-    final list = await worker.run(OpenJson('c1', JsonBodySide.request));
+    final list = await worker.run(const OpenJson('c1', JsonBodySide.request));
     final schema = await worker.run(JsonSchema(list.docId, 0));
     expect(schema, isNull); // {"q":[1,2,3]} root is an object
     await worker.run(CloseJson(h.docId));

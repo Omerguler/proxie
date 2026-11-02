@@ -1,17 +1,36 @@
 /// The JSON type of a node.
-enum JsonKind { object, array, string, number, boolean, nullValue }
+enum JsonKind {
+  /// A `{...}` object.
+  object,
+
+  /// A `[...]` array.
+  array,
+
+  /// A string.
+  string,
+
+  /// A number.
+  number,
+
+  /// `true` or `false`.
+  boolean,
+
+  /// `null`.
+  nullValue,
+}
 
 /// One visible line of a JSON tree view.
 class JsonRow {
+  /// Creates a row for node [nodeId].
   const JsonRow({
     required this.nodeId,
     required this.depth,
-    this.key,
-    this.index,
     required this.kind,
     required this.preview,
     required this.childCount,
     required this.expanded,
+    this.key,
+    this.index,
     this.missingKeys = const [],
   });
 
@@ -27,6 +46,7 @@ class JsonRow {
   /// Position when the parent is an array.
   final int? index;
 
+  /// The JSON kind of the node's value.
   final JsonKind kind;
 
   /// Single-line summary of the value, at most 120 characters.
@@ -35,6 +55,7 @@ class JsonRow {
   /// Members or items of an object or array; 0 for scalars.
   final int childCount;
 
+  /// Whether an object or array row is expanded; false for scalars.
   final bool expanded;
 
   /// Keys that other objects in the same array have and this one lacks, in

@@ -26,7 +26,7 @@ Future<ProxieBody> captureRequestBody(
   Transformer transformer, {
   required int cap,
 }) async {
-  final data = options.data;
+  final Object? data = options.data;
   try {
     if (data == null) return ProxieBody.empty();
     if (data is Stream) {
@@ -58,7 +58,7 @@ Future<ProxieBody> captureRequestBody(
       }
     }
     return ProxieBody.from(bytes, options.contentType, cap: cap);
-  } catch (e) {
+  } on Object catch (e) {
     // Dio reports the same failure when it encodes the body itself.
     return _placeholder('body not captured: $e', 0);
   }
@@ -99,6 +99,9 @@ Uint8List encodeResponseData(Object? data, ResponseType type) {
   if (data is Map || data is List || data is num || data is bool) {
     try {
       return utf8.encode(jsonEncode(data));
+      // jsonEncode reports an unencodable object only with this Error, so it
+      // is caught to fall back to the toString() form below.
+      // ignore: avoid_catching_errors
     } on JsonUnsupportedObjectError {
       // A custom responseDecoder may produce objects JSON cannot hold.
     }

@@ -108,7 +108,7 @@ void main() {
     test('truncates to cap and records the original length', () {
       const mb = 1024 * 1024;
       final big = Uint8List(6 * mb)..fillRange(0, 6 * mb, 0x61);
-      final b = ProxieBody.from(big, 'text/plain', cap: 5 * mb);
+      final b = ProxieBody.from(big, 'text/plain');
       expect(b.bytes.length, 5 * mb);
       expect(b.truncated, isTrue);
       expect(b.originalLength, 6 * mb);
@@ -192,7 +192,7 @@ void main() {
 
     test('toMap returns a copy of the bytes', () {
       final b = ProxieBody.from(_s('hello'), 'text/plain');
-      (b.toMap()['bytes'] as Uint8List)[0] = 0x58;
+      (b.toMap()['bytes']! as Uint8List)[0] = 0x58;
       expect(b.text, 'hello');
     });
   });

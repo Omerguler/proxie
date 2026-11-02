@@ -4,11 +4,11 @@ import 'dart:isolate';
 
 import 'package:flutter/foundation.dart' show visibleForTesting;
 
-import '../config.dart';
-import '../model/call.dart';
-import '../storage/store.dart';
-import 'in_process_worker.dart';
-import 'worker.dart';
+import 'package:proxie/src/config.dart';
+import 'package:proxie/src/model/call.dart';
+import 'package:proxie/src/storage/store.dart';
+import 'package:proxie/src/worker/in_process_worker.dart';
+import 'package:proxie/src/worker/worker.dart';
 
 /// A [ProxieWorker] running in its own isolate of the same group, so
 /// commands and results are sent as objects, without serialization.
@@ -37,7 +37,7 @@ class IsolateWorker implements ProxieWorker {
     final port = RawReceivePort();
     final ready = Completer<_Ready>();
     Object? lastError;
-    port.handler = (Object? msg) {
+    void onMessage(Object? msg) {
       if (ready.isCompleted) return;
       switch (msg) {
         case _Ready():
@@ -54,7 +54,9 @@ class IsolateWorker implements ProxieWorker {
         case [final error, final stack]: // uncaught error
           lastError = '$error\n$stack';
       }
-    };
+    }
+
+    port.handler = onMessage;
     final Isolate isolate;
     try {
       isolate = await Isolate.spawn(
@@ -89,6 +91,7 @@ class IsolateWorker implements ProxieWorker {
 
   final Isolate _isolate;
 
+  /// The worker isolate, exposed so tests can observe its exit.
   @visibleForTesting
   Isolate get isolate => _isolate;
   final RawReceivePort _port;
@@ -109,7 +112,7 @@ class IsolateWorker implements ProxieWorker {
   bool get _dead => _exited.isCompleted;
 
   void _listen() {
-    _port.handler = (Object? msg) {
+    void onMessage(Object? msg) {
       switch (msg) {
         case _Result(:final id, :final value):
           _pending.remove(id)?.complete(value);
@@ -120,7 +123,9 @@ class IsolateWorker implements ProxieWorker {
         case [final error, final stack]: // uncaught error
           _lastError = '$error\n$stack';
       }
-    };
+    }
+
+    _port.handler = onMessage;
   }
 
   void _onExit() {
@@ -146,7 +151,7 @@ class IsolateWorker implements ProxieWorker {
     if (_disposed || _dead) return;
     try {
       _commands.send(_Upsert(call));
-    } catch (e) {
+    } on Object catch (e) {
       developer.log('Failed to send call ${call.id}', name: 'proxie', error: e);
     }
   }
@@ -200,7 +205,7 @@ class IsolateWorker implements ProxieWorker {
     // Replies still being sent; dispose waits for them before exiting.
     final replying = <Future<void>>{};
     final commands = RawReceivePort();
-    commands.handler = (Object? msg) {
+    void onMessage(Object? msg) {
       switch (msg) {
         case _Upsert(:final call):
           inner.upsert(call);
@@ -211,7 +216,7 @@ class IsolateWorker implements ProxieWorker {
                 (value) {
                   try {
                     reply.send(_Result(id, value));
-                  } catch (e, st) {
+                  } on Object catch (e, st) {
                     reply.send(_Failure(id, ProxieWorkerException.wrap(e, st)));
                   }
                 },
@@ -220,24 +225,28 @@ class IsolateWorker implements ProxieWorker {
                 },
               );
           replying.add(replied);
-          replied.whenComplete(() => replying.remove(replied));
+          unawaited(replied.whenComplete(() => replying.remove(replied)));
         case _Dispose():
           commands.close();
-          Future.wait(replying)
-              .then((_) => inner.dispose())
-              .then(
-                (_) => Isolate.exit(),
-                onError: (Object e) {
-                  developer.log(
-                    'Failed to close the store',
-                    name: 'proxie',
-                    error: e,
-                  );
-                  Isolate.exit();
-                },
-              );
+          unawaited(
+            Future.wait(replying)
+                .then((_) => inner.dispose())
+                .then(
+                  (_) => Isolate.exit(),
+                  onError: (Object e) {
+                    developer.log(
+                      'Failed to close the store',
+                      name: 'proxie',
+                      error: e,
+                    );
+                    Isolate.exit();
+                  },
+                ),
+          );
       }
-    };
+    }
+
+    commands.handler = onMessage;
     reply.send(_Ready(commands.sendPort, inner.sessionId));
   }
 }

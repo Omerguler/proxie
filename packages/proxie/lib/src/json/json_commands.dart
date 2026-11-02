@@ -1,10 +1,10 @@
 import 'dart:typed_data';
 
-import '../model/body.dart';
-import '../worker/worker.dart';
-import 'json_document.dart';
-import 'json_row.dart';
-import 'json_schema.dart';
+import 'package:proxie/src/json/json_document.dart';
+import 'package:proxie/src/json/json_row.dart';
+import 'package:proxie/src/json/json_schema.dart';
+import 'package:proxie/src/model/body.dart';
+import 'package:proxie/src/worker/worker.dart';
 
 /// Documents kept open per worker; opening more evicts the least recently
 /// used one.
@@ -17,12 +17,20 @@ const int maxOpenJsonDocs = 8;
 const int maxOpenJsonNodes = 4000000;
 
 /// Which body of a call to open.
-enum JsonBodySide { request, response }
+enum JsonBodySide {
+  /// The body the app sent.
+  request,
+
+  /// The body the server answered with.
+  response,
+}
 
 /// The document named by [docId] was closed, evicted or never opened.
 class JsonDocumentClosed implements Exception {
+  /// Creates the error for the document [docId].
   const JsonDocumentClosed(this.docId);
 
+  /// The id that named no open document.
   final String docId;
 
   @override
@@ -31,17 +39,19 @@ class JsonDocumentClosed implements Exception {
 
 /// A JSON document opened in the worker.
 class JsonHandle {
+  /// Describes a document the worker has just opened.
   const JsonHandle({
     required this.docId,
     required this.visibleCount,
-    this.parseError,
     required this.truncated,
+    this.parseError,
   });
 
   /// Names the document in later commands; valid until [CloseJson] or
   /// eviction.
   final String docId;
 
+  /// How many rows the tree shows with the current expansion state.
   final int visibleCount;
 
   /// Why there is no tree; null when the body parsed.
@@ -56,11 +66,17 @@ class JsonHandle {
 /// mislabeled. Reopening an unchanged body returns the document already
 /// open for it, expansion state included.
 class OpenJson extends WorkerCommand<JsonHandle> {
+  /// Creates a command that opens the [side] body of call [callId].
   const OpenJson(this.callId, this.side);
 
+  /// The id of the call whose body is opened.
   final String callId;
+
+  /// Which of the call's bodies is opened.
   final JsonBodySide side;
 
+  /// The parse error reported for a body that was cut at capture, since
+  /// its tail, not the JSON, is what is missing.
   static const truncatedError =
       'Body was truncated at capture; full JSON unavailable';
 
@@ -93,11 +109,18 @@ class OpenJson extends WorkerCommand<JsonHandle> {
   }
 }
 
+/// Up to [count] visible rows of a document, starting at row [start].
 class JsonRows extends WorkerCommand<List<JsonRow>> {
+  /// Creates a command that reads rows of document [docId].
   const JsonRows(this.docId, this.start, this.count);
 
+  /// The document to read from.
   final String docId;
+
+  /// Index of the first visible row to return.
   final int start;
+
+  /// The most rows to return.
   final int count;
 
   @override
@@ -107,15 +130,18 @@ class JsonRows extends WorkerCommand<List<JsonRow>> {
 
 /// Expands or collapses a node; returns the new visible row count.
 class JsonToggle extends WorkerCommand<int> {
+  /// Creates a command that toggles node [nodeId] of document [docId].
   const JsonToggle(this.docId, this.nodeId);
 
+  /// The document holding the node.
   final String docId;
+
+  /// The container node to expand or collapse.
   final int nodeId;
 
   @override
   Future<int> execute(WorkerContext ctx) async {
-    final doc = _JsonDocs.of(ctx).get(docId);
-    doc.toggle(nodeId);
+    final doc = _JsonDocs.of(ctx).get(docId)..toggle(nodeId);
     return doc.visibleCount;
   }
 }
@@ -123,9 +149,13 @@ class JsonToggle extends WorkerCommand<int> {
 /// The schema of array node [nodeId]; null when it is not an array or holds
 /// no objects.
 class JsonSchema extends WorkerCommand<ArraySchema?> {
+  /// Creates a command that infers the schema of array [nodeId].
   const JsonSchema(this.docId, this.nodeId);
 
+  /// The document holding the array.
   final String docId;
+
+  /// The array node whose objects are inspected.
   final int nodeId;
 
   @override
@@ -138,9 +168,13 @@ class JsonSchema extends WorkerCommand<ArraySchema?> {
 /// beyond [maxOpenJsonNodes] throws `StateError('Document too large to edit
 /// further')`.
 class JsonApply extends WorkerCommand<int> {
+  /// Creates a command that applies [edit] to document [docId].
   const JsonApply(this.docId, this.edit);
 
+  /// The document to change.
   final String docId;
+
+  /// The structural change to apply.
   final JsonEdit edit;
 
   @override
@@ -156,9 +190,14 @@ class JsonApply extends WorkerCommand<int> {
 /// encoding of a document no edit has changed is the original body, byte
 /// for byte. Throws a [StateError] when the body did not parse.
 class JsonEncode extends WorkerCommand<Uint8List> {
+  /// Creates a command that encodes document [docId], indented when
+  /// [pretty] is true.
   const JsonEncode(this.docId, {this.pretty = false});
 
+  /// The document to encode.
   final String docId;
+
+  /// Whether to indent the output; false gives compact JSON.
   final bool pretty;
 
   @override
@@ -175,10 +214,16 @@ class JsonEncode extends WorkerCommand<Uint8List> {
 
 /// Ids of up to [limit] nodes matching [query]; see [JsonDocument.search].
 class JsonSearch extends WorkerCommand<List<int>> {
+  /// Creates a command that searches document [docId] for [query].
   const JsonSearch(this.docId, this.query, {this.limit = 500});
 
+  /// The document to search.
   final String docId;
+
+  /// The text to look for; see [JsonDocument.search] for what matches.
   final String query;
+
+  /// The most node ids to return.
   final int limit;
 
   @override
@@ -189,9 +234,13 @@ class JsonSearch extends WorkerCommand<List<int>> {
 /// Expands the ancestors of [nodeId]; returns its visible row index. See
 /// [JsonDocument.reveal].
 class JsonReveal extends WorkerCommand<int> {
+  /// Creates a command that makes node [nodeId] visible.
   const JsonReveal(this.docId, this.nodeId);
 
+  /// The document holding the node.
   final String docId;
+
+  /// The node to scroll to once its ancestors are open.
   final int nodeId;
 
   @override
@@ -201,8 +250,10 @@ class JsonReveal extends WorkerCommand<int> {
 
 /// Releases a document; unknown ids are ignored.
 class CloseJson extends WorkerCommand<void> {
+  /// Creates a command that closes document [docId].
   const CloseJson(this.docId);
 
+  /// The document to release.
   final String docId;
 
   @override
@@ -228,11 +279,11 @@ class _Entry {
 class _JsonDocs {
   _JsonDocs(this._resources);
 
-  static const _registryKey = 'json:#registry';
-
-  static _JsonDocs of(WorkerContext ctx) =>
+  factory _JsonDocs.of(WorkerContext ctx) =>
       ctx.resources.putIfAbsent(_registryKey, () => _JsonDocs(ctx.resources))
           as _JsonDocs;
+
+  static const _registryKey = 'json:#registry';
 
   final Map<String, Object> _resources;
 
@@ -244,7 +295,7 @@ class _JsonDocs {
   int _nextId = 0;
   int _nodes = 0;
 
-  JsonDocument _doc(String docId) => _resources['json:$docId'] as JsonDocument;
+  JsonDocument _doc(String docId) => _resources['json:$docId']! as JsonDocument;
 
   /// The open document for [source] if its bytes are still [bytes]; a
   /// stale one, or one that did not parse, is closed.

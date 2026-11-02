@@ -1,38 +1,62 @@
-import 'request.dart';
-import 'response.dart';
+import 'package:proxie/src/model/request.dart';
+import 'package:proxie/src/model/response.dart';
 
 /// Markers describing how a call was handled.
-enum CallTag { breakpoint, mapLocal, edited, replayed, truncated }
+enum CallTag {
+  /// The call was paused at a breakpoint.
+  breakpoint,
+
+  /// The call was answered by a Map Local rule.
+  mapLocal,
+
+  /// The request or response was changed at a breakpoint.
+  edited,
+
+  /// The call was sent again from the inspector.
+  replayed,
+
+  /// A body was cut at the capture cap.
+  truncated,
+}
 
 /// A transport-level failure of a call.
 class ProxieError {
+  /// Creates an error of kind [type] with a readable [message].
   const ProxieError({required this.type, required this.message});
 
+  /// Decodes an error written by [toMap].
   factory ProxieError.fromMap(Map<dynamic, dynamic> map) => ProxieError(
     type: map['type'] as String,
     message: map['message'] as String,
   );
 
+  /// The kind of failure, such as `timeout`, `no_connection`, `aborted`,
+  /// `cancelled` or `stream_error`.
   final String type;
+
+  /// A description of the failure for people.
   final String message;
 
+  /// Encodes this error as plain data for storage and isolate messages.
   Map<String, Object?> toMap() => {'type': type, 'message': message};
 }
 
 /// One captured request/response exchange.
 class ProxieCall {
+  /// Creates a call record; [tags] is copied into an unmodifiable set.
   ProxieCall({
     required this.id,
     required this.sessionId,
     required this.adapter,
     required this.request,
+    required this.startedAt,
     this.response,
     this.error,
-    required this.startedAt,
     this.duration,
     Set<CallTag> tags = const {},
   }) : tags = Set.unmodifiable(tags);
 
+  /// Decodes a call written by [toMap].
   factory ProxieCall.fromMap(Map<dynamic, dynamic> map) {
     final response = map['response'] as Map?;
     final error = map['error'] as Map?;
@@ -53,12 +77,27 @@ class ProxieCall {
     );
   }
 
+  /// Identifies the call; unique within its engine.
   final String id;
+
+  /// The session the call was recorded in.
   final int sessionId;
+
+  /// The name of the adapter that captured the call, such as `http` or
+  /// `dio`.
   final String adapter;
+
+  /// The request as sent, after any breakpoint edits.
   final ProxieRequest request;
+
+  /// The response as the app received it; null while pending or when the
+  /// call failed before one arrived.
   final ProxieResponse? response;
+
+  /// Why the call failed; null when it did not.
   final ProxieError? error;
+
+  /// When the request started.
   final DateTime startedAt;
 
   /// Time from start to completion; includes time spent paused at breakpoints.
@@ -67,6 +106,8 @@ class ProxieCall {
   /// Unmodifiable.
   final Set<CallTag> tags;
 
+  /// A copy with the given fields replaced; the `clear` flags reset the
+  /// nullable ones to null.
   ProxieCall copyWith({
     String? id,
     int? sessionId,
@@ -92,6 +133,7 @@ class ProxieCall {
     tags: tags ?? this.tags,
   );
 
+  /// Encodes this call as plain data for storage and isolate messages.
   Map<String, Object?> toMap() => {
     'id': id,
     'sessionId': sessionId,

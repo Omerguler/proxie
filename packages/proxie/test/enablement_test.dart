@@ -9,6 +9,8 @@ import 'package:path_provider_platform_interface/path_provider_platform_interfac
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 import 'package:proxie/proxie.dart';
 
+import 'support/temp_dir.dart';
+
 class _FakePathProvider extends PathProviderPlatform
     with MockPlatformInterfaceMixin {
   _FakePathProvider(this.support);
@@ -44,6 +46,27 @@ class _FakeAdapter implements ProxieCaptureAdapter {
       throw UnimplementedError();
 }
 
+class _LogAdapter implements ProxieCaptureAdapter {
+  _LogAdapter(this.name, this.log);
+
+  @override
+  final String name;
+  final List<String> log;
+
+  @override
+  bool get supportsReplay => false;
+
+  @override
+  void attach(ProxieEngine engine) => log.add('$name.attach');
+
+  @override
+  void detach() => log.add('$name.detach');
+
+  @override
+  Future<ProxieResponse> replay(ProxieRequest request) =>
+      throw UnimplementedError();
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   late Directory tmp;
@@ -60,7 +83,7 @@ void main() {
   tearDown(() async {
     await Proxie.shutdown();
     PathProviderPlatform.instance = originalProvider;
-    tmp.deleteSync(recursive: true);
+    await deleteTempDir(tmp);
   });
 
   bool dbExists() => File(
@@ -115,8 +138,7 @@ void main() {
       await tester.pumpWidget(
         Builder(
           builder: (context) {
-            wrapped = Proxie.wrap(context, child);
-            return wrapped;
+            return wrapped = Proxie.wrap(context, child);
           },
         ),
       );
@@ -209,6 +231,74 @@ void main() {
     });
   });
 
+  group('lifecycle races', () {
+    test('init during shutdown waits for the teardown, then opens the same '
+        'database again', () async {
+      final log = <String>[];
+      await Proxie.init(adapters: [_LogAdapter('a', log)]);
+      final down = Proxie.shutdown();
+      final up = Proxie.init(adapters: [_LogAdapter('b', log)]);
+      await Future.wait([down, up]);
+      expect(log, ['a.attach', 'a.detach', 'b.attach']);
+      expect(Proxie.isActive, isTrue);
+      // A second session in the same proxie.db: the first was closed first.
+      expect(Proxie.engine!.sessionId, 2);
+    });
+
+    test('concurrent shutdowns both complete after the teardown', () async {
+      final log = <String>[];
+      await Proxie.init(adapters: [_LogAdapter('a', log)]);
+      var streamClosed = false;
+      Proxie.engine!.calls.listen(null, onDone: () => streamClosed = true);
+      final seen = <String>[];
+      final first = Proxie.shutdown().then((_) {
+        seen.add('first:${log.join(',')}:$streamClosed');
+      });
+      final second = Proxie.shutdown().then((_) {
+        seen.add('second:${log.join(',')}:$streamClosed');
+      });
+      await Future.wait([first, second]);
+      expect(
+        seen,
+        unorderedEquals([
+          'first:a.attach,a.detach:true',
+          'second:a.attach,a.detach:true',
+        ]),
+      );
+      expect(Proxie.isActive, isFalse);
+    });
+
+    test('an init called while shutdown waits for a running init ends '
+        'active', () async {
+      final log = <String>[];
+      final first = Proxie.init(
+        adapters: [_LogAdapter('a', log)],
+        config: const ProxieConfig(persistHistory: false),
+      );
+      final down = Proxie.shutdown();
+      final second = Proxie.init(
+        adapters: [_LogAdapter('b', log)],
+        config: const ProxieConfig(persistHistory: false),
+      );
+      expect(identical(first, second), isFalse);
+      await Future.wait([first, down, second]);
+      expect(log, ['a.attach', 'a.detach', 'b.attach']);
+      expect(Proxie.isActive, isTrue);
+    });
+
+    test('a shutdown after an init queued behind another shutdown tears that '
+        'init down too', () async {
+      final log = <String>[];
+      await Proxie.init(adapters: [_LogAdapter('a', log)]);
+      final down1 = Proxie.shutdown();
+      final up = Proxie.init(adapters: [_LogAdapter('b', log)]);
+      final down2 = Proxie.shutdown();
+      await Future.wait([down1, up, down2]);
+      expect(log, ['a.attach', 'a.detach', 'b.attach', 'b.detach']);
+      expect(Proxie.isActive, isFalse);
+    });
+  });
+
   group('httpClient', () {
     MockClient inner() => MockClient((_) async => http.Response('ok', 200));
 
@@ -255,6 +345,23 @@ void main() {
       await Proxie.shutdown();
       expect((await client.get(Uri.parse('https://a.test/y'))).body, 'ok');
       expect(calls, isEmpty);
+    });
+
+    test('a client created during shutdown is captured by the next '
+        'init', () async {
+      await Proxie.init(config: const ProxieConfig(persistHistory: false));
+      final down = Proxie.shutdown();
+      final client = Proxie.httpClient(inner: inner());
+      await Future.wait([
+        down,
+        Proxie.init(config: const ProxieConfig(persistHistory: false)),
+      ]);
+      final calls = <ProxieCall>[];
+      final sub = Proxie.engine!.calls.listen(calls.add);
+      addTearDown(sub.cancel);
+      await client.get(Uri.parse('https://a.test/w'));
+      await Future<void>.delayed(Duration.zero);
+      expect(calls, isNotEmpty);
     });
 
     test('a client from before an init(enabled: false) stays '

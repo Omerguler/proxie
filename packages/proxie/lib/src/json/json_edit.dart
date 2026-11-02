@@ -19,53 +19,77 @@ sealed class JsonEdit {
 /// be replaced too. A container keeps its expansion state when it stays a
 /// container, and its new children start collapsed.
 class SetValue extends JsonEdit {
+  /// Creates an edit that sets node [nodeId] to [value].
   const SetValue(this.nodeId, this.value);
 
+  /// The node whose value is replaced.
   final int nodeId;
+
+  /// The new JSON value.
   final Object? value;
 }
 
 /// Renames the object member [nodeId]. Throws an [ArgumentError] when a
 /// sibling already has [newKey].
 class RenameKey extends JsonEdit {
+  /// Creates an edit that renames member [nodeId] to [newKey].
   const RenameKey(this.nodeId, this.newKey);
 
+  /// The object member to rename.
   final int nodeId;
+
+  /// The member's new name.
   final String newKey;
 }
 
 /// Removes [nodeId] and its subtree; anything but the root. Later items of
 /// an array move up by one index.
 class DeleteNode extends JsonEdit {
+  /// Creates an edit that removes node [nodeId].
   const DeleteNode(this.nodeId);
 
+  /// The node to remove, with everything under it.
   final int nodeId;
 }
 
 /// Appends member [key] to object [objectNodeId]. Throws an [ArgumentError]
 /// when the object already has it.
 class AddKey extends JsonEdit {
+  /// Creates an edit that adds [key] with [value] to [objectNodeId].
   const AddKey(this.objectNodeId, this.key, this.value);
 
+  /// The object that gets the new member.
   final int objectNodeId;
+
+  /// The new member's name.
   final String key;
+
+  /// The new member's JSON value.
   final Object? value;
 }
 
 /// Inserts an item into array [arrayNodeId] at index [at] (0 to its length),
 /// or appends it when [at] is null.
 class AddItem extends JsonEdit {
+  /// Creates an edit that inserts [value] into [arrayNodeId].
   const AddItem(this.arrayNodeId, this.value, {this.at});
 
+  /// The array that gets the new item.
   final int arrayNodeId;
+
+  /// The new item's JSON value.
   final Object? value;
+
+  /// Where the item goes; null appends it.
   final int? at;
 }
 
 /// Inserts a copy of array item [itemNodeId] right after it.
 class DuplicateItem extends JsonEdit {
+  /// Creates an edit that duplicates item [itemNodeId].
   const DuplicateItem(this.itemNodeId);
 
+  /// The array item to copy.
   final int itemNodeId;
 }
 
@@ -73,28 +97,42 @@ class DuplicateItem extends JsonEdit {
 /// the object item [itemNodeId]. The value copies the first such sibling's
 /// value when it is a scalar; a container becomes an empty one of its kind.
 class AddMissingKey extends JsonEdit {
+  /// Creates an edit that adds [key] to item [itemNodeId].
   const AddMissingKey(this.itemNodeId, this.key);
 
+  /// The object item that lacks the member.
   final int itemNodeId;
+
+  /// The member name its siblings have.
   final String key;
 }
 
 /// Appends member [key] with [value] to every object item of array
 /// [arrayNodeId] that lacks it; other items are left alone.
 class AddKeyToAll extends JsonEdit {
+  /// Creates an edit that adds [key] to the objects of [arrayNodeId].
   const AddKeyToAll(this.arrayNodeId, this.key, this.value);
 
+  /// The array whose object items get the member.
   final int arrayNodeId;
+
+  /// The member name to add where missing.
   final String key;
+
+  /// The JSON value each added member gets.
   final Object? value;
 }
 
 /// Removes every member named [key] from the object items of array
 /// [arrayNodeId].
 class RemoveKeyFromAll extends JsonEdit {
+  /// Creates an edit that drops [key] from the objects of [arrayNodeId].
   const RemoveKeyFromAll(this.arrayNodeId, this.key);
 
+  /// The array whose object items lose the member.
   final int arrayNodeId;
+
+  /// The member name to remove.
   final String key;
 }
 
@@ -102,17 +140,24 @@ class RemoveKeyFromAll extends JsonEdit {
 /// the default for its first-seen kind: `""`, `0`, `false`, `null`, `{}` or
 /// `[]`. Throws an [ArgumentError] when the array holds no objects.
 class NewItemFromSchema extends JsonEdit {
+  /// Creates an edit that appends a schema-shaped object to
+  /// [arrayNodeId].
   const NewItemFromSchema(this.arrayNodeId);
 
+  /// The array whose schema shapes the new item.
   final int arrayNodeId;
 }
 
 /// A JSON number given by its text, e.g. `JsonNumber('12345678901234567890')`
 /// for a value a Dart [num] cannot hold exactly. Must match the RFC 8259
 /// number grammar.
+@immutable
 class JsonNumber {
+  /// Wraps the number text [lexeme], which is checked when the edit is
+  /// applied.
   const JsonNumber(this.lexeme);
 
+  /// The number exactly as it appears in the JSON text.
   final String lexeme;
 
   @override
@@ -631,8 +676,8 @@ extension _Editing on JsonDocument {
       final int key;
       final Object? v;
       if (_n.kind(parent) == JsonKind.object) {
-        final entry = item as MapEntry<Object?, Object?>;
-        key = _internKey(entry.key as String);
+        final entry = item! as MapEntry<Object?, Object?>;
+        key = _internKey(entry.key! as String);
         v = entry.value;
       } else {
         key = _n.childCount[parent];

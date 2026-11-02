@@ -1,10 +1,10 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import '../model/body.dart';
-import '../model/request.dart';
-import '../model/response.dart';
-import 'body_classifier.dart' show isLatin1Text;
+import 'package:proxie/src/core/body_classifier.dart' show isLatin1Text;
+import 'package:proxie/src/model/body.dart';
+import 'package:proxie/src/model/request.dart';
+import 'package:proxie/src/model/response.dart';
 
 /// Replacement for masked values.
 const kMask = '••••••';
@@ -14,6 +14,7 @@ const kMask = '••••••';
 /// The [headers] and [jsonKeys] sets must not be mutated after construction:
 /// their lowercased forms are computed once and cached.
 class ProxieMasking {
+  /// Creates a masking setup; the defaults cover common credentials.
   const ProxieMasking({
     this.headers = _defaultHeaders,
     this.jsonKeys = _defaultJsonKeys,
@@ -33,6 +34,7 @@ class ProxieMasking {
     'secret',
   };
 
+  /// The default header and JSON key lists.
   static const defaults = ProxieMasking();
 
   /// Header names to mask (case-insensitive).
@@ -47,9 +49,11 @@ class ProxieMasking {
 
   _Compiled get _compiled => _cache[this] ??= _Compiled(headers, jsonKeys);
 
+  /// A copy of [r] with sensitive headers and JSON values masked.
   ProxieRequest maskRequest(ProxieRequest r) =>
       r.copyWith(headers: _maskHeaders(r.headers), body: _maskBody(r.body));
 
+  /// A copy of [r] with sensitive headers and JSON values masked.
   ProxieResponse maskResponse(ProxieResponse r) =>
       r.copyWith(headers: _maskHeaders(r.headers), body: _maskBody(r.body));
 

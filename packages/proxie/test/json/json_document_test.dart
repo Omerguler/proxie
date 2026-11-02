@@ -10,11 +10,14 @@ Uint8List _bytes(String s) => Uint8List.fromList(utf8.encode(s));
 JsonDocument _doc(String s) => JsonDocument.tryParse(_bytes(s));
 
 /// Labels rows as `depth key/index kind preview`, for compact assertions.
-List<String> _labels(JsonDocument doc) => [
-  for (final r in doc.rows(0, doc.visibleCount))
-    '${r.depth} ${r.key ?? (r.index == null ? '-' : '[${r.index}]')} '
-        '${r.kind.name} ${r.preview}',
-];
+List<String> _labels(JsonDocument doc) => doc
+    .rows(0, doc.visibleCount)
+    .map(
+      (r) =>
+          '${r.depth} ${r.key ?? (r.index == null ? '-' : '[${r.index}]')} '
+          '${r.kind.name} ${r.preview}',
+    )
+    .toList();
 
 /// Reference implementation of the visible rows: a preorder walk of the
 /// decoded value, descending only into expanded containers.
@@ -97,7 +100,7 @@ void main() {
     });
 
     test('compact encode of an untouched doc is the input', () {
-      expect(utf8.decode(_doc(input).encode(pretty: false)), input);
+      expect(utf8.decode(_doc(input).encode()), input);
     });
   });
 
@@ -152,7 +155,7 @@ void main() {
         expect(doc.parseError, startsWith('Invalid JSON: '), reason: s);
         expect(doc.visibleCount, 0, reason: s);
         expect(doc.rows(0, 5), isEmpty, reason: s);
-        expect(() => doc.encode(), throwsStateError, reason: s);
+        expect(doc.encode, throwsStateError, reason: s);
         expect(() => doc.toggle(0), throwsRangeError, reason: s);
       }
     });
@@ -263,7 +266,7 @@ void main() {
         '"k"',
         '\n',
         r'\n',
-        r'é',
+        'é',
         'é',
       ];
       var valid = 0;
@@ -521,8 +524,7 @@ void main() {
     const input = '{"a":{"b":{"c":[1]}},"d":[{"e":2}]}';
 
     test('expandAll opens everything', () {
-      final doc = _doc(input);
-      doc.expandAll();
+      final doc = _doc(input)..expandAll();
       expect(_labels(doc), [
         '0 a object {1 key}',
         '1 b object {1 key}',
@@ -536,8 +538,7 @@ void main() {
     });
 
     test('maxDepth limits which rows are opened', () {
-      final doc = _doc(input);
-      doc.expandAll(maxDepth: 1);
+      final doc = _doc(input)..expandAll(maxDepth: 1);
       expect(_labels(doc), [
         '0 a object {1 key}',
         '1 b object {1 key}',
@@ -550,9 +551,9 @@ void main() {
     });
 
     test('collapseAll keeps the root open', () {
-      final doc = _doc(input);
-      doc.expandAll();
-      doc.collapseAll();
+      final doc = _doc(input)
+        ..expandAll()
+        ..collapseAll();
       expect(_labels(doc), ['0 a object {1 key}', '0 d array [1 item]']);
       // Toggling still works after a bulk change.
       doc.toggle(doc.rows(1, 1).single.nodeId);
@@ -594,7 +595,7 @@ void main() {
     test('strings keep their source escapes', () {
       const src = r'["é\/\"",{"ké":"\ud800"}]';
       final doc = _doc(src);
-      expect(doc.rows(0, 1).single.preview, '"é/\\""');
+      expect(doc.rows(0, 1).single.preview, r'"é/\""');
       // Keys are re-encoded from their decoded text; values verbatim.
       expect(utf8.decode(doc.encode()), r'["é\/\"",{"ké":"\ud800"}]');
     });
@@ -683,8 +684,7 @@ void main() {
     });
 
     test('expansion state does not affect the output', () {
-      final doc = _doc(plain);
-      doc.expandAll();
+      final doc = _doc(plain)..expandAll();
       expect(utf8.decode(doc.encode()), minify(plain));
     });
   });

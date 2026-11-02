@@ -30,7 +30,7 @@ void main() {
 
   test('malformed base64 throws a FormatException', () {
     expect(
-      () => decodeJsonBytes('{"\\u0000proxie_bytes":"!!"}'),
+      () => decodeJsonBytes(r'{"\u0000proxie_bytes":"!!"}'),
       throwsFormatException,
     );
   });

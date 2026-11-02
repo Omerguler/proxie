@@ -1,10 +1,12 @@
 import 'package:flutter/widgets.dart';
 
-import '../model/call.dart';
-import '../storage/call_query.dart';
+import 'package:proxie/src/enablement.dart';
+import 'package:proxie/src/model/call.dart';
+import 'package:proxie/src/storage/call_query.dart';
 
 /// An extra tab on the call detail screen.
 class ProxieDetailTab {
+  /// Creates a tab; [appliesTo] decides per call whether it shows.
   const ProxieDetailTab({
     required this.id,
     required this.label,
@@ -27,6 +29,7 @@ class ProxieDetailTab {
 
 /// An extra tag chip on call list rows.
 class ProxieListBadge {
+  /// Creates a badge whose text comes from [label].
   const ProxieListBadge({required this.id, required this.label, this.color});
 
   /// Unique; registering another badge with the same id replaces this one.
@@ -48,11 +51,17 @@ abstract final class ProxieSections {
   static final List<ProxieDetailTab> _tabs = [];
   static final List<ProxieListBadge> _badges = [];
 
-  static void addDetailTab(ProxieDetailTab tab) =>
-      _put(_tabs, tab, (t) => t.id == tab.id);
+  /// A no-op unless [kProxieEnabled], so release builds drop the entries.
+  static void addDetailTab(ProxieDetailTab tab) {
+    if (!kProxieEnabled) return;
+    _put(_tabs, tab, (t) => t.id == tab.id);
+  }
 
-  static void addListBadge(ProxieListBadge badge) =>
-      _put(_badges, badge, (b) => b.id == badge.id);
+  /// A no-op unless [kProxieEnabled], so release builds drop the entries.
+  static void addListBadge(ProxieListBadge badge) {
+    if (!kProxieEnabled) return;
+    _put(_badges, badge, (b) => b.id == badge.id);
+  }
 
   /// Registered detail tabs, in registration order. Unmodifiable.
   static List<ProxieDetailTab> get detailTabs => List.unmodifiable(_tabs);

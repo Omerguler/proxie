@@ -3,17 +3,16 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show visibleForTesting;
+import 'package:proxie/src/core/presets.dart';
+import 'package:proxie/src/core/rule.dart';
+import 'package:proxie/src/model/body.dart';
+import 'package:proxie/src/model/call.dart';
+import 'package:proxie/src/storage/call_query.dart';
+import 'package:proxie/src/storage/json_bytes.dart';
+import 'package:proxie/src/storage/spill_names.dart';
+import 'package:proxie/src/storage/sqlite_schema.dart';
+import 'package:proxie/src/storage/store.dart';
 import 'package:sqlite3/sqlite3.dart';
-
-import '../core/presets.dart';
-import '../core/rule.dart';
-import '../model/body.dart';
-import '../model/call.dart';
-import 'call_query.dart';
-import 'json_bytes.dart';
-import 'spill_names.dart';
-import 'sqlite_schema.dart';
-import 'store.dart';
 
 /// Response bodies up to this size are full-text indexed (the raw-text
 /// editable limit, 1 MB); larger bodies are found by URL only.
@@ -44,13 +43,14 @@ class SqliteStore implements ProxieStore {
     try {
       // Wait for a lock held by another connection (e.g. a debugging tool)
       // instead of failing at once.
-      db.execute('PRAGMA busy_timeout = 5000');
-      db.createFunction(
-        functionName: _lowerFn,
-        argumentCount: const AllowedArgumentCount(1),
-        deterministic: true,
-        function: (args) => (args[0] as String?)?.toLowerCase(),
-      );
+      db
+        ..execute('PRAGMA busy_timeout = 5000')
+        ..createFunction(
+          functionName: _lowerFn,
+          argumentCount: const AllowedArgumentCount(1),
+          deterministic: true,
+          function: (args) => (args[0] as String?)?.toLowerCase(),
+        );
       migrateSqliteSchema(db);
       Directory(spillDir).createSync(recursive: true);
       store = SqliteStore._(db, spillDir, spillThreshold, now ?? DateTime.now)
@@ -145,7 +145,7 @@ class SqliteStore implements ProxieStore {
           [for (final t in c.tags) t.name].join(','),
           c.adapter,
           c.startedAt.microsecondsSinceEpoch,
-          c.startedAt.isUtc ? 1 : 0,
+          if (c.startedAt.isUtc) 1 else 0,
           c.error?.type,
           utf8.encode(jsonEncode(meta)),
         ],
@@ -214,7 +214,7 @@ class SqliteStore implements ProxieStore {
         fileName,
         body.contentType,
         body.kind.name,
-        body.truncated ? 1 : 0,
+        if (body.truncated) 1 else 0,
         body.originalLength,
       ],
     );
@@ -319,7 +319,7 @@ class SqliteStore implements ProxieStore {
       SELECT $_summaryColumns FROM calls $where
       ORDER BY started_at DESC, id DESC
       LIMIT ? OFFSET ?''',
-      [...params, limit, offset < 0 ? 0 : offset],
+      [...params, limit, if (offset < 0) 0 else offset],
     );
     return List.unmodifiable([for (final r in rows) ?_decodeSummary(r)]);
   }
@@ -348,8 +348,13 @@ class SqliteStore implements ProxieStore {
       );
     } on Exception {
       return null;
+      // Stored rows are decoded with casts and enum names, so a bad row
+      // shows up as a TypeError or ArgumentError; treat it as undecodable.
+      // ignore: avoid_catching_errors
     } on TypeError {
       return null; // A wrongly typed column.
+      // See above: an unknown enum name in a stored row.
+      // ignore: avoid_catching_errors
     } on ArgumentError {
       return null; // An unknown enum name (e.g. from a newer version).
     }
@@ -407,8 +412,13 @@ class SqliteStore implements ProxieStore {
       return call.copyWith(startedAt: _startedAt(row));
     } on Exception {
       return null; // A stored row that no longer decodes.
+      // Stored rows are decoded with casts and enum names, so a bad row
+      // shows up as a TypeError or ArgumentError; treat it as undecodable.
+      // ignore: avoid_catching_errors
     } on TypeError {
       return null;
+      // See above: an unknown enum name in a stored row.
+      // ignore: avoid_catching_errors
     } on ArgumentError {
       return null;
     }
@@ -460,10 +470,13 @@ class SqliteStore implements ProxieStore {
     for (final r in _db.select('SELECT json FROM rules ORDER BY pos, rowid')) {
       try {
         out.add(
-          ProxieRule.fromMap(decodeJsonBytes(r['json'] as String) as Map),
+          ProxieRule.fromMap(decodeJsonBytes(r['json'] as String)! as Map),
         );
       } on Exception {
         // Skip rules that no longer decode (e.g. written by a newer version).
+        // Stored rows are decoded with casts, so a wrongly typed field shows
+        // up as a TypeError; skip that row like any other undecodable one.
+        // ignore: avoid_catching_errors
       } on TypeError {
         // A wrongly typed field in a stored row.
       }
@@ -493,7 +506,7 @@ class SqliteStore implements ProxieStore {
     )) {
       try {
         final action = MapLocalAction.fromMap(
-          decodeJsonBytes(r['json'] as String) as Map,
+          decodeJsonBytes(r['json'] as String)! as Map,
         );
         out.add(
           ResponsePreset(
@@ -504,6 +517,9 @@ class SqliteStore implements ProxieStore {
         );
       } on Exception {
         // Skip presets that no longer decode.
+        // Stored rows are decoded with casts, so a wrongly typed field shows
+        // up as a TypeError; skip that row like any other undecodable one.
+        // ignore: avoid_catching_errors
       } on TypeError {
         // A wrongly typed field in a stored row.
       }
@@ -563,9 +579,10 @@ class SqliteStore implements ProxieStore {
   Future<void> clear() async {
     final files = _transaction(() {
       final files = _spillFilesWhere('1', const []);
-      _db.execute('DELETE FROM calls');
-      // AUTOINCREMENT keeps the highest id, so session ids are not reused.
-      _db.execute('DELETE FROM sessions');
+      _db
+        ..execute('DELETE FROM calls')
+        // AUTOINCREMENT keeps the highest id, so session ids are not reused.
+        ..execute('DELETE FROM sessions');
       return files;
     });
     _deleteSpillFiles(files);

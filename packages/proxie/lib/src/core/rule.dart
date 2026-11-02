@@ -1,13 +1,36 @@
-import '../model/request.dart';
-import '../model/response.dart';
-import 'url_matcher.dart';
+import 'package:proxie/src/core/url_matcher.dart';
+import 'package:proxie/src/model/request.dart';
+import 'package:proxie/src/model/response.dart';
 
-enum RuleKind { breakpoint, mapLocal }
+/// What a [ProxieRule] does with the calls it matches.
+enum RuleKind {
+  /// Pauses matching calls so they can be inspected and edited.
+  breakpoint,
 
-enum BreakpointPhase { request, response, both }
+  /// Answers matching calls with a local response or a simulated failure.
+  mapLocal,
+}
+
+/// When a breakpoint rule pauses a call.
+enum BreakpointPhase {
+  /// Before the request is sent.
+  request,
+
+  /// After the response arrives, before the app sees it.
+  response,
+
+  /// At both points.
+  both,
+}
 
 /// A failure a Map Local rule can simulate instead of responding.
-enum SimulatedFailure { timeout, noConnection }
+enum SimulatedFailure {
+  /// The request fails as if it timed out.
+  timeout,
+
+  /// The request fails as if the host could not be reached.
+  noConnection,
+}
 
 T _enumByName<T extends Enum>(List<T> values, Object? name, String what) {
   for (final v in values) {
@@ -18,12 +41,15 @@ T _enumByName<T extends Enum>(List<T> values, Object? name, String what) {
 
 /// What a Map Local rule does: respond with [response], after [delay], or fail.
 class MapLocalAction {
+  /// Creates an action; with neither [response] nor [failure] set it answers
+  /// with an empty 200 response.
   const MapLocalAction({
     this.response,
     this.delay = Duration.zero,
     this.failure,
   });
 
+  /// Decodes an action written by [toMap].
   factory MapLocalAction.fromMap(Map<dynamic, dynamic> map) => MapLocalAction(
     response: map['response'] == null
         ? null
@@ -34,10 +60,16 @@ class MapLocalAction {
         : _enumByName(SimulatedFailure.values, map['failure'], 'failure'),
   );
 
+  /// The response to answer with; ignored when [failure] is set.
   final ProxieResponse? response;
+
+  /// How long to wait before answering or failing.
   final Duration delay;
+
+  /// The failure to simulate instead of responding, if any.
   final SimulatedFailure? failure;
 
+  /// Encodes this action as plain data for storage and isolate messages.
   Map<String, Object?> toMap() => {
     'response': response?.toMap(),
     'delayMs': delay.inMilliseconds,
@@ -47,17 +79,20 @@ class MapLocalAction {
 
 /// A breakpoint or Map Local rule.
 class ProxieRule {
+  /// Creates a rule; [phase] applies to breakpoints and [mapLocal] to Map
+  /// Local rules.
   const ProxieRule({
     required this.id,
     required this.name,
-    this.enabled = true,
     required this.kind,
     required this.matcher,
+    this.enabled = true,
     this.method,
     this.phase = BreakpointPhase.both,
     this.mapLocal,
   });
 
+  /// Decodes a rule written by [toMap].
   factory ProxieRule.fromMap(Map<dynamic, dynamic> map) => ProxieRule(
     id: map['id'] as String,
     name: map['name'] as String,
@@ -73,23 +108,40 @@ class ProxieRule {
         : MapLocalAction.fromMap(map['mapLocal'] as Map),
   );
 
+  /// Identifies the rule across edits and storage.
   final String id;
+
+  /// The label shown in the rules list.
   final String name;
+
+  /// Whether the rule takes part in matching.
   final bool enabled;
+
+  /// Whether this is a breakpoint or a Map Local rule.
   final RuleKind kind;
+
+  /// Selects the request URLs the rule applies to.
   final UrlMatcher matcher;
 
   /// Null matches any method; otherwise compared case-insensitively.
   final String? method;
+
+  /// When a breakpoint rule pauses; unused by Map Local rules.
   final BreakpointPhase phase;
+
+  /// What a Map Local rule answers with; unused by breakpoints.
   final MapLocalAction? mapLocal;
 
+  /// Whether this rule is enabled and matches the method and URL of
+  /// [request].
   bool matches(ProxieRequest request) =>
       enabled &&
       (method == null ||
           method!.toUpperCase() == request.method.toUpperCase()) &&
       matcher.matches(request.url);
 
+  /// A copy with the given fields replaced; [clearMethod] and
+  /// [clearMapLocal] reset those fields to null.
   ProxieRule copyWith({
     String? id,
     String? name,
@@ -112,6 +164,7 @@ class ProxieRule {
     mapLocal: clearMapLocal ? null : (mapLocal ?? this.mapLocal),
   );
 
+  /// Encodes this rule as plain data for storage and isolate messages.
   Map<String, Object?> toMap() => {
     'id': id,
     'name': name,
@@ -126,23 +179,27 @@ class ProxieRule {
 
 /// An ordered rule list; the first enabled match wins.
 class RuleSet {
+  /// Creates a set that matches against [rules] in order.
   RuleSet(List<ProxieRule> rules) : rules = List.unmodifiable(rules);
 
   /// Unmodifiable copy of the list given to the constructor.
   final List<ProxieRule> rules;
 
+  /// The first breakpoint that pauses [request] before it is sent.
   ProxieRule? requestBreakpointFor(ProxieRequest request) => _first(
     request,
     RuleKind.breakpoint,
     (p) => p == BreakpointPhase.request || p == BreakpointPhase.both,
   );
 
+  /// The first breakpoint that pauses the response to [request].
   ProxieRule? responseBreakpointFor(ProxieRequest request) => _first(
     request,
     RuleKind.breakpoint,
     (p) => p == BreakpointPhase.response || p == BreakpointPhase.both,
   );
 
+  /// The first Map Local rule that answers [request].
   ProxieRule? mapLocalFor(ProxieRequest request) =>
       _first(request, RuleKind.mapLocal, (_) => true);
 

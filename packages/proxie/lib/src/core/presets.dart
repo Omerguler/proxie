@@ -1,22 +1,26 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import '../model/body.dart';
-import '../model/response.dart';
-import 'rule.dart';
+import 'package:proxie/src/core/rule.dart';
+import 'package:proxie/src/model/body.dart';
+import 'package:proxie/src/model/response.dart';
 
 /// A one-tap Map Local response template.
 class ResponsePreset {
+  /// Creates a preset shown as [label].
   const ResponsePreset({
     required this.id,
     required this.label,
     required this.build,
   });
 
+  /// Identifies the preset; built-in ids are stable.
   final String id;
+
+  /// The name shown in the preset picker.
   final String label;
 
-  /// Builds the action; [captured] is the call's real response, if any.
+  /// Builds the action; `captured` is the call's real response, if any.
   final MapLocalAction Function(ProxieResponse? captured) build;
 }
 

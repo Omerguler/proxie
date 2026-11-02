@@ -36,7 +36,7 @@ void main() {
       body: ProxieBody.from(Uint8List(0), null),
     );
     final id = engine.newCallId();
-    final RequestDecision d = await engine.onRequest(id, 'test', req);
+    final d = await engine.onRequest(id, 'test', req);
     expect(d, isA<Proceed>());
     final res = ProxieResponse(
       statusCode: 200,
@@ -51,7 +51,7 @@ void main() {
     expect(ProxieBody.empty().kind, BodyKind.empty);
     expect(defaultBodyCap, engine.config.teeCap);
     const action = MapLocalAction(failure: SimulatedFailure.timeout);
-    expect(Mock(action).action.failure, SimulatedFailure.timeout);
+    expect(const Mock(action).action.failure, SimulatedFailure.timeout);
     const err = ProxieError(type: 'aborted', message: 'm');
     expect(const AbortRequest(err).error, same(err));
     expect(const ProxieAbortedException(err).error, same(err));

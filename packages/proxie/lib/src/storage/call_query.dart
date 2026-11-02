@@ -1,5 +1,5 @@
-import '../model/body.dart';
-import '../model/call.dart';
+import 'package:proxie/src/model/body.dart';
+import 'package:proxie/src/model/call.dart';
 
 /// Which outcomes a [CallQuery] keeps.
 enum StatusFilter {
@@ -15,6 +15,7 @@ enum StatusFilter {
 
 /// Filters for listing calls. Unset or empty filters match everything.
 class CallQuery {
+  /// Creates a query; with no arguments it matches every call.
   const CallQuery({
     this.text,
     this.methods = const {},
@@ -33,6 +34,8 @@ class CallQuery {
 
   /// HTTP methods to keep, compared case-insensitively. Empty keeps all.
   final Set<String> methods;
+
+  /// Which outcomes to keep.
   final StatusFilter status;
 
   /// Keep only calls whose response body is JSON.
@@ -43,11 +46,15 @@ class CallQuery {
 
   /// Drop calls whose response body is larger than this many bytes.
   final int? maxSize;
+
+  /// Keep only calls from this session; null keeps all sessions.
   final int? sessionId;
 
   /// Adapter names to keep. Empty keeps all.
   final Set<String> adapters;
 
+  /// A copy with the given filters replaced; the `clear` flags reset the
+  /// nullable ones to null.
   CallQuery copyWith({
     String? text,
     bool clearText = false,
@@ -74,6 +81,7 @@ class CallQuery {
 
 /// The list-row view of a call: everything but the bodies.
 class CallSummary {
+  /// Creates a summary; most callers use [CallSummary.fromCall].
   const CallSummary({
     required this.id,
     required this.sessionId,
@@ -89,6 +97,7 @@ class CallSummary {
     this.hasError = false,
   });
 
+  /// The summary of [call].
   factory CallSummary.fromCall(ProxieCall call) {
     final body = call.response?.body;
     return CallSummary(
@@ -107,13 +116,22 @@ class CallSummary {
     );
   }
 
+  /// The call's id.
   final String id;
+
+  /// The session the call was recorded in.
   final int sessionId;
+
+  /// The request method, such as `GET`.
   final String method;
+
+  /// The request URL as text.
   final String url;
 
   /// Null while pending, or when the call failed without a response.
   final int? statusCode;
+
+  /// Milliseconds from start to outcome; null while pending.
   final int? durationMs;
 
   /// Response body length on the wire; 0 without a response.
@@ -121,8 +139,16 @@ class CallSummary {
 
   /// Response body kind; [BodyKind.empty] without a response.
   final BodyKind kind;
+
+  /// What Proxie did to the call, such as breakpoint or Map Local.
   final Set<CallTag> tags;
+
+  /// When the request started.
   final DateTime startedAt;
+
+  /// The name of the adapter that captured the call.
   final String adapter;
+
+  /// Whether the call ended with an error.
   final bool hasError;
 }

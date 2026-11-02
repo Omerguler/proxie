@@ -1,13 +1,13 @@
 import 'dart:async';
 import 'dart:io';
 
-import '../../core/engine.dart';
-import '../capture_marker.dart';
-import 'buffered_request.dart';
-import 'http_tokens.dart';
+import 'package:proxie/src/adapters/capture_marker.dart';
+import 'package:proxie/src/adapters/io/buffered_request.dart';
+import 'package:proxie/src/adapters/io/http_tokens.dart';
+import 'package:proxie/src/core/engine.dart';
 
 /// An [HttpClient] that captures its requests into the engine returned by
-/// [engine], delegating everything else to [inner].
+/// `engine`, delegating everything else to [inner].
 ///
 /// Requests opened while no engine is attached, or inside
 /// [runMarkedCaptured] (already captured by a higher-level adapter), are the
@@ -22,6 +22,8 @@ import 'http_tokens.dart';
 /// including ones paused at a breakpoint (recorded as cancelled), and
 /// force-closes [inner].
 class ProxieIoHttpClient implements HttpClient {
+  /// Wraps [inner]; requests are recorded into the engine `engine`
+  /// returns when each one is opened.
   ProxieIoHttpClient(
     this.inner, {
     required ProxieEngine? Function() engine,
@@ -124,7 +126,8 @@ class ProxieIoHttpClient implements HttpClient {
   ) => inner.badCertificateCallback = callback;
 
   @override
-  set keyLog(Function(String line)? callback) => inner.keyLog = callback;
+  set keyLog(dynamic Function(String line)? callback) =>
+      inner.keyLog = callback;
 
   @override
   void close({bool force = false}) {
@@ -179,13 +182,14 @@ class ProxieIoHttpClient implements HttpClient {
       }
     }
     String? query;
+    var uriPath = path;
     if (queryStart < fragmentStart) {
       query = path.substring(queryStart + 1, fragmentStart);
-      path = path.substring(0, queryStart);
+      uriPath = path.substring(0, queryStart);
     }
     return _buffered(
       method,
-      Uri(scheme: 'http', host: host, port: port, path: path, query: query),
+      Uri(scheme: 'http', host: host, port: port, path: uriPath, query: query),
     );
   }
 
@@ -240,8 +244,8 @@ class ProxieIoHttpClient implements HttpClient {
 
   /// Validates like `dart:io` (throwing synchronously) and returns a request
   /// that sends on close.
-  Future<HttpClientRequest> _buffered(String method, Uri url) {
-    url = url.removeFragment();
+  Future<HttpClientRequest> _buffered(String method, Uri requestUrl) {
+    final url = requestUrl.removeFragment();
     if (!isHttpToken(method)) throw ArgumentError.value(method, 'method');
     if (method != 'CONNECT') {
       if (url.host.isEmpty) {

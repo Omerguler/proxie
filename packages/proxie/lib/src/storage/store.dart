@@ -1,18 +1,24 @@
-import '../core/presets.dart';
-import '../core/rule.dart';
-import '../model/call.dart';
-import 'call_query.dart';
+import 'package:proxie/src/core/presets.dart';
+import 'package:proxie/src/core/rule.dart';
+import 'package:proxie/src/model/call.dart';
+import 'package:proxie/src/storage/call_query.dart';
 
 /// A recording session: one app run.
 class SessionInfo {
+  /// Describes session [id].
   const SessionInfo({
     required this.id,
     required this.startedAt,
     required this.callCount,
   });
 
+  /// The session's id; sessions are numbered from 1 and never reused.
   final int id;
+
+  /// When the session started.
   final DateTime startedAt;
+
+  /// How many stored calls belong to the session.
   final int callCount;
 }
 
@@ -30,6 +36,8 @@ abstract interface class ProxieStore {
   /// key); such calls are queryable but belong to no entry of [sessions].
   Future<void> upsert(ProxieCall c);
 
+  /// Up to [limit] summaries of calls matching [q], skipping the first
+  /// [offset], in the store's listing order.
   Future<List<CallSummary>> query(
     CallQuery q, {
     required int offset,
@@ -39,6 +47,7 @@ abstract interface class ProxieStore {
   /// Number of calls matching [q].
   Future<int> count(CallQuery q);
 
+  /// The full call with id [id], bodies included; null when not stored.
   Future<ProxieCall?> get(String id);
 
   /// Started sessions, newest first. `callCount` counts the stored calls
@@ -64,5 +73,6 @@ abstract interface class ProxieStore {
   /// Removes all calls and sessions; rules and presets are kept.
   Future<void> clear();
 
+  /// Releases the store; it must not be used afterwards.
   Future<void> close();
 }

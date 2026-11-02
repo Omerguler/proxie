@@ -50,8 +50,9 @@ const _v1 = [
   )''',
   'CREATE TABLE rules(pos INTEGER NOT NULL, json TEXT)',
   'CREATE TABLE presets(id TEXT PRIMARY KEY, label TEXT, json TEXT)',
-  // Rowids mirror calls.seq (an INTEGER PRIMARY KEY, stable under VACUUM). The trigram tokenizer makes a phrase query a
-  // case-insensitive substring match.
+  // Rowids mirror calls.seq (an INTEGER PRIMARY KEY, stable under VACUUM).
+  // The trigram tokenizer makes a phrase query a case-insensitive substring
+  // match.
   '''
   CREATE VIRTUAL TABLE calls_fts USING fts5(
     url, body_text, tokenize = 'trigram case_sensitive 0'
@@ -83,13 +84,10 @@ void migrateSqliteSchema(Database db) {
     // the file since the first check.
     final version = db.userVersion;
     _checkVersion(version);
-    if (version < 1) {
-      for (final sql in _v1) {
-        db.execute(sql);
-      }
-    }
-    db.userVersion = sqliteSchemaVersion;
-    db.execute('COMMIT');
+    if (version < 1) _v1.forEach(db.execute);
+    db
+      ..userVersion = sqliteSchemaVersion
+      ..execute('COMMIT');
   } catch (_) {
     if (!db.autocommit) db.execute('ROLLBACK');
     rethrow;

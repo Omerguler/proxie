@@ -2,17 +2,18 @@ import 'dart:async';
 import 'dart:developer' as developer;
 import 'dart:typed_data';
 
-import '../config.dart';
-import '../model/body.dart';
-import '../model/call.dart';
-import '../model/request.dart';
-import '../model/response.dart';
-import 'breakpoint_controller.dart';
-import 'decision.dart';
-import 'rule.dart';
+import 'package:proxie/src/config.dart';
+import 'package:proxie/src/core/breakpoint_controller.dart';
+import 'package:proxie/src/core/decision.dart';
+import 'package:proxie/src/core/rule.dart';
+import 'package:proxie/src/model/body.dart';
+import 'package:proxie/src/model/call.dart';
+import 'package:proxie/src/model/request.dart';
+import 'package:proxie/src/model/response.dart';
 
 /// Receives call snapshots (unmasked; the worker masks before storing).
 abstract interface class CallSink {
+  /// Stores or replaces the snapshot of [call], keyed by its id.
   void upsert(ProxieCall call);
 }
 
@@ -30,6 +31,8 @@ class _CallState {
 /// The [sink] receives unmasked calls; the [calls] stream carries copies with
 /// masked headers and bodies stripped (no JSON work on the UI isolate).
 class ProxieEngine {
+  /// Creates an engine; without [breakpoints] it owns a controller that uses
+  /// the configured breakpoint timeout.
   ProxieEngine({
     required this.config,
     required this.sink,
@@ -40,12 +43,20 @@ class ProxieEngine {
            breakpoints ??
            BreakpointController(timeout: config.breakpointTimeout);
 
+  /// The settings, such as the body capture cap and breakpoint timeout.
   final ProxieConfig config;
+
+  /// Where every call snapshot goes, unmasked.
   final CallSink sink;
+
+  /// Holds the calls paused at breakpoints.
   final BreakpointController breakpoints;
   final bool _ownsBreakpoints;
 
+  /// The rules consulted for each call; replace it to change them.
   RuleSet rules = RuleSet(const []);
+
+  /// The session that recorded calls are stamped with.
   int sessionId;
 
   final _states = <String, _CallState>{};
@@ -53,6 +64,7 @@ class ProxieEngine {
   int _counter = 0;
   bool _disposed = false;
 
+  /// Masked, body-free snapshots of each call as it changes, for the UI.
   Stream<ProxieCall> get calls => _calls.stream;
 
   /// A call id unique within this engine (not across engines or sessions).
@@ -67,9 +79,14 @@ class ProxieEngine {
     }
     _states.clear();
     if (_ownsBreakpoints) breakpoints.dispose();
-    _calls.close();
+    unawaited(_calls.close());
   }
 
+  /// Records the start of call [callId] and decides what happens to [req].
+  ///
+  /// Pauses at a matching request breakpoint first, then answers from a
+  /// matching Map Local rule if there is one; otherwise the (possibly edited)
+  /// request proceeds.
   Future<RequestDecision> onRequest(
     String callId,
     String adapter,
@@ -127,6 +144,11 @@ class ProxieEngine {
     return Proceed(current);
   }
 
+  /// Records [res] for call [callId] and returns the response for the app.
+  ///
+  /// Pauses at a matching response breakpoint first, which may edit the
+  /// response. Throws a [ProxieAbortedException] when the call is aborted
+  /// there.
   Future<ProxieResponse> onResponse(String callId, ProxieResponse res) async {
     if (_disposed) return res;
     final state = _states[callId];
@@ -192,7 +214,7 @@ class ProxieEngine {
   T? _guard<T>(T Function() f) {
     try {
       return f();
-    } catch (e, st) {
+    } on Object catch (e, st) {
       developer.log('Proxie rule lookup failed', error: e, stackTrace: st);
       return null;
     }
@@ -238,7 +260,7 @@ class ProxieEngine {
     );
     try {
       sink.upsert(build(s.request, response));
-    } catch (e, st) {
+    } on Object catch (e, st) {
       developer.log('Proxie sink failed', error: e, stackTrace: st);
     }
     try {
@@ -256,7 +278,7 @@ class ProxieEngine {
                 ),
         ),
       );
-    } catch (e, st) {
+    } on Object catch (e, st) {
       developer.log('Proxie stream failed', error: e, stackTrace: st);
     }
   }

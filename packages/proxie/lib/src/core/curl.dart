@@ -1,4 +1,4 @@
-import '../model/request.dart';
+import 'package:proxie/src/model/request.dart';
 
 String _q(String s) => "'${s.replaceAll("'", r"'\''")}'";
 
@@ -11,7 +11,10 @@ String toCurl(ProxieRequest request) {
   final parts = <String>['curl'];
   // curl sends POST for a body unless the method is stated explicitly.
   if (method.toUpperCase() != 'GET' || body.bytes.isNotEmpty) {
-    parts.addAll(['-X', _plainMethod.hasMatch(method) ? method : _q(method)]);
+    parts.addAll([
+      '-X',
+      if (_plainMethod.hasMatch(method)) method else _q(method),
+    ]);
   }
   parts.add(_q(request.url.toString()));
   for (final e in request.headers.entries) {

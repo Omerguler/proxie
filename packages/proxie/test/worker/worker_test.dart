@@ -12,6 +12,8 @@ import 'package:proxie/src/worker/in_process_worker.dart';
 import 'package:proxie/src/worker/isolate_worker.dart';
 import 'package:proxie/src/worker/worker_factory_web.dart' as web;
 
+import '../support/temp_dir.dart';
+
 final _dirs = <Directory>[];
 
 Directory _tempDir() {
@@ -295,9 +297,9 @@ void _contract(
 }
 
 void main() {
-  tearDownAll(() {
+  tearDownAll(() async {
     for (final d in _dirs) {
-      if (d.existsSync()) d.deleteSync(recursive: true);
+      await deleteTempDir(d);
     }
   });
 
@@ -305,7 +307,7 @@ void main() {
     'IsolateWorker',
     (config) => spawnProxieWorker(config, supportDir: _tempDir().path),
   );
-  _contract('InProcessWorker', (config) => web.spawnProxieWorker(config));
+  _contract('InProcessWorker', web.spawnProxieWorker);
 
   test('InProcessWorker dispose closes the store', () async {
     final marker = _join(_tempDir().path, 'closed');
@@ -505,15 +507,14 @@ void main() {
         supportDir: dir.path,
       );
       final now = DateTime.now().toUtc();
-      first.upsert(
-        _call('old', startedAt: now.subtract(const Duration(days: 8))),
-      );
-      first.upsert(_call('new', startedAt: now));
+      first
+        ..upsert(_call('old', startedAt: now.subtract(const Duration(days: 8))))
+        ..upsert(_call('new', startedAt: now));
       expect(await first.run(const CountCalls()), 2);
       await first.dispose();
 
       final second = await spawnProxieWorker(
-        const ProxieConfig(retentionAge: Duration(days: 7)),
+        const ProxieConfig(),
         supportDir: dir.path,
       );
       final rows = await second.run(

@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import '../model/body.dart';
+import 'package:proxie/src/model/body.dart';
 
 const _sniffLength = 512;
 

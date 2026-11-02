@@ -1,34 +1,48 @@
 import 'package:flutter/material.dart';
 
-import 'theme.dart';
+import 'package:proxie/src/config.dart';
+import 'package:proxie/src/ui/theme.dart';
 
 /// Whether the inspector is open and which call it shows.
+///
+/// After [dispose] every method is a no-op, so a page still on screen after
+/// `Proxie.shutdown` cannot fail.
 class ProxieInspectorController extends ChangeNotifier {
   bool _isOpen = false;
   String? _selectedCallId;
+  bool _disposed = false;
 
+  /// Whether the inspector is open.
   bool get isOpen => _isOpen;
 
   /// The call shown in the detail pane, or null for none.
   String? get selectedCallId => _selectedCallId;
 
+  /// Opens the inspector; does nothing when it is already open.
   void open() {
-    if (_isOpen) return;
+    if (_disposed || _isOpen) return;
     _isOpen = true;
     notifyListeners();
   }
 
+  /// Closes the inspector; does nothing when it is already closed.
   void close() {
-    if (!_isOpen) return;
+    if (_disposed || !_isOpen) return;
     _isOpen = false;
     notifyListeners();
   }
 
   /// Shows [callId] in the detail pane; null shows none.
   void select(String? callId) {
-    if (_selectedCallId == callId) return;
+    if (_disposed || _selectedCallId == callId) return;
     _selectedCallId = callId;
     notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
   }
 
   /// The controller of the nearest enclosing [InspectorShell], for list and
@@ -47,25 +61,38 @@ class _InspectorScope extends InheritedNotifier<ProxieInspectorController> {
   }) : super(notifier: controller);
 }
 
-/// The full-screen inspector page: [InspectorShell] in Proxie's own theme,
+/// The full-screen inspector page: [InspectorShell] in Proxie's own theme
+/// (see [ProxieThemed]),
 /// with its own [ScaffoldMessenger] so its messages never reach the host.
 class ProxieInspector extends StatelessWidget {
+  /// Creates the inspector page driven by [controller].
   const ProxieInspector({
-    super.key,
     required this.controller,
+    super.key,
     this.splitWidth = 700,
+    this.themeMode = ProxieThemeMode.dark,
     this.listBuilder,
     this.detailBuilder,
   });
 
+  /// Holds whether the inspector is open and which call it shows.
   final ProxieInspectorController controller;
+
+  /// Minimum width for the side-by-side layout.
   final double splitWidth;
+
+  /// Which of Proxie's themes the page uses.
+  final ProxieThemeMode themeMode;
+
+  /// Builds the call list; defaults to a placeholder.
   final WidgetBuilder? listBuilder;
+
+  /// Builds the detail of a call; defaults to a placeholder.
   final Widget Function(BuildContext context, String callId)? detailBuilder;
 
   @override
-  Widget build(BuildContext context) => Theme(
-    data: ProxieTheme.dark(),
+  Widget build(BuildContext context) => ProxieThemed(
+    mode: themeMode,
     child: ScaffoldMessenger(
       child: InspectorShell(
         controller: controller,
@@ -85,14 +112,16 @@ class ProxieInspector extends StatelessWidget {
 /// layout follows rotation and window resizes live; the selection lives in
 /// [controller] and survives layout changes.
 class InspectorShell extends StatelessWidget {
+  /// Creates the layout driven by [controller].
   const InspectorShell({
-    super.key,
     required this.controller,
+    super.key,
     this.splitWidth = 700,
     this.listBuilder,
     this.detailBuilder,
   });
 
+  /// Holds the selection, so it survives layout changes.
   final ProxieInspectorController controller;
 
   /// Minimum width for the side-by-side layout.

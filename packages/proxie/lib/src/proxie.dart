@@ -3,22 +3,23 @@ import 'dart:developer' as developer;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
-import 'adapters/capture_adapter.dart';
-import 'adapters/http_client_adapter.dart';
-import 'config.dart';
-import 'core/engine.dart';
-import 'core/rule.dart';
-import 'enablement.dart';
-import 'navigation/custom_navigation.dart';
-import 'navigation/navigation_adapter.dart';
-import 'navigation/navigator_key_navigation.dart';
-import 'navigation/overlay_navigation.dart';
-import 'ui/bubble.dart';
-import 'ui/inspector_shell.dart';
-import 'ui/theme.dart';
-import 'worker/commands.dart';
-import 'worker/worker.dart';
-import 'worker/worker_factory.dart';
+import 'package:proxie/src/adapters/capture_adapter.dart';
+import 'package:proxie/src/adapters/http_client_adapter.dart';
+import 'package:proxie/src/config.dart';
+import 'package:proxie/src/core/engine.dart';
+import 'package:proxie/src/core/rule.dart';
+import 'package:proxie/src/enablement.dart';
+import 'package:proxie/src/navigation/custom_navigation.dart';
+import 'package:proxie/src/navigation/navigation_adapter.dart';
+import 'package:proxie/src/navigation/navigator_key_navigation.dart';
+import 'package:proxie/src/navigation/navigator_observer.dart';
+import 'package:proxie/src/navigation/overlay_navigation.dart';
+import 'package:proxie/src/runtime.dart';
+import 'package:proxie/src/ui/inspector_shell.dart';
+import 'package:proxie/src/ui/proxie_layer.dart';
+import 'package:proxie/src/worker/commands.dart';
+import 'package:proxie/src/worker/worker.dart';
+import 'package:proxie/src/worker/worker_factory.dart';
 
 /// Entry point: set Proxie up once, then wrap the app.
 ///
@@ -34,11 +35,11 @@ import 'worker/worker_factory.dart';
 /// `init(enabled: false)` turns it off at runtime as well.
 abstract final class Proxie {
   static Future<void>? _init;
+  static Future<void>? _shuttingDown;
   static bool _disabled = false;
   static bool _wrapped = false;
-  static final ValueNotifier<_Runtime?> _active = ValueNotifier(null);
   static final List<WeakReference<ProxieHttpClient>> _clients = [];
-  static _ProxieHostState? _host;
+  static final NavigatorObserver _inertObserver = NavigatorObserver();
 
   /// Starts Proxie: spawns the storage worker, builds the engine, loads the
   /// saved rules and attaches [adapters].
@@ -50,7 +51,9 @@ abstract final class Proxie {
   ///
   /// Only the first call counts; later calls ignore their arguments (until
   /// [shutdown]) and return the first call's future (an already completed
-  /// one when the first call disabled Proxie). A failed start is
+  /// one when the first call disabled Proxie). An init called while a
+  /// [shutdown] runs starts after it finished, so it never overlaps the
+  /// old worker. A failed start is
   /// reported through [FlutterError.reportError] (it never throws into the
   /// app), leaves Proxie inactive, and may be retried with another `init`.
   ///
@@ -73,21 +76,22 @@ abstract final class Proxie {
       _clients.clear();
       return Future<void>.value();
     }
+    final shuttingDown = _shuttingDown;
+    Future<void> start() => _start(adapters, navigation, config, supportDir);
     late final Future<void> started;
-    started = _start(adapters, navigation, config, supportDir).catchError((
-      Object error,
-      StackTrace stack,
-    ) {
-      if (identical(_init, started)) _init = null;
-      FlutterError.reportError(
-        FlutterErrorDetails(
-          exception: error,
-          stack: stack,
-          library: 'proxie',
-          context: ErrorDescription('while starting Proxie'),
-        ),
-      );
-    });
+    started =
+        (shuttingDown == null ? start() : shuttingDown.then((_) => start()))
+            .catchError((Object error, StackTrace stack) {
+              if (identical(_init, started)) _init = null;
+              FlutterError.reportError(
+                FlutterErrorDetails(
+                  exception: error,
+                  stack: stack,
+                  library: 'proxie',
+                  context: ErrorDescription('while starting Proxie'),
+                ),
+              );
+            });
     return _init = started;
   }
 
@@ -100,26 +104,22 @@ abstract final class Proxie {
     final binding = WidgetsFlutterBinding.ensureInitialized();
     final controller = ProxieInspectorController();
     final nav = switch (navigation) {
-      OverlayNavigation() => OverlayNavigationAdapter(
-        onDismissed: controller.close,
-      ),
-      NavigatorKeyNavigation(:final key) => NavigatorKeyNavigationAdapter(
-        key,
-        onDismissed: controller.close,
-      ),
+      OverlayNavigation() => OverlayNavigationAdapter(),
+      NavigatorKeyNavigation(:final key) => NavigatorKeyNavigationAdapter(key),
       CustomNavigation(:final push, :final pop) => CustomNavigationAdapter(
         push: push,
         pop: pop,
-        onDismissed: controller.close,
       ),
+      AdapterNavigation(:final adapter) => adapter,
     };
     if (nav is OverlayNavigationAdapter) {
       // Before the first await, so a call before runApp registers ahead of
       // the app's navigator.
       if (binding.rootElement != null) {
         developer.log(
-          'Proxie.init was called after runApp: the back button may reach '
-          "the app's navigator before the inspector",
+          'Proxie.init was called after runApp: add Proxie.navigatorObserver '
+          "to the app's navigator so the back button cannot reach it while "
+          'the inspector is open',
           name: 'proxie',
         );
       }
@@ -136,18 +136,30 @@ abstract final class Proxie {
         sink: worker,
         sessionId: worker.sessionId,
       );
+      // Not a cascade: engine must be assigned before the await so the catch
+      // below disposes it when loading the rules fails.
+      // ignore: cascade_invocations
       engine.rules = RuleSet(await worker.run(const LoadRules()));
       for (final adapter in adapters) {
         adapter.attach(engine);
         attached.add(adapter);
       }
-    } catch (_) {
-      if (nav is OverlayNavigationAdapter) nav.detachBackButton();
-      attached.forEach(_detach);
+      proxieActive.value = ProxieRuntime(
+        worker: worker,
+        engine: engine,
+        adapters: attached,
+        controller: controller,
+        navigation: nav,
+        config: config,
+      );
+    } on Object catch (_) {
+      if (nav is OverlayNavigationAdapter) nav.dispose();
+      controller.dispose();
+      attached.forEach(detachAdapter);
       engine?.dispose();
       try {
         await worker?.dispose();
-      } catch (e, st) {
+      } on Object catch (e, st) {
         developer.log(
           'Proxie worker dispose failed',
           name: 'proxie',
@@ -157,16 +169,6 @@ abstract final class Proxie {
       }
       rethrow;
     }
-
-    _active.value = _Runtime(
-      worker: worker,
-      engine: engine,
-      adapters: attached,
-      controller: controller,
-      navigation: nav,
-      callCount: SessionCallCounter(engine.calls),
-      config: config,
-    );
     for (final client in _liveClients()) {
       client.attach(engine);
     }
@@ -185,7 +187,7 @@ abstract final class Proxie {
     // remount the app.
     if (_disabled && !_wrapped) return host;
     _wrapped = true;
-    return _ProxieHost(child: host);
+    return ProxieHost(child: host);
   }
 
   /// A `package:http` client whose calls Proxie records.
@@ -197,7 +199,7 @@ abstract final class Proxie {
   static http.Client httpClient({http.Client? inner}) {
     if (!kProxieEnabled || _disabled) return inner ?? http.Client();
     final client = ProxieHttpClient(inner: inner);
-    final runtime = _active.value;
+    final runtime = proxieActive.value;
     if (runtime != null) client.attach(runtime.engine);
     _clients
       ..removeWhere((ref) => ref.target == null)
@@ -208,33 +210,76 @@ abstract final class Proxie {
   /// Opens the inspector; a no-op while Proxie is not active.
   static void open() {
     if (!kProxieEnabled) return;
-    _active.value?.controller.open();
+    proxieActive.value?.controller.open();
   }
 
   /// The engine while Proxie is active.
   static ProxieEngine? get engine =>
-      kProxieEnabled ? _active.value?.engine : null;
+      kProxieEnabled ? proxieActive.value?.engine : null;
 
   /// Whether [init] completed and Proxie is recording.
-  static bool get isActive => kProxieEnabled && _active.value != null;
+  static bool get isActive => kProxieEnabled && proxieActive.value != null;
+
+  /// Add to the app's root navigator, e.g.
+  /// `MaterialApp(navigatorObservers: [Proxie.navigatorObserver])` or
+  /// `GoRouter(observers: [Proxie.navigatorObserver])`.
+  ///
+  /// Overlay mode then holds the app's top route in place while the
+  /// inspector is open. Required for apps with predictive back page
+  /// transitions (otherwise a back gesture can pop the app's route along
+  /// with closing the inspector) and for apps calling [init] after
+  /// `runApp`. An observer can only be added to one navigator.
+  ///
+  /// The hold is a pop entry on the app's top route: if a back press reaches
+  /// the app's navigator while the inspector is open, a `PopScope` on that
+  /// route sees `onPopInvokedWithResult(false, null)` even though Proxie
+  /// handled the press by closing the inspector.
+  static NavigatorObserver get navigatorObserver =>
+      kProxieEnabled ? proxieNavigatorObserver : _inertObserver;
 
   /// Stops Proxie and resets it to before [init]: hides the inspector,
-  /// detaches adapters and clients from [httpClient], disposes the engine,
-  /// then the worker. Waits for a running [init] first.
-  static Future<void> shutdown() async {
-    if (!kProxieEnabled) return;
-    final pending = _init;
-    if (pending != null) await pending;
-    final runtime = _active.value;
-    _active.value = null;
+  /// detaches adapters and the clients from [httpClient] (a later [init]
+  /// attaches them again), disposes the engine, then the worker.
+  ///
+  /// Waits for a running [init] and earlier shutdowns first; completes once
+  /// everything is disposed.
+  static Future<void> shutdown() {
+    if (!kProxieEnabled) return Future<void>.value();
+    final previous = _shuttingDown;
+    final pendingInit = _init;
     _init = null;
     _disabled = false;
     _wrapped = false;
+    late final Future<void> done;
+    done = _teardown(previous, pendingInit).whenComplete(() {
+      if (identical(_shuttingDown, done)) _shuttingDown = null;
+    });
+    return _shuttingDown = done;
+  }
+
+  static Future<void> _teardown(
+    Future<void>? previous,
+    Future<void>? pendingInit,
+  ) async {
+    // Neither throws: init reports its own failures, teardown logs.
+    if (previous != null) await previous;
+    if (pendingInit != null) await pendingInit;
+    final runtime = proxieActive.value;
+    if (runtime == null) return;
+    proxieActive.value = null;
     for (final client in _liveClients()) {
       client.detach();
     }
-    _clients.clear();
-    await runtime?.dispose();
+    try {
+      await runtime.dispose();
+    } on Object catch (e, st) {
+      developer.log(
+        'Proxie shutdown failed',
+        name: 'proxie',
+        error: e,
+        stackTrace: st,
+      );
+    }
   }
 
   static Iterable<ProxieHttpClient> _liveClients() sync* {
@@ -242,212 +287,5 @@ abstract final class Proxie {
       final client = ref.target;
       if (client != null) yield client;
     }
-  }
-}
-
-void _detach(ProxieCaptureAdapter adapter) {
-  try {
-    adapter.detach();
-  } catch (e, st) {
-    developer.log(
-      'Proxie adapter ${adapter.name} failed to detach',
-      name: 'proxie',
-      error: e,
-      stackTrace: st,
-    );
-  }
-}
-
-/// Everything an active Proxie owns.
-class _Runtime {
-  _Runtime({
-    required this.worker,
-    required this.engine,
-    required this.adapters,
-    required this.controller,
-    required this.navigation,
-    required this.callCount,
-    required this.config,
-  }) {
-    controller.addListener(_sync);
-  }
-
-  final ProxieWorker worker;
-  final ProxieEngine engine;
-  final List<ProxieCaptureAdapter> adapters;
-  final ProxieInspectorController controller;
-  final ProxieNavigationAdapter navigation;
-  final SessionCallCounter callCount;
-  final ProxieConfig config;
-
-  bool get isOverlay => navigation is OverlayNavigationAdapter;
-
-  // The controller is the source of truth; the adapter follows it. A page
-  // the host dismissed closes the controller through onDismissed.
-  void _sync() {
-    if (controller.isOpen) {
-      if (!navigation.isShowing) {
-        final host = Proxie._host;
-        navigation.show(
-          host != null && host.mounted ? host.context : null,
-          ProxieInspector(
-            controller: controller,
-            splitWidth: config.splitWidth,
-          ),
-        );
-      }
-    } else if (navigation.isShowing) {
-      navigation.hide();
-    }
-  }
-
-  Future<void> dispose() async {
-    controller.removeListener(_sync);
-    try {
-      navigation.hide();
-    } catch (e, st) {
-      developer.log(
-        'Proxie failed to hide the inspector',
-        name: 'proxie',
-        error: e,
-        stackTrace: st,
-      );
-    }
-    final nav = navigation;
-    if (nav is OverlayNavigationAdapter) nav.detachBackButton();
-    adapters.forEach(_detach);
-    callCount.dispose();
-    engine.dispose();
-    await worker.dispose();
-  }
-}
-
-/// What [Proxie.wrap] returns: the app plus Proxie's layer once active.
-class _ProxieHost extends StatefulWidget {
-  const _ProxieHost({required this.child});
-
-  final Widget child;
-
-  @override
-  State<_ProxieHost> createState() => _ProxieHostState();
-}
-
-class _ProxieHostState extends State<_ProxieHost> {
-  _Runtime? _runtime;
-  // The app's last NavigationNotification, and whether Proxie is speaking
-  // for the back button instead (overlay inspector open).
-  bool _appCanHandlePop = false;
-  bool _claimsBack = false;
-
-  @override
-  void initState() {
-    super.initState();
-    Proxie._host = this;
-    Proxie._active.addListener(_onRuntime);
-    _attach(Proxie._active.value);
-  }
-
-  @override
-  void dispose() {
-    Proxie._active.removeListener(_onRuntime);
-    _runtime?.controller.removeListener(_onOpenChanged);
-    if (identical(Proxie._host, this)) Proxie._host = null;
-    super.dispose();
-  }
-
-  void _onRuntime() => setState(() => _attach(Proxie._active.value));
-
-  void _attach(_Runtime? runtime) {
-    if (identical(runtime, _runtime)) return;
-    _runtime?.controller.removeListener(_onOpenChanged);
-    _runtime = runtime;
-    runtime?.controller.addListener(_onOpenChanged);
-    _onOpenChanged();
-  }
-
-  // While the overlay inspector is open the back button must reach Flutter
-  // (Android predictive back sends it to the framework only when told so),
-  // even if the app's navigator could not pop; afterwards the app's own
-  // state is restored.
-  void _onOpenChanged() {
-    final runtime = _runtime;
-    final claim =
-        runtime != null && runtime.isOverlay && runtime.controller.isOpen;
-    if (claim == _claimsBack) return;
-    _claimsBack = claim;
-    NavigationNotification(
-      canHandlePop: claim || _appCanHandlePop,
-    ).dispatch(context);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final runtime = _runtime;
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        NotificationListener<NavigationNotification>(
-          onNotification: (n) {
-            _appCanHandlePop = n.canHandlePop;
-            // Swallowed while Proxie claims the back button.
-            return _claimsBack;
-          },
-          child: widget.child,
-        ),
-        if (runtime != null) _ProxieLayer(runtime: runtime),
-      ],
-    );
-  }
-}
-
-/// The bubble, and the inspector in overlay mode, in Proxie's own theme.
-class _ProxieLayer extends StatelessWidget {
-  const _ProxieLayer({required this.runtime});
-
-  final _Runtime runtime;
-
-  @override
-  Widget build(BuildContext context) {
-    final nav = runtime.navigation;
-    final overlay = nav is OverlayNavigationAdapter ? nav : null;
-    return NotificationListener<NavigationNotification>(
-      // Proxie's navigators never speak for the app's back button.
-      onNotification: (_) => true,
-      child: Theme(
-        data: ProxieTheme.dark(),
-        child: Material(
-          type: MaterialType.transparency,
-          child: ListenableBuilder(
-            listenable: Listenable.merge([runtime.controller, ?overlay]),
-            builder: (context, _) {
-              final page = overlay?.page;
-              return Stack(
-                fit: StackFit.expand,
-                children: [
-                  // Kept mounted so position and animations survive.
-                  Visibility(
-                    visible: !runtime.controller.isOpen,
-                    maintainState: true,
-                    child: ProxieBubble(
-                      callCount: runtime.callCount,
-                      breakpoints: runtime.engine.breakpoints,
-                      onTap: Proxie.open,
-                    ),
-                  ),
-                  if (overlay != null && page != null)
-                    HeroControllerScope.none(
-                      child: Navigator(
-                        key: overlay.navigatorKey,
-                        onGenerateRoute: (_) =>
-                            MaterialPageRoute<void>(builder: (_) => page),
-                      ),
-                    ),
-                ],
-              );
-            },
-          ),
-        ),
-      ),
-    );
   }
 }
