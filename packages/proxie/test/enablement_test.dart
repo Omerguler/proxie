@@ -9,6 +9,8 @@ import 'package:path_provider_platform_interface/path_provider_platform_interfac
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 import 'package:proxie/proxie.dart';
 
+import 'support/temp_dir.dart';
+
 class _FakePathProvider extends PathProviderPlatform
     with MockPlatformInterfaceMixin {
   _FakePathProvider(this.support);
@@ -81,7 +83,7 @@ void main() {
   tearDown(() async {
     await Proxie.shutdown();
     PathProviderPlatform.instance = originalProvider;
-    tmp.deleteSync(recursive: true);
+    await deleteTempDir(tmp);
   });
 
   bool dbExists() => File(

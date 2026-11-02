@@ -8,6 +8,7 @@ import 'package:proxie/proxie.dart';
 import 'package:proxie/src/storage/sqlite_store.dart';
 import 'package:sqlite3/sqlite3.dart';
 
+import '../support/temp_dir.dart';
 import 'store_contract.dart';
 
 const int _threshold = 256 * 1024;
@@ -100,15 +101,7 @@ Future<List<String>> _ids(ProxieStore s, CallQuery q) async => [
 void main() {
   tearDown(() async {
     for (final d in _dirs) {
-      // Windows may briefly hold just-closed files (pending deletes, virus
-      // scanners), so retry; a leftover temp directory is harmless.
-      for (var attempt = 0; attempt < 10 && d.existsSync(); attempt++) {
-        try {
-          d.deleteSync(recursive: true);
-        } on FileSystemException {
-          await Future<void>.delayed(const Duration(milliseconds: 50));
-        }
-      }
+      await deleteTempDir(d);
     }
     _dirs.clear();
   });

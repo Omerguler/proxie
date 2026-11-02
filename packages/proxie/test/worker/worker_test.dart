@@ -12,6 +12,8 @@ import 'package:proxie/src/worker/in_process_worker.dart';
 import 'package:proxie/src/worker/isolate_worker.dart';
 import 'package:proxie/src/worker/worker_factory_web.dart' as web;
 
+import '../support/temp_dir.dart';
+
 final _dirs = <Directory>[];
 
 Directory _tempDir() {
@@ -295,9 +297,9 @@ void _contract(
 }
 
 void main() {
-  tearDownAll(() {
+  tearDownAll(() async {
     for (final d in _dirs) {
-      if (d.existsSync()) d.deleteSync(recursive: true);
+      await deleteTempDir(d);
     }
   });
 
