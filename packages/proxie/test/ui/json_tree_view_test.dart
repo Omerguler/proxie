@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:proxie/proxie.dart';
+import 'package:proxie/src/ui/common.dart';
 import 'package:proxie/src/ui/detail/call_detail.dart';
 import 'package:proxie/src/ui/json/json_row_tile.dart';
 import 'package:proxie/src/ui/json/json_tree_controller.dart';
@@ -691,7 +692,7 @@ void main() {
     expect(find.byTooltip('Edit [0]'), findsOneWidget);
     expect(
       tester.getSemantics(find.text('+ avatar')),
-      isSemantics(label: 'Add key avatar', isButton: true),
+      isSemantics(label: 'Add key avatar', isButton: true, hasTapAction: true),
     );
     expect(
       tester.getSemantics(find.byKey(const ValueKey(1))),
@@ -734,6 +735,77 @@ void main() {
     await _settle(tester);
     expect(find.text('a'), findsOneWidget); // the search text survived
     expect(worker.sentOf<OpenJson>(), hasLength(1));
+  });
+
+  testWidgets('a reload of the same body keeps the tree, scroll and search', (
+    tester,
+  ) async {
+    final json = jsonEncode([for (var i = 0; i < 500; i++) i]);
+    Widget view() => _app(
+      JsonBodyView(
+        worker: worker,
+        callId: 'c1',
+        which: 'response',
+        // A fresh copy of the bytes, as each refetch of the call gives.
+        body: _call(json).response!.body,
+      ),
+    );
+    await store.upsert(_call(json));
+    await tester.pumpWidget(view());
+    await _settle(tester);
+    await tester.enterText(
+      find.byKey(const ValueKey('proxie-json-search')),
+      'abc',
+    );
+    final scrollable = find.descendant(
+      of: find.byKey(const ValueKey('proxie-json-tree')),
+      matching: find.byType(Scrollable),
+    );
+    tester.state<ScrollableState>(scrollable).position.jumpTo(1400);
+    await tester.pump();
+
+    await tester.pumpWidget(view());
+    // No blank frame: the tree is still there right away.
+    expect(_rows, findsWidgets);
+    await _settle(tester);
+    expect(worker.sentOf<OpenJson>(), hasLength(1));
+    expect(tester.state<ScrollableState>(scrollable).position.pixels, 1400);
+    expect(find.text('abc'), findsOneWidget);
+  });
+
+  testWidgets('a refused edit is recognized by its code, not its type name', (
+    tester,
+  ) async {
+    final c = await pumpTree(tester, '[1]');
+    worker
+      // A minified web build mangles the type name.
+      ..failure = const ProxieWorkerException(
+        type: 'minified:aB',
+        message: 'Invalid argument(s): Node was deleted',
+        stackTrace: '',
+        code: ProxieWorkerException.argumentCode,
+      )
+      ..failWhen = (cmd) => cmd is JsonApply;
+    await c.apply(const DeleteNode(1));
+    await _settle(tester);
+    expect(c.status, JsonTreeStatus.ready);
+    expect(c.editError, contains('Node was deleted'));
+  });
+
+  testWidgets('a closed document is recognized by its code', (tester) async {
+    final c = await pumpTree(tester, '{"a":{"b":1}}');
+    worker
+      ..failure = const ProxieWorkerException(
+        type: 'minified:cD',
+        message: 'JsonDocumentClosed: no open JSON document 0',
+        stackTrace: '',
+        code: JsonDocumentClosed.errorCode,
+      )
+      ..failWhen = (cmd) => cmd is JsonToggle;
+    await c.toggle(1);
+    await _settle(tester);
+    expect(c.status, JsonTreeStatus.failed);
+    expect(c.closed, isTrue);
   });
 
   testWidgets('a same-length body change opens the document again', (
@@ -824,6 +896,37 @@ void main() {
       expect(find.byType(TextField), findsOneWidget);
     });
 
+    testWidgets('an editable view shows the new body after a change', (
+      tester,
+    ) async {
+      Widget view(String text) => _app(
+        RawTextView(
+          worker: worker,
+          bytes: Uint8List.fromList(utf8.encode(text)),
+          editable: true,
+        ),
+      );
+      await tester.pumpWidget(view('first'));
+      await _settle(tester);
+      await tester.enterText(find.byType(TextField), 'first, edited');
+      // The same bytes again: the edit in progress is kept.
+      await tester.pumpWidget(view('first'));
+      await _settle(tester);
+      expect(find.text('first, edited'), findsOneWidget);
+      // Other bytes: the field shows them, never the old text.
+      await tester.pumpWidget(view('second'));
+      expect(find.text('first, edited'), findsNothing);
+      await _settle(tester);
+      expect(
+        find.descendant(
+          of: find.byType(TextField),
+          matching: find.text('second'),
+        ),
+        findsOneWidget,
+      );
+      expect(find.text('first, edited'), findsNothing);
+    });
+
     testWidgets('a reload keeps the lines until new ones arrive', (
       tester,
     ) async {
@@ -881,6 +984,17 @@ void main() {
       await _settle(tester);
       expect(find.byType(TextField), findsOneWidget);
     });
+  });
+
+  test('sameBytes compares contents, aligned or not', () {
+    final a = Uint8List.fromList(List.generate(11, (i) => i));
+    expect(sameBytes(a, Uint8List.fromList(a)), isTrue);
+    expect(sameBytes(a, Uint8List.fromList([...a.take(10), 99])), isFalse);
+    expect(sameBytes(a, Uint8List.fromList([99, ...a.skip(1)])), isFalse);
+    expect(sameBytes(a, Uint8List(10)), isFalse);
+    // Views at odd offsets compare byte by byte.
+    final big = Uint8List.fromList([0, ...a]);
+    expect(sameBytes(Uint8List.sublistView(big, 1), a), isTrue);
   });
 
   test('textLines keeps line breaks and caps line length', () {

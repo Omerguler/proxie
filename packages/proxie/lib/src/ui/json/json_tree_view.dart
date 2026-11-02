@@ -299,9 +299,9 @@ class JsonBodyView extends StatefulWidget {
   /// `'request'` or `'response'`.
   final String which;
 
-  /// The body, for the raw view; another body (a pending call's response
-  /// arriving, a reload) opens the document again, which the worker
-  /// answers with the open document when the bytes are unchanged.
+  /// The body, for the raw view; a body with other bytes (a pending
+  /// call's response arriving, an edited response) opens the document
+  /// again, while a reload of the same bytes keeps the tree as it is.
   final ProxieBody body;
 
   /// Whether the tree offers edits.
@@ -345,7 +345,7 @@ class _JsonBodyViewState extends State<JsonBodyView> {
         o.which != w.which ||
         o.editable != w.editable ||
         o.scope != w.scope ||
-        !identical(o.body.bytes, w.body.bytes) ||
+        !sameBytes(o.body.bytes, w.body.bytes) ||
         o.body.truncated != w.body.truncated) {
       // The tree lets go of the old controller in this frame.
       final old = _controller..removeListener(_changed);

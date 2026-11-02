@@ -33,6 +33,14 @@ abstract class WorkerCommand<R> {
   Future<R> execute(WorkerContext ctx);
 }
 
+/// An error a worker command throws that callers recognize by [code],
+/// which survives the isolate boundary and minification (unlike
+/// [ProxieWorkerException.type]).
+abstract interface class CodedWorkerError {
+  /// A stable name for this kind of error.
+  String get code;
+}
+
 /// A failure inside the worker, carrying the original error's details.
 class ProxieWorkerException implements Exception {
   /// Creates an exception from the original error's details.
@@ -40,6 +48,7 @@ class ProxieWorkerException implements Exception {
     required this.type,
     required this.message,
     required this.stackTrace,
+    this.code,
   });
 
   /// Describes [error]; returns it unchanged when it already is one.
@@ -50,10 +59,27 @@ class ProxieWorkerException implements Exception {
           type: error.runtimeType.toString(),
           message: error.toString(),
           stackTrace: stackTrace.toString(),
+          code: switch (error) {
+            CodedWorkerError() => error.code,
+            ArgumentError() => argumentCode,
+            StateError() => stateCode,
+            _ => null,
+          },
         );
 
-  /// Runtime type name of the original error.
+  /// [code] of an [ArgumentError] (including a [RangeError]).
+  static const argumentCode = 'argument';
+
+  /// [code] of a [StateError].
+  static const stateCode = 'state';
+
+  /// Runtime type name of the original error; for messages only, since
+  /// minified builds mangle it. Recognize errors by [code].
   final String type;
+
+  /// A stable name for known kinds of error ([argumentCode], [stateCode],
+  /// or a [CodedWorkerError]'s code); null for others.
+  final String? code;
 
   /// The original error's `toString()`.
   final String message;

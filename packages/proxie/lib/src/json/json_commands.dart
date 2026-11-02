@@ -26,9 +26,15 @@ enum JsonBodySide {
 }
 
 /// The document named by [docId] was closed, evicted or never opened.
-class JsonDocumentClosed implements Exception {
+class JsonDocumentClosed implements Exception, CodedWorkerError {
   /// Creates the error for the document [docId].
   const JsonDocumentClosed(this.docId);
+
+  /// The [ProxieWorkerException.code] of this error.
+  static const errorCode = 'json_document_closed';
+
+  @override
+  String get code => errorCode;
 
   /// The id that named no open document.
   final String docId;

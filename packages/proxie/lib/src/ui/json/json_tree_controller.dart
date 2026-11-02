@@ -522,8 +522,9 @@ JsonRow? _containerOrNull(JsonRow? row) =>
 /// a worker failure.
 bool _isRefused(Object e) =>
     e is ProxieWorkerException &&
-    const {'ArgumentError', 'RangeError', 'StateError'}.contains(e.type);
+    (e.code == ProxieWorkerException.argumentCode ||
+        e.code == ProxieWorkerException.stateCode);
 
 bool _isClosed(Object? e) =>
     e is JsonDocumentClosed ||
-    (e is ProxieWorkerException && e.type == 'JsonDocumentClosed');
+    (e is ProxieWorkerException && e.code == JsonDocumentClosed.errorCode);

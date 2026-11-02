@@ -297,6 +297,27 @@ void _contract(
 }
 
 void main() {
+  test('wrap gives known errors a stable code', () {
+    final st = StackTrace.current;
+    expect(
+      ProxieWorkerException.wrap(ArgumentError('x'), st).code,
+      ProxieWorkerException.argumentCode,
+    );
+    expect(
+      ProxieWorkerException.wrap(RangeError.range(5, 0, 1), st).code,
+      ProxieWorkerException.argumentCode,
+    );
+    expect(
+      ProxieWorkerException.wrap(StateError('x'), st).code,
+      ProxieWorkerException.stateCode,
+    );
+    expect(
+      ProxieWorkerException.wrap(const JsonDocumentClosed('1'), st).code,
+      JsonDocumentClosed.errorCode,
+    );
+    expect(ProxieWorkerException.wrap(Exception('x'), st).code, isNull);
+  });
+
   tearDownAll(() async {
     for (final d in _dirs) {
       await deleteTempDir(d);

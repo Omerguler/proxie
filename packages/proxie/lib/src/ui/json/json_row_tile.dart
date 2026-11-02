@@ -261,6 +261,8 @@ class _MissingKeyChip extends StatelessWidget {
       container: true,
       button: true,
       label: 'Add key $label',
+      // excludeSemantics drops the InkWell's action, so it is given here.
+      onTap: onTap,
       excludeSemantics: true,
       child: Padding(
         padding: const EdgeInsets.only(left: 6),

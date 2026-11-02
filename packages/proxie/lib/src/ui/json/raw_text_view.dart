@@ -13,17 +13,6 @@ import 'package:proxie/src/worker/worker.dart';
 
 bool _isSpace(int unit) => unit == 0x20 || unit == 0x09;
 
-/// Whether [a] and [b] hold the same bytes; only compares contents when
-/// their lengths match.
-bool _sameBytes(Uint8List a, Uint8List b) {
-  if (identical(a, b)) return true;
-  if (a.length != b.length) return false;
-  for (var i = 0; i < a.length; i++) {
-    if (a[i] != b[i]) return false;
-  }
-  return true;
-}
-
 /// The colored spans of one line of indented JSON: member names, strings,
 /// and numbers with `true` / `false` / `null`, by [colors]. The spans'
 /// text joins back to [line].
@@ -159,7 +148,7 @@ class _RawTextViewState extends State<RawTextView> {
   @override
   void didUpdateWidget(RawTextView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (_sameBytes(oldWidget.bytes, widget.bytes) &&
+    if (sameBytes(oldWidget.bytes, widget.bytes) &&
         oldWidget.prettyJson == widget.prettyJson &&
         oldWidget.latin1 == widget.latin1 &&
         oldWidget.worker == widget.worker) {
@@ -169,7 +158,12 @@ class _RawTextViewState extends State<RawTextView> {
     _editAnyway = false;
     _edit?.dispose();
     _edit = null;
-    // The old lines stay up until the new ones arrive.
+    if (widget.editable) {
+      // An editor must never show (and hand back) the old body's text.
+      _lines = null;
+      _loaded = false;
+    }
+    // Read-only, the old lines stay up until the new ones arrive.
     unawaited(_load());
   }
 
@@ -195,6 +189,9 @@ class _RawTextViewState extends State<RawTextView> {
       setState(() {
         _lines = lines;
         _loaded = true;
+        // An editor built meanwhile starts again from the new text.
+        _edit?.dispose();
+        _edit = null;
       });
     } on Object catch (e, st) {
       // The host app must never crash because the worker failed.

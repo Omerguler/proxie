@@ -1,4 +1,28 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
+
+/// Whether [a] and [b] hold the same bytes. Contents are compared only
+/// when the lengths match, four bytes at a time where both are aligned.
+bool sameBytes(Uint8List a, Uint8List b) {
+  if (identical(a, b)) return true;
+  final n = a.length;
+  if (n != b.length) return false;
+  var i = 0;
+  if (a.offsetInBytes % 4 == 0 && b.offsetInBytes % 4 == 0) {
+    final words = n ~/ 4;
+    final wa = a.buffer.asUint32List(a.offsetInBytes, words);
+    final wb = b.buffer.asUint32List(b.offsetInBytes, words);
+    for (var w = 0; w < words; w++) {
+      if (wa[w] != wb[w]) return false;
+    }
+    i = words * 4;
+  }
+  for (; i < n; i++) {
+    if (a[i] != b[i]) return false;
+  }
+  return true;
+}
 
 /// The monospaced style of body text.
 TextStyle? monoStyle(BuildContext context) => Theme.of(
