@@ -1,6 +1,6 @@
 import 'dart:typed_data';
 
-import 'json_row.dart';
+import 'package:proxie/src/json/json_row.dart';
 
 /// Approximate storage per node: seven 32-bit fields and one flags byte.
 const int jsonBytesPerNode = 7 * 4 + 1;

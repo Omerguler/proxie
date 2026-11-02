@@ -3,17 +3,16 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show visibleForTesting;
+import 'package:proxie/src/core/presets.dart';
+import 'package:proxie/src/core/rule.dart';
+import 'package:proxie/src/model/body.dart';
+import 'package:proxie/src/model/call.dart';
+import 'package:proxie/src/storage/call_query.dart';
+import 'package:proxie/src/storage/json_bytes.dart';
+import 'package:proxie/src/storage/spill_names.dart';
+import 'package:proxie/src/storage/sqlite_schema.dart';
+import 'package:proxie/src/storage/store.dart';
 import 'package:sqlite3/sqlite3.dart';
-
-import '../core/presets.dart';
-import '../core/rule.dart';
-import '../model/body.dart';
-import '../model/call.dart';
-import 'call_query.dart';
-import 'json_bytes.dart';
-import 'spill_names.dart';
-import 'sqlite_schema.dart';
-import 'store.dart';
 
 /// Response bodies up to this size are full-text indexed (the raw-text
 /// editable limit, 1 MB); larger bodies are found by URL only.
@@ -145,7 +144,7 @@ class SqliteStore implements ProxieStore {
           [for (final t in c.tags) t.name].join(','),
           c.adapter,
           c.startedAt.microsecondsSinceEpoch,
-          c.startedAt.isUtc ? 1 : 0,
+          if (c.startedAt.isUtc) 1 else 0,
           c.error?.type,
           utf8.encode(jsonEncode(meta)),
         ],
@@ -214,7 +213,7 @@ class SqliteStore implements ProxieStore {
         fileName,
         body.contentType,
         body.kind.name,
-        body.truncated ? 1 : 0,
+        if (body.truncated) 1 else 0,
         body.originalLength,
       ],
     );
@@ -319,7 +318,7 @@ class SqliteStore implements ProxieStore {
       SELECT $_summaryColumns FROM calls $where
       ORDER BY started_at DESC, id DESC
       LIMIT ? OFFSET ?''',
-      [...params, limit, offset < 0 ? 0 : offset],
+      [...params, limit, if (offset < 0) 0 else offset],
     );
     return List.unmodifiable([for (final r in rows) ?_decodeSummary(r)]);
   }
@@ -460,7 +459,7 @@ class SqliteStore implements ProxieStore {
     for (final r in _db.select('SELECT json FROM rules ORDER BY pos, rowid')) {
       try {
         out.add(
-          ProxieRule.fromMap(decodeJsonBytes(r['json'] as String) as Map),
+          ProxieRule.fromMap(decodeJsonBytes(r['json'] as String)! as Map),
         );
       } on Exception {
         // Skip rules that no longer decode (e.g. written by a newer version).
@@ -493,7 +492,7 @@ class SqliteStore implements ProxieStore {
     )) {
       try {
         final action = MapLocalAction.fromMap(
-          decodeJsonBytes(r['json'] as String) as Map,
+          decodeJsonBytes(r['json'] as String)! as Map,
         );
         out.add(
           ResponsePreset(

@@ -1,13 +1,13 @@
-import 'body.dart';
-import 'request.dart';
+import 'package:proxie/src/model/body.dart';
+import 'package:proxie/src/model/request.dart';
 
 /// A captured HTTP response.
 class ProxieResponse {
   ProxieResponse({
     required this.statusCode,
-    this.reasonPhrase,
     required Map<String, List<String>> headers,
     required this.body,
+    this.reasonPhrase,
   }) : headers = normalizeHeaders(headers);
 
   factory ProxieResponse.fromMap(Map<dynamic, dynamic> map) => ProxieResponse._(

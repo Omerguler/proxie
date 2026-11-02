@@ -10,15 +10,20 @@
 /// once.
 library;
 
+import 'package:proxie/adapter.dart'
+    show ProxieCaptureAdapter, ProxieEngine, RequestDecision;
+import 'package:proxie/proxie.dart'
+    show ProxieCaptureAdapter, ProxieEngine, RequestDecision;
+
 export 'src/adapters/capture_adapter.dart' show ProxieCaptureAdapter;
 export 'src/adapters/capture_marker.dart'
-    show kProxieCapturedZoneKey, runMarkedCaptured, isProxieCaptured;
+    show isProxieCaptured, kProxieCapturedZoneKey, runMarkedCaptured;
 export 'src/config.dart' show ProxieConfig;
 export 'src/core/decision.dart'
-    show RequestDecision, Proceed, Mock, AbortRequest, ProxieAbortedException;
-export 'src/core/engine.dart' show ProxieEngine, CallSink;
+    show AbortRequest, Mock, Proceed, ProxieAbortedException, RequestDecision;
+export 'src/core/engine.dart' show CallSink, ProxieEngine;
 export 'src/core/rule.dart' show MapLocalAction, SimulatedFailure;
-export 'src/model/body.dart' show ProxieBody, BodyKind, defaultBodyCap;
+export 'src/model/body.dart' show BodyKind, ProxieBody, defaultBodyCap;
 export 'src/model/call.dart' show ProxieError;
 export 'src/model/request.dart' show ProxieRequest;
 export 'src/model/response.dart' show ProxieResponse;

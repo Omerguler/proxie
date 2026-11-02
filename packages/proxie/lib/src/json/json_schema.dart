@@ -1,4 +1,4 @@
-import 'json_row.dart';
+import 'package:proxie/src/json/json_row.dart';
 
 /// One member seen in the objects of an array.
 class InferredField {

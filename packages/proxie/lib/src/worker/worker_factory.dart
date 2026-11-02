@@ -1,6 +1,6 @@
-import '../config.dart';
-import 'worker.dart';
-import 'worker_factory_io.dart'
+import 'package:proxie/src/config.dart';
+import 'package:proxie/src/worker/worker.dart';
+import 'package:proxie/src/worker/worker_factory_io.dart'
     if (dart.library.js_interop) 'worker_factory_web.dart'
     as impl;
 

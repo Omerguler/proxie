@@ -3,8 +3,8 @@ import 'dart:async';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
-import 'navigation_adapter.dart';
-import 'navigator_observer.dart';
+import 'package:proxie/src/navigation/navigation_adapter.dart';
+import 'package:proxie/src/navigation/navigator_observer.dart';
 
 /// Shows the inspector in the layer `Proxie.wrap` draws above the app.
 ///

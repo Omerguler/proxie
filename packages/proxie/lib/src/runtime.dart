@@ -2,14 +2,14 @@ import 'dart:developer' as developer;
 
 import 'package:flutter/widgets.dart';
 
-import 'adapters/capture_adapter.dart';
-import 'config.dart';
-import 'core/engine.dart';
-import 'navigation/navigation_adapter.dart';
-import 'navigation/overlay_navigation.dart';
-import 'ui/bubble.dart';
-import 'ui/inspector_shell.dart';
-import 'worker/worker.dart';
+import 'package:proxie/src/adapters/capture_adapter.dart';
+import 'package:proxie/src/config.dart';
+import 'package:proxie/src/core/engine.dart';
+import 'package:proxie/src/navigation/navigation_adapter.dart';
+import 'package:proxie/src/navigation/overlay_navigation.dart';
+import 'package:proxie/src/ui/bubble.dart';
+import 'package:proxie/src/ui/inspector_shell.dart';
+import 'package:proxie/src/worker/worker.dart';
 
 /// The runtime of the active Proxie, or null while inactive. Set by the
 /// facade, read by the layer `Proxie.wrap` draws.

@@ -3,9 +3,9 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import '../../core/engine.dart';
-import 'io_exchange.dart';
-import 'proxie_http_headers.dart';
+import 'package:proxie/src/adapters/io/io_exchange.dart';
+import 'package:proxie/src/adapters/io/proxie_http_headers.dart';
+import 'package:proxie/src/core/engine.dart';
 
 /// An [HttpClientRequest] that collects headers, cookies and body until
 /// [close], then runs the call through the engine (see [IoExchange]).

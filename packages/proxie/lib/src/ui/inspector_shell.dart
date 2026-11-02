@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
-import '../config.dart';
-import 'theme.dart';
+import 'package:proxie/src/config.dart';
+import 'package:proxie/src/ui/theme.dart';
 
 /// Whether the inspector is open and which call it shows.
 ///
@@ -63,8 +63,8 @@ class _InspectorScope extends InheritedNotifier<ProxieInspectorController> {
 /// with its own [ScaffoldMessenger] so its messages never reach the host.
 class ProxieInspector extends StatelessWidget {
   const ProxieInspector({
-    super.key,
     required this.controller,
+    super.key,
     this.splitWidth = 700,
     this.themeMode = ProxieThemeMode.dark,
     this.listBuilder,
@@ -100,8 +100,8 @@ class ProxieInspector extends StatelessWidget {
 /// [controller] and survives layout changes.
 class InspectorShell extends StatelessWidget {
   const InspectorShell({
-    super.key,
     required this.controller,
+    super.key,
     this.splitWidth = 700,
     this.listBuilder,
     this.detailBuilder,

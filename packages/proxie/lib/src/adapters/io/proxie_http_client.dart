@@ -1,10 +1,10 @@
 import 'dart:async';
 import 'dart:io';
 
-import '../../core/engine.dart';
-import '../capture_marker.dart';
-import 'buffered_request.dart';
-import 'http_tokens.dart';
+import 'package:proxie/src/adapters/capture_marker.dart';
+import 'package:proxie/src/adapters/io/buffered_request.dart';
+import 'package:proxie/src/adapters/io/http_tokens.dart';
+import 'package:proxie/src/core/engine.dart';
 
 /// An [HttpClient] that captures its requests into the engine returned by
 /// [engine], delegating everything else to [inner].

@@ -9,7 +9,7 @@ import 'package:sqlite3/sqlite3.dart';
 
 import 'store_contract.dart';
 
-const _threshold = 256 * 1024;
+const int _threshold = 256 * 1024;
 final _t0 = DateTime.utc(2026, 1, 1, 12);
 
 final _dirs = <Directory>[];
@@ -232,7 +232,7 @@ void main() {
 
     test('trim and clear delete spill files', () async {
       final big = ProxieBody.from(_pattern(_threshold + 1), null);
-      final now = DateTime.utc(2026, 6, 1);
+      final now = DateTime.utc(2026, 6);
       store.close();
       store = _open(dir, now: () => now);
       for (var i = 0; i < 3; i++) {

@@ -1,5 +1,5 @@
-import '../model/body.dart';
-import '../model/call.dart';
+import 'package:proxie/src/model/body.dart';
+import 'package:proxie/src/model/call.dart';
 
 /// Which outcomes a [CallQuery] keeps.
 enum StatusFilter {

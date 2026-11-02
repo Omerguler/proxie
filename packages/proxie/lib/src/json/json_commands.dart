@@ -1,10 +1,10 @@
 import 'dart:typed_data';
 
-import '../model/body.dart';
-import '../worker/worker.dart';
-import 'json_document.dart';
-import 'json_row.dart';
-import 'json_schema.dart';
+import 'package:proxie/src/json/json_document.dart';
+import 'package:proxie/src/json/json_row.dart';
+import 'package:proxie/src/json/json_schema.dart';
+import 'package:proxie/src/model/body.dart';
+import 'package:proxie/src/worker/worker.dart';
 
 /// Documents kept open per worker; opening more evicts the least recently
 /// used one.
@@ -34,8 +34,8 @@ class JsonHandle {
   const JsonHandle({
     required this.docId,
     required this.visibleCount,
-    this.parseError,
     required this.truncated,
+    this.parseError,
   });
 
   /// Names the document in later commands; valid until [CloseJson] or
@@ -244,7 +244,7 @@ class _JsonDocs {
   int _nextId = 0;
   int _nodes = 0;
 
-  JsonDocument _doc(String docId) => _resources['json:$docId'] as JsonDocument;
+  JsonDocument _doc(String docId) => _resources['json:$docId']! as JsonDocument;
 
   /// The open document for [source] if its bytes are still [bytes]; a
   /// stale one, or one that did not parse, is closed.

@@ -75,7 +75,7 @@ Future<void> _backGesture(WidgetTester tester, String method) async {
       method == 'commitBackGesture'
           ? null
           : <String, Object?>{
-              'touchOffset': <double>[5.0, 300.0],
+              'touchOffset': <double>[5, 300],
               'progress': 0.0,
               'swipeEdge': 0,
             },

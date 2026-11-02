@@ -25,7 +25,7 @@ extension _Searching on JsonDocument {
         case JsonKind.object || JsonKind.array:
           return false;
         case JsonKind.string || JsonKind.number when _edited(id):
-          return (_values[id] as String).toLowerCase().contains(q);
+          return (_values[id]! as String).toLowerCase().contains(q);
         case JsonKind.string when _n.flags[id] & escapedFlag != 0:
           return decodeJsonString(source, start).toLowerCase().contains(q);
         case JsonKind.string:

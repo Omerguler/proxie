@@ -1,6 +1,6 @@
-import '../model/call.dart';
-import '../model/request.dart';
-import 'rule.dart';
+import 'package:proxie/src/core/rule.dart';
+import 'package:proxie/src/model/call.dart';
+import 'package:proxie/src/model/request.dart';
 
 /// What an adapter should do with a request.
 sealed class RequestDecision {

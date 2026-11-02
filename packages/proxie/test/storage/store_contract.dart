@@ -185,7 +185,7 @@ void runStoreContract(
         expect(paged, all);
         expect(await _ids(store, q, offset: 10, limit: 3), isEmpty);
         expect(await _ids(store, q, offset: 50, limit: 3), isEmpty);
-        expect(await _ids(store, q, offset: 0, limit: 0), isEmpty);
+        expect(await _ids(store, q, limit: 0), isEmpty);
         expect(await store.count(q), 10);
       });
 
@@ -256,7 +256,7 @@ void runStoreContract(
       });
 
       test('methods filter compares case-insensitively', () async {
-        await store.upsert(_call('g', method: 'GET'));
+        await store.upsert(_call('g'));
         await store.upsert(_call('p', method: 'post'));
         await store.upsert(_call('d', method: 'DELETE'));
         expect(
@@ -381,7 +381,7 @@ void runStoreContract(
       });
 
       test('sessionId and adapters filter', () async {
-        await store.upsert(_call('a', session: 1, adapter: 'dio'));
+        await store.upsert(_call('a', adapter: 'dio'));
         await store.upsert(_call('b', session: 2, adapter: 'dio'));
         await store.upsert(_call('c', session: 2, adapter: 'http'));
         expect((await _ids(store, const CallQuery(sessionId: 2))).toSet(), {
@@ -402,9 +402,9 @@ void runStoreContract(
       });
 
       test('filters combine with AND, and count agrees with query', () async {
-        await store.upsert(_call('a', method: 'GET', status: 500));
+        await store.upsert(_call('a', status: 500));
         await store.upsert(_call('b', method: 'POST', status: 500));
-        await store.upsert(_call('c', method: 'GET', status: 200));
+        await store.upsert(_call('c', status: 200));
         const q = CallQuery(
           methods: {'GET'},
           status: StatusFilter.errors,
@@ -565,7 +565,6 @@ void runStoreContract(
           _call(
             'session',
             url: 'https://api.test/needle/6',
-            session: 1,
             adapter: 'dio',
             status: 200,
             responseBody: json('{"a":1}'),
@@ -611,9 +610,7 @@ void runStoreContract(
       });
 
       test('upsert refreshes the queryable summary', () async {
-        await store.upsert(
-          _call('a', url: 'https://old.test/a', method: 'GET', session: 1),
-        );
+        await store.upsert(_call('a', url: 'https://old.test/a'));
         await store.upsert(
           _call(
             'a',

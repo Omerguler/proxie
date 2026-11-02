@@ -1,8 +1,8 @@
 import 'dart:async';
 
-import '../model/request.dart';
-import '../model/response.dart';
-import 'rule.dart';
+import 'package:proxie/src/core/rule.dart';
+import 'package:proxie/src/model/request.dart';
+import 'package:proxie/src/model/response.dart';
 
 /// How a paused call was resolved.
 sealed class BreakpointResolution {
@@ -39,8 +39,8 @@ class PausedCall {
     required this.callId,
     required this.phase,
     required this.request,
-    this.response,
     required this.pausedAt,
+    this.response,
   });
 
   final String callId;

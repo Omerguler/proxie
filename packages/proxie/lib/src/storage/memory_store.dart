@@ -1,20 +1,19 @@
 import 'package:flutter/foundation.dart';
 
-import '../core/presets.dart';
-import '../core/rule.dart';
-import '../model/body.dart';
-import '../model/call.dart';
-import 'call_query.dart';
-import 'store.dart';
+import 'package:proxie/src/core/presets.dart';
+import 'package:proxie/src/core/rule.dart';
+import 'package:proxie/src/model/body.dart';
+import 'package:proxie/src/model/call.dart';
+import 'package:proxie/src/storage/call_query.dart';
+import 'package:proxie/src/storage/store.dart';
 
 class _Entry {
-  _Entry._(this.map, this.call) : summary = CallSummary.fromCall(call);
-
   /// Stores an independent serialized copy of [source].
   factory _Entry(ProxieCall source) {
     final map = source.toMap();
     return _Entry._(map, ProxieCall.fromMap(map));
   }
+  _Entry._(this.map, this.call) : summary = CallSummary.fromCall(call);
 
   final Map<String, Object?> map;
   final ProxieCall call;
@@ -156,11 +155,11 @@ class MemoryStore implements ProxieStore {
     final out = <ResponsePreset>[];
     for (final m in _presets.values) {
       try {
-        final action = MapLocalAction.fromMap(m['action'] as Map);
+        final action = MapLocalAction.fromMap(m['action']! as Map);
         out.add(
           ResponsePreset(
-            id: m['id'] as String,
-            label: m['label'] as String,
+            id: m['id']! as String,
+            label: m['label']! as String,
             build: (_) => MapLocalAction.fromMap(action.toMap()),
           ),
         );

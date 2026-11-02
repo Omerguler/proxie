@@ -1,10 +1,10 @@
-import '../config.dart';
-import '../core/presets.dart';
-import '../core/rule.dart';
-import '../model/call.dart';
-import '../storage/call_query.dart';
-import '../storage/store.dart';
-import 'worker.dart';
+import 'package:proxie/src/config.dart';
+import 'package:proxie/src/core/presets.dart';
+import 'package:proxie/src/core/rule.dart';
+import 'package:proxie/src/model/call.dart';
+import 'package:proxie/src/storage/call_query.dart';
+import 'package:proxie/src/storage/store.dart';
+import 'package:proxie/src/worker/worker.dart';
 
 /// Masks [call] with the configured masking, then stores it.
 class UpsertCall extends WorkerCommand<void> {

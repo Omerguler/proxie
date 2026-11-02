@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import '../core/body_classifier.dart';
+import 'package:proxie/src/core/body_classifier.dart';
 
 /// Default render/tee cap for captured bodies (5 MB).
 const int defaultBodyCap = 5 * 1024 * 1024;
@@ -13,8 +13,8 @@ enum BodyKind { empty, json, text, binary, image }
 class ProxieBody {
   const ProxieBody({
     required this.bytes,
-    this.contentType,
     required this.kind,
+    this.contentType,
     this.truncated = false,
     int? originalLength,
   }) : originalLength = originalLength ?? bytes.length;

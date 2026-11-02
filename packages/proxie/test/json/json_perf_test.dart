@@ -9,7 +9,7 @@ import 'package:proxie/proxie.dart';
 import 'package:proxie/src/json/json_nodes.dart' show jsonBytesPerNode;
 
 const _items = 40000;
-const _targetBytes = 10 * 1024 * 1024;
+const int _targetBytes = 10 * 1024 * 1024;
 
 /// A ~10 MB JSON array of [_items] objects.
 String _bigArray() {

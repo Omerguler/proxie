@@ -631,8 +631,8 @@ extension _Editing on JsonDocument {
       final int key;
       final Object? v;
       if (_n.kind(parent) == JsonKind.object) {
-        final entry = item as MapEntry<Object?, Object?>;
-        key = _internKey(entry.key as String);
+        final entry = item! as MapEntry<Object?, Object?>;
+        key = _internKey(entry.key! as String);
         v = entry.value;
       } else {
         key = _n.childCount[parent];

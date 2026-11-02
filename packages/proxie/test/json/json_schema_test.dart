@@ -137,7 +137,7 @@ void main() {
 
   test('fields and kinds are unmodifiable', () {
     final schema = _rootSchema('[{"a":1}]')!;
-    expect(() => schema.fields.clear(), throwsUnsupportedError);
+    expect(schema.fields.clear, throwsUnsupportedError);
     expect(
       () => schema.fields.single.kinds.add(JsonKind.string),
       throwsUnsupportedError,

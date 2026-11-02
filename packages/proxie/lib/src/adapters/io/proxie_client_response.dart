@@ -2,9 +2,9 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
-import '../../model/response.dart';
-import 'proxie_http_headers.dart';
-import 'status_phrases.dart';
+import 'package:proxie/src/adapters/io/proxie_http_headers.dart';
+import 'package:proxie/src/adapters/io/status_phrases.dart';
+import 'package:proxie/src/model/response.dart';
 
 /// The [HttpClientResponse] Proxie hands to the app.
 ///

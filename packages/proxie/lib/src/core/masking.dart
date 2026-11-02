@@ -1,10 +1,10 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import '../model/body.dart';
-import '../model/request.dart';
-import '../model/response.dart';
-import 'body_classifier.dart' show isLatin1Text;
+import 'package:proxie/src/core/body_classifier.dart' show isLatin1Text;
+import 'package:proxie/src/model/body.dart';
+import 'package:proxie/src/model/request.dart';
+import 'package:proxie/src/model/response.dart';
 
 /// Replacement for masked values.
 const kMask = '••••••';

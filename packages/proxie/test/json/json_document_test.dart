@@ -97,7 +97,7 @@ void main() {
     });
 
     test('compact encode of an untouched doc is the input', () {
-      expect(utf8.decode(_doc(input).encode(pretty: false)), input);
+      expect(utf8.decode(_doc(input).encode()), input);
     });
   });
 
@@ -152,7 +152,7 @@ void main() {
         expect(doc.parseError, startsWith('Invalid JSON: '), reason: s);
         expect(doc.visibleCount, 0, reason: s);
         expect(doc.rows(0, 5), isEmpty, reason: s);
-        expect(() => doc.encode(), throwsStateError, reason: s);
+        expect(doc.encode, throwsStateError, reason: s);
         expect(() => doc.toggle(0), throwsRangeError, reason: s);
       }
     });
@@ -263,7 +263,7 @@ void main() {
         '"k"',
         '\n',
         r'\n',
-        r'é',
+        'é',
         'é',
       ];
       var valid = 0;
@@ -594,7 +594,7 @@ void main() {
     test('strings keep their source escapes', () {
       const src = r'["é\/\"",{"ké":"\ud800"}]';
       final doc = _doc(src);
-      expect(doc.rows(0, 1).single.preview, '"é/\\""');
+      expect(doc.rows(0, 1).single.preview, r'"é/\""');
       // Keys are re-encoded from their decoded text; values verbatim.
       expect(utf8.decode(doc.encode()), r'["é\/\"",{"ké":"\ud800"}]');
     });

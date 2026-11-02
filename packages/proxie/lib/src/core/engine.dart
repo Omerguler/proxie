@@ -2,14 +2,14 @@ import 'dart:async';
 import 'dart:developer' as developer;
 import 'dart:typed_data';
 
-import '../config.dart';
-import '../model/body.dart';
-import '../model/call.dart';
-import '../model/request.dart';
-import '../model/response.dart';
-import 'breakpoint_controller.dart';
-import 'decision.dart';
-import 'rule.dart';
+import 'package:proxie/src/config.dart';
+import 'package:proxie/src/core/breakpoint_controller.dart';
+import 'package:proxie/src/core/decision.dart';
+import 'package:proxie/src/core/rule.dart';
+import 'package:proxie/src/model/body.dart';
+import 'package:proxie/src/model/call.dart';
+import 'package:proxie/src/model/request.dart';
+import 'package:proxie/src/model/response.dart';
 
 /// Receives call snapshots (unmasked; the worker masks before storing).
 abstract interface class CallSink {

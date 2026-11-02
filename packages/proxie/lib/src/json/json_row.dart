@@ -6,12 +6,12 @@ class JsonRow {
   const JsonRow({
     required this.nodeId,
     required this.depth,
-    this.key,
-    this.index,
     required this.kind,
     required this.preview,
     required this.childCount,
     required this.expanded,
+    this.key,
+    this.index,
     this.missingKeys = const [],
   });
 

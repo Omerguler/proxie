@@ -2,12 +2,12 @@ import 'dart:io';
 
 import 'package:path_provider/path_provider.dart';
 
-import '../config.dart';
-import '../storage/memory_store.dart';
-import '../storage/sqlite_store.dart';
-import '../storage/store.dart';
-import 'isolate_worker.dart';
-import 'worker.dart';
+import 'package:proxie/src/config.dart';
+import 'package:proxie/src/storage/memory_store.dart';
+import 'package:proxie/src/storage/sqlite_store.dart';
+import 'package:proxie/src/storage/store.dart';
+import 'package:proxie/src/worker/isolate_worker.dart';
+import 'package:proxie/src/worker/worker.dart';
 
 Future<ProxieWorker> spawnProxieWorker(
   ProxieConfig config, {

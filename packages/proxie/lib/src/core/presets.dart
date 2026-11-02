@@ -1,9 +1,9 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import '../model/body.dart';
-import '../model/response.dart';
-import 'rule.dart';
+import 'package:proxie/src/core/rule.dart';
+import 'package:proxie/src/model/body.dart';
+import 'package:proxie/src/model/response.dart';
 
 /// A one-tap Map Local response template.
 class ResponsePreset {

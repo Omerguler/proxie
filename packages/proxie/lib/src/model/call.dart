@@ -1,5 +1,5 @@
-import 'request.dart';
-import 'response.dart';
+import 'package:proxie/src/model/request.dart';
+import 'package:proxie/src/model/response.dart';
 
 /// Markers describing how a call was handled.
 enum CallTag { breakpoint, mapLocal, edited, replayed, truncated }
@@ -26,9 +26,9 @@ class ProxieCall {
     required this.sessionId,
     required this.adapter,
     required this.request,
+    required this.startedAt,
     this.response,
     this.error,
-    required this.startedAt,
     this.duration,
     Set<CallTag> tags = const {},
   }) : tags = Set.unmodifiable(tags);

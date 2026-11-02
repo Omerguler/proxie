@@ -5,7 +5,7 @@ import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import 'package:proxie/adapter.dart';
 
-import 'dio_bodies.dart';
+import 'package:proxie_dio/src/dio_bodies.dart';
 
 part 'proxie_dio_install.dart';
 

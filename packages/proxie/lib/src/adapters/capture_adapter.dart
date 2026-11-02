@@ -1,6 +1,6 @@
-import '../core/engine.dart';
-import '../model/request.dart';
-import '../model/response.dart';
+import 'package:proxie/src/core/engine.dart';
+import 'package:proxie/src/model/request.dart';
+import 'package:proxie/src/model/response.dart';
 
 /// Connects one HTTP stack to a [ProxieEngine].
 ///

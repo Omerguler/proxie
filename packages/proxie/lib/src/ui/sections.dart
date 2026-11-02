@@ -1,8 +1,8 @@
 import 'package:flutter/widgets.dart';
 
-import '../enablement.dart';
-import '../model/call.dart';
-import '../storage/call_query.dart';
+import 'package:proxie/src/enablement.dart';
+import 'package:proxie/src/model/call.dart';
+import 'package:proxie/src/storage/call_query.dart';
 
 /// An extra tab on the call detail screen.
 class ProxieDetailTab {

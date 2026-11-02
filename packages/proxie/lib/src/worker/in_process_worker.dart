@@ -1,10 +1,10 @@
 import 'dart:developer' as developer;
 
-import '../config.dart';
-import '../model/call.dart';
-import '../storage/store.dart';
-import 'commands.dart';
-import 'worker.dart';
+import 'package:proxie/src/config.dart';
+import 'package:proxie/src/model/call.dart';
+import 'package:proxie/src/storage/store.dart';
+import 'package:proxie/src/worker/commands.dart';
+import 'package:proxie/src/worker/worker.dart';
 
 /// Runs commands on the current isolate, one at a time.
 ///

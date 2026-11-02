@@ -2,7 +2,7 @@ import 'dart:developer' as developer;
 
 import 'package:flutter/material.dart';
 
-import 'navigation_adapter.dart';
+import 'package:proxie/src/navigation/navigation_adapter.dart';
 
 /// Pushes the inspector as a full-screen dialog route onto the navigator of
 /// [navigatorKey].

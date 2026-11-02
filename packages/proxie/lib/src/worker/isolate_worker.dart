@@ -4,11 +4,11 @@ import 'dart:isolate';
 
 import 'package:flutter/foundation.dart' show visibleForTesting;
 
-import '../config.dart';
-import '../model/call.dart';
-import '../storage/store.dart';
-import 'in_process_worker.dart';
-import 'worker.dart';
+import 'package:proxie/src/config.dart';
+import 'package:proxie/src/model/call.dart';
+import 'package:proxie/src/storage/store.dart';
+import 'package:proxie/src/worker/in_process_worker.dart';
+import 'package:proxie/src/worker/worker.dart';
 
 /// A [ProxieWorker] running in its own isolate of the same group, so
 /// commands and results are sent as objects, without serialization.
@@ -37,7 +37,7 @@ class IsolateWorker implements ProxieWorker {
     final port = RawReceivePort();
     final ready = Completer<_Ready>();
     Object? lastError;
-    port.handler = (Object? msg) {
+    port.handler = (msg) {
       if (ready.isCompleted) return;
       switch (msg) {
         case _Ready():
@@ -109,7 +109,7 @@ class IsolateWorker implements ProxieWorker {
   bool get _dead => _exited.isCompleted;
 
   void _listen() {
-    _port.handler = (Object? msg) {
+    _port.handler = (msg) {
       switch (msg) {
         case _Result(:final id, :final value):
           _pending.remove(id)?.complete(value);
@@ -200,7 +200,7 @@ class IsolateWorker implements ProxieWorker {
     // Replies still being sent; dispose waits for them before exiting.
     final replying = <Future<void>>{};
     final commands = RawReceivePort();
-    commands.handler = (Object? msg) {
+    commands.handler = (msg) {
       switch (msg) {
         case _Upsert(:final call):
           inner.upsert(call);

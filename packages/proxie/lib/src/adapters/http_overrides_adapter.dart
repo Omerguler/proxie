@@ -2,14 +2,14 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
-import '../core/engine.dart';
-import '../model/body.dart';
-import '../model/request.dart';
-import '../model/response.dart';
-import 'capture_adapter.dart';
-import 'capture_marker.dart';
-import 'io/proxie_http_client.dart';
-import 'io/http_tokens.dart';
+import 'package:proxie/src/adapters/capture_adapter.dart';
+import 'package:proxie/src/adapters/capture_marker.dart';
+import 'package:proxie/src/adapters/io/http_tokens.dart';
+import 'package:proxie/src/adapters/io/proxie_http_client.dart';
+import 'package:proxie/src/core/engine.dart';
+import 'package:proxie/src/model/body.dart';
+import 'package:proxie/src/model/request.dart';
+import 'package:proxie/src/model/response.dart';
 
 /// Captures every `dart:io` [HttpClient] the app creates, and so every
 /// library built on it, by installing an [HttpOverrides] as

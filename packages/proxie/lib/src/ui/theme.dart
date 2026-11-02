@@ -1,7 +1,7 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
-import '../config.dart';
+import 'package:proxie/src/config.dart';
 
 /// Proxie's semantic colors, attached to [ProxieTheme] as a theme extension.
 @immutable
@@ -197,7 +197,7 @@ abstract final class ProxieTheme {
 /// a [Directionality] (the host's, else left-to-right). Lets `Proxie.wrap`
 /// work under a `WidgetsApp`, a `CupertinoApp` or no app at all.
 class ProxieThemed extends StatelessWidget {
-  const ProxieThemed({super.key, required this.mode, required this.child});
+  const ProxieThemed({required this.mode, required this.child, super.key});
 
   final ProxieThemeMode mode;
   final Widget child;

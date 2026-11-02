@@ -81,7 +81,7 @@ void main() {
     final ctrl = StreamController<List<int>>();
     final bound = req.addStream(ctrl.stream);
     expect(() => req.add([1]), throwsStateError);
-    expect(() => req.close(), throwsStateError);
+    expect(req.close, throwsStateError);
     ctrl.add(utf8.encode('x'));
     await ctrl.close();
     await bound;

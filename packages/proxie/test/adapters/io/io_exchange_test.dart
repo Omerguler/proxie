@@ -84,8 +84,8 @@ void main() {
     expect(res.certificate, isNull);
     expect(res.connectionInfo, isNull);
     expect(res.reasonPhrase, 'Service Unavailable');
-    expect(() => res.redirect(), throwsUnsupportedError);
-    expect(() => res.detachSocket(), throwsUnsupportedError);
+    expect(res.redirect, throwsUnsupportedError);
+    expect(res.detachSocket, throwsUnsupportedError);
     expect(await readText(res), '{"down":true}');
     expect(h.server.hitsFor('/json'), 0);
     await pumpEventQueue();

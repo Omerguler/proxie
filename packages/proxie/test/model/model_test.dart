@@ -192,8 +192,8 @@ void main() {
     expect(() => r.headers['x-a']!.add('9'), throwsUnsupportedError);
 
     final map = r.toMap();
-    ((map['headers'] as Map)['x-a'] as List).add('evil');
-    (map['headers'] as Map)['evil'] = ['1'];
+    ((map['headers']! as Map)['x-a'] as List).add('evil');
+    (map['headers']! as Map)['evil'] = ['1'];
     expect(r.headers, {
       'x-a': ['1'],
     });
@@ -210,11 +210,11 @@ void main() {
     tags.add(CallTag.mapLocal);
     expect(call.tags, {CallTag.edited});
     expect(() => call.tags.add(CallTag.replayed), throwsUnsupportedError);
-    (call.toMap()['tags'] as List).add('x');
+    (call.toMap()['tags']! as List).add('x');
     expect(call.tags, {CallTag.edited});
 
     final resp = ProxieResponse.fromMap(res.toMap());
-    ((resp.toMap()['headers'] as Map)['set-cookie'] as List).clear();
+    ((resp.toMap()['headers']! as Map)['set-cookie'] as List).clear();
     expect(resp.headers['set-cookie'], ['a=b', 'c=d']);
     expect(() => resp.headers['set-cookie']!.add('z'), throwsUnsupportedError);
   });

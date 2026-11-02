@@ -1,6 +1,6 @@
 import 'package:flutter/widgets.dart';
 
-import 'navigation_adapter.dart';
+import 'package:proxie/src/navigation/navigation_adapter.dart';
 
 /// Hands the inspector page to app-provided [push] and [pop] callbacks.
 class CustomNavigationAdapter implements ProxieNavigationAdapter {

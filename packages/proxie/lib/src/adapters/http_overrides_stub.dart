@@ -1,7 +1,7 @@
-import '../core/engine.dart';
-import '../model/request.dart';
-import '../model/response.dart';
-import 'capture_adapter.dart';
+import 'package:proxie/src/adapters/capture_adapter.dart';
+import 'package:proxie/src/core/engine.dart';
+import 'package:proxie/src/model/request.dart';
+import 'package:proxie/src/model/response.dart';
 
 /// Web stand-in for the `dart:io` `HttpOverrides` adapter.
 ///

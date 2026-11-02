@@ -1,7 +1,7 @@
-import '../core/presets.dart';
-import '../core/rule.dart';
-import '../model/call.dart';
-import 'call_query.dart';
+import 'package:proxie/src/core/presets.dart';
+import 'package:proxie/src/core/rule.dart';
+import 'package:proxie/src/model/call.dart';
+import 'package:proxie/src/storage/call_query.dart';
 
 /// A recording session: one app run.
 class SessionInfo {

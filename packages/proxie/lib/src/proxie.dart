@@ -3,23 +3,23 @@ import 'dart:developer' as developer;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
-import 'adapters/capture_adapter.dart';
-import 'adapters/http_client_adapter.dart';
-import 'config.dart';
-import 'core/engine.dart';
-import 'core/rule.dart';
-import 'enablement.dart';
-import 'navigation/custom_navigation.dart';
-import 'navigation/navigation_adapter.dart';
-import 'navigation/navigator_key_navigation.dart';
-import 'navigation/navigator_observer.dart';
-import 'navigation/overlay_navigation.dart';
-import 'runtime.dart';
-import 'ui/inspector_shell.dart';
-import 'ui/proxie_layer.dart';
-import 'worker/commands.dart';
-import 'worker/worker.dart';
-import 'worker/worker_factory.dart';
+import 'package:proxie/src/adapters/capture_adapter.dart';
+import 'package:proxie/src/adapters/http_client_adapter.dart';
+import 'package:proxie/src/config.dart';
+import 'package:proxie/src/core/engine.dart';
+import 'package:proxie/src/core/rule.dart';
+import 'package:proxie/src/enablement.dart';
+import 'package:proxie/src/navigation/custom_navigation.dart';
+import 'package:proxie/src/navigation/navigation_adapter.dart';
+import 'package:proxie/src/navigation/navigator_key_navigation.dart';
+import 'package:proxie/src/navigation/navigator_observer.dart';
+import 'package:proxie/src/navigation/overlay_navigation.dart';
+import 'package:proxie/src/runtime.dart';
+import 'package:proxie/src/ui/inspector_shell.dart';
+import 'package:proxie/src/ui/proxie_layer.dart';
+import 'package:proxie/src/worker/commands.dart';
+import 'package:proxie/src/worker/worker.dart';
+import 'package:proxie/src/worker/worker_factory.dart';
 
 /// Entry point: set Proxie up once, then wrap the app.
 ///

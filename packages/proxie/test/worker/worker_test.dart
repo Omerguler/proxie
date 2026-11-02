@@ -305,7 +305,7 @@ void main() {
     'IsolateWorker',
     (config) => spawnProxieWorker(config, supportDir: _tempDir().path),
   );
-  _contract('InProcessWorker', (config) => web.spawnProxieWorker(config));
+  _contract('InProcessWorker', web.spawnProxieWorker);
 
   test('InProcessWorker dispose closes the store', () async {
     final marker = _join(_tempDir().path, 'closed');
@@ -513,7 +513,7 @@ void main() {
       await first.dispose();
 
       final second = await spawnProxieWorker(
-        const ProxieConfig(retentionAge: Duration(days: 7)),
+        const ProxieConfig(),
         supportDir: dir.path,
       );
       final rows = await second.run(

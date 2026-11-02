@@ -1,6 +1,6 @@
 import 'dart:io';
 
-import 'http_tokens.dart';
+import 'package:proxie/src/adapters/io/http_tokens.dart';
 
 /// An HTTP/1.1 [HttpHeaders] for requests and responses Proxie builds itself
 /// (`dart:io` offers no public constructor).
@@ -343,7 +343,7 @@ class ProxieHttpHeaders implements HttpHeaders {
       contentLength = digits.isEmpty ? 0 : int.parse(digits);
       return;
     }
-    throw HttpException(
+    throw const HttpException(
       'Unexpected type for header named ${HttpHeaders.contentLengthHeader}',
     );
   }

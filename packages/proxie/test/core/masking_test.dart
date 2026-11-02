@@ -204,7 +204,7 @@ void main() {
   });
 
   test('masking a 6 MB malformed body completes quickly', () {
-    final chunk = '{"token":"abc","x":{"y":[1,2,3]},"password":{"p":"q"},';
+    const chunk = '{"token":"abc","x":{"y":[1,2,3]},"password":{"p":"q"},';
     final sb = StringBuffer();
     while (sb.length < 6 * 1024 * 1024) {
       sb.write(chunk);

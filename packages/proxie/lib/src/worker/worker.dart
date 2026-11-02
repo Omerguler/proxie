@@ -1,7 +1,7 @@
-import '../config.dart';
-import '../core/engine.dart';
-import '../model/call.dart';
-import '../storage/store.dart';
+import 'package:proxie/src/config.dart';
+import 'package:proxie/src/core/engine.dart';
+import 'package:proxie/src/model/call.dart';
+import 'package:proxie/src/storage/store.dart';
 
 /// What a [WorkerCommand] runs against inside the worker.
 class WorkerContext {

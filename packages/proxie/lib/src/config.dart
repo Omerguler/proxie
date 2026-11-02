@@ -1,4 +1,4 @@
-import 'core/masking.dart';
+import 'package:proxie/src/core/masking.dart';
 
 /// Which of Proxie's own themes the inspector uses. Proxie never follows the
 /// host app's theme; [system] follows the platform brightness.

@@ -3,9 +3,9 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
-import '../core/breakpoint_controller.dart';
-import '../model/call.dart';
-import 'theme.dart';
+import 'package:proxie/src/core/breakpoint_controller.dart';
+import 'package:proxie/src/model/call.dart';
+import 'package:proxie/src/ui/theme.dart';
 
 /// Counts the distinct calls seen on a call stream.
 ///
@@ -45,10 +45,10 @@ class SessionCallCounter extends ValueNotifier<int> {
 /// takes pointer events.
 class ProxieBubble extends StatefulWidget {
   const ProxieBubble({
-    super.key,
     required this.callCount,
     required this.breakpoints,
     required this.onTap,
+    super.key,
   });
 
   final ValueListenable<int> callCount;

@@ -1,6 +1,6 @@
-import '../model/request.dart';
-import '../model/response.dart';
-import 'url_matcher.dart';
+import 'package:proxie/src/core/url_matcher.dart';
+import 'package:proxie/src/model/request.dart';
+import 'package:proxie/src/model/response.dart';
 
 enum RuleKind { breakpoint, mapLocal }
 
@@ -50,9 +50,9 @@ class ProxieRule {
   const ProxieRule({
     required this.id,
     required this.name,
-    this.enabled = true,
     required this.kind,
     required this.matcher,
+    this.enabled = true,
     this.method,
     this.phase = BreakpointPhase.both,
     this.mapLocal,

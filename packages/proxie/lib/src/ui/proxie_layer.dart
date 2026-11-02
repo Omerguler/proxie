@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 
-import '../navigation/overlay_navigation.dart';
-import '../runtime.dart';
-import 'bubble.dart';
-import 'theme.dart';
+import 'package:proxie/src/navigation/overlay_navigation.dart';
+import 'package:proxie/src/runtime.dart';
+import 'package:proxie/src/ui/bubble.dart';
+import 'package:proxie/src/ui/theme.dart';
 
 /// What `Proxie.wrap` returns: the app plus [ProxieLayer] once Proxie is
 /// active.
@@ -13,7 +13,7 @@ import 'theme.dart';
 /// sends presses to the framework only when told so), hides the app from
 /// semantics, and afterwards restores the app's own back state.
 class ProxieHost extends StatefulWidget {
-  const ProxieHost({super.key, required this.child});
+  const ProxieHost({required this.child, super.key});
 
   final Widget child;
 
@@ -106,7 +106,7 @@ class _ProxieHostState extends State<ProxieHost> {
 
 /// The bubble, and the inspector in overlay mode, in Proxie's own theme.
 class ProxieLayer extends StatelessWidget {
-  const ProxieLayer({super.key, required this.runtime});
+  const ProxieLayer({required this.runtime, super.key});
 
   final ProxieRuntime runtime;
 

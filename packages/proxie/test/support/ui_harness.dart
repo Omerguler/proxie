@@ -57,15 +57,15 @@ Widget hostApp({
   home: home ?? const Scaffold(body: Center(child: Text('host home'))),
 );
 
-final bubbleFinder = find.byType(ProxieBubble);
+final Finder bubbleFinder = find.byType(ProxieBubble);
 
 /// The button itself; the bubble widget fills the screen.
-final bubbleButton = find.descendant(
+final Finder bubbleButton = find.descendant(
   of: bubbleFinder,
   matching: find.byType(ScaleTransition),
 );
 
-final shellFinder = find.byType(InspectorShell);
+final Finder shellFinder = find.byType(InspectorShell);
 
 ProxieInspectorController controllerIn(WidgetTester tester) =>
     ProxieInspectorController.of(tester.element(find.text('No requests yet')));

@@ -1,4 +1,4 @@
-import 'body.dart';
+import 'package:proxie/src/model/body.dart';
 
 /// Lowercases header names and returns an unmodifiable deep copy.
 Map<String, List<String>> normalizeHeaders(Map<dynamic, dynamic> headers) =>

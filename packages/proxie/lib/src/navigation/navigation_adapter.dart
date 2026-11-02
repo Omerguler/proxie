@@ -109,9 +109,9 @@ final class AdapterNavigation extends ProxieNavigation {
 /// host removed the page.
 class DismissWatcher extends StatefulWidget {
   const DismissWatcher({
-    super.key,
     required this.onDispose,
     required this.child,
+    super.key,
   });
 
   final VoidCallback onDispose;

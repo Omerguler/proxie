@@ -1,8 +1,8 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'json_nodes.dart';
-import 'json_row.dart';
+import 'package:proxie/src/json/json_nodes.dart';
+import 'package:proxie/src/json/json_row.dart';
 
 /// Parses RFC 8259 JSON from UTF-8 [bytes] straight into [JsonNodes],
 /// without recursion. Scalars are not converted: nodes point at their
@@ -14,18 +14,28 @@ JsonNodes parseJson(Uint8List bytes) => _Parser(bytes).parse();
 
 // Byte values.
 const _tab = 0x09, _lf = 0x0A, _cr = 0x0D, _space = 0x20;
-const _quote = 0x22, _comma = 0x2C, _minus = 0x2D, _plus = 0x2B;
-const _dot = 0x2E, _zero = 0x30, _nine = 0x39, _colon = 0x3A;
-const _openBracket = 0x5B, _backslash = 0x5C, _closeBracket = 0x5D;
-const _openBrace = 0x7B, _closeBrace = 0x7D;
-const _lowerE = 0x65, _upperE = 0x45;
+const _quote = 0x22;
+const _comma = 0x2C;
+const _minus = 0x2D;
+const _plus = 0x2B;
+const _dot = 0x2E;
+const _zero = 0x30;
+const _nine = 0x39;
+const _colon = 0x3A;
+const _openBracket = 0x5B;
+const _backslash = 0x5C;
+const _closeBracket = 0x5D;
+const _openBrace = 0x7B;
+const _closeBrace = 0x7D;
+const _lowerE = 0x65;
+const _upperE = 0x45;
 
 const _objectFlags = 0; // JsonKind.object.index
-final _arrayFlags = JsonKind.array.index;
-final _stringFlags = JsonKind.string.index;
-final _numberFlags = JsonKind.number.index;
-final _booleanFlags = JsonKind.boolean.index;
-final _nullFlags = JsonKind.nullValue.index;
+final int _arrayFlags = JsonKind.array.index;
+final int _stringFlags = JsonKind.string.index;
+final int _numberFlags = JsonKind.number.index;
+final int _booleanFlags = JsonKind.boolean.index;
+final int _nullFlags = JsonKind.nullValue.index;
 
 class _Parser {
   _Parser(this.b) : nodes = JsonNodes(b.length ~/ 64 + 16);
@@ -265,7 +275,7 @@ class _Parser {
             pos++;
             for (var i = 0; i < 4; i++) {
               if (pos >= b.length) _fail('Unterminated string', start);
-              if (_hex(b[pos]) < 0) _fail('Invalid \\u escape');
+              if (_hex(b[pos]) < 0) _fail(r'Invalid \u escape');
               pos++;
             }
           default:
@@ -287,7 +297,8 @@ class _Parser {
   void _utf8() {
     final c = b[pos];
     int n;
-    var lo = 0x80, hi = 0xBF;
+    var lo = 0x80;
+    var hi = 0xBF;
     if (c >= 0xC2 && c <= 0xDF) {
       n = 1;
     } else if (c >= 0xE0 && c <= 0xEF) {

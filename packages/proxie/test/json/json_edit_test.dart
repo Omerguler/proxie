@@ -727,7 +727,7 @@ void main() {
 Object? _at(Object? tree, List<Object> path) {
   var v = tree;
   for (final p in path) {
-    v = v is Map ? v[p] : (v as List)[p as int];
+    v = v is Map ? v[p] : (v! as List)[p as int];
   }
   return v;
 }
@@ -739,7 +739,7 @@ Object? _put(Object? tree, List<Object> path, Object? v) {
   if (parent is Map) {
     parent[path.last] = v;
   } else {
-    (parent as List)[path.last as int] = v;
+    (parent! as List)[path.last as int] = v;
   }
   return tree;
 }
@@ -770,7 +770,7 @@ Object? Function() _mirror(JsonDocument doc, Object? tree, JsonEdit edit) {
       final p = path(nodeId);
       return () {
         final parentPath = p.sublist(0, p.length - 1);
-        final m = _at(t, parentPath) as Map;
+        final m = _at(t, parentPath)! as Map;
         return _put(t, parentPath, {
           for (final e in m.entries)
             (e.key == p.last ? newKey : e.key): e.value,
@@ -783,27 +783,27 @@ Object? Function() _mirror(JsonDocument doc, Object? tree, JsonEdit edit) {
         if (parent is Map) {
           parent.remove(p.last);
         } else {
-          (parent as List).removeAt(p.last as int);
+          (parent! as List).removeAt(p.last as int);
         }
         return t;
       };
     case AddKey(:final objectNodeId, :final key, :final value):
       final p = path(objectNodeId);
       return () {
-        (_at(t, p) as Map)[key] = _copyOf(value);
+        (_at(t, p)! as Map)[key] = _copyOf(value);
         return t;
       };
     case AddItem(:final arrayNodeId, :final value, :final at):
       final p = path(arrayNodeId);
       return () {
-        final l = _at(t, p) as List;
+        final l = _at(t, p)! as List;
         l.insert(at ?? l.length, _copyOf(value));
         return t;
       };
     case DuplicateItem(:final itemNodeId):
       final p = path(itemNodeId);
       return () {
-        final l = _at(t, p.sublist(0, p.length - 1)) as List;
+        final l = _at(t, p.sublist(0, p.length - 1))! as List;
         final i = p.last as int;
         l.insert(i + 1, _copyOf(l[i]));
         return t;
@@ -811,16 +811,16 @@ Object? Function() _mirror(JsonDocument doc, Object? tree, JsonEdit edit) {
     case AddMissingKey(:final itemNodeId, :final key):
       final p = path(itemNodeId);
       return () {
-        final l = _at(t, p.sublist(0, p.length - 1)) as List;
+        final l = _at(t, p.sublist(0, p.length - 1))! as List;
         final source = l.firstWhere((o) => o is Map && o.containsKey(key));
         final v = (source as Map)[key];
-        (_at(t, p) as Map)[key] = v is Map || v is List ? _defaultLike(v) : v;
+        (_at(t, p)! as Map)[key] = v is Map || v is List ? _defaultLike(v) : v;
         return t;
       };
     case AddKeyToAll(:final arrayNodeId, :final key, :final value):
       final p = path(arrayNodeId);
       return () {
-        for (final o in _at(t, p) as List) {
+        for (final o in _at(t, p)! as List) {
           if (o is Map && !o.containsKey(key)) o[key] = _copyOf(value);
         }
         return t;
@@ -828,7 +828,7 @@ Object? Function() _mirror(JsonDocument doc, Object? tree, JsonEdit edit) {
     case RemoveKeyFromAll(:final arrayNodeId, :final key):
       final p = path(arrayNodeId);
       return () {
-        for (final o in _at(t, p) as List) {
+        for (final o in _at(t, p)! as List) {
           if (o is Map) o.remove(key);
         }
         return t;
@@ -836,7 +836,7 @@ Object? Function() _mirror(JsonDocument doc, Object? tree, JsonEdit edit) {
     case NewItemFromSchema(:final arrayNodeId):
       final p = path(arrayNodeId);
       return () {
-        final l = _at(t, p) as List;
+        final l = _at(t, p)! as List;
         final item = <String, Object?>{};
         for (final o in l) {
           if (o is! Map) continue;

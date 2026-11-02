@@ -187,7 +187,7 @@ void main() {
     expect(m['set-cookie'], ['a=1', 'b=2']);
     expect(m.contentLength, 3);
     expect(() => m.add('x', '1'), throwsA(isA<HttpException>()));
-    expect(() => m.clear(), throwsA(isA<HttpException>()));
+    expect(m.clear, throwsA(isA<HttpException>()));
   });
 
   test('freeze makes headers immutable', () {

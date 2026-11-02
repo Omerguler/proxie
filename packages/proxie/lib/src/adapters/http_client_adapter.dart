@@ -2,17 +2,16 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
-
-import '../core/decision.dart';
-import '../core/engine.dart';
-import '../core/rule.dart';
-import '../model/body.dart';
-import '../model/call.dart';
-import '../model/request.dart';
-import '../model/response.dart';
-import 'body_capture.dart';
-import 'capture_adapter.dart';
-import 'capture_marker.dart';
+import 'package:proxie/src/adapters/body_capture.dart';
+import 'package:proxie/src/adapters/capture_adapter.dart';
+import 'package:proxie/src/adapters/capture_marker.dart';
+import 'package:proxie/src/core/decision.dart';
+import 'package:proxie/src/core/engine.dart';
+import 'package:proxie/src/core/rule.dart';
+import 'package:proxie/src/model/body.dart';
+import 'package:proxie/src/model/call.dart';
+import 'package:proxie/src/model/request.dart';
+import 'package:proxie/src/model/response.dart';
 
 const _simulatedNoConnection = 'Connection failed (simulated by Proxie)';
 const _simulatedTimeout = 'Request timed out (simulated by Proxie)';

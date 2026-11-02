@@ -3,10 +3,10 @@ import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
-import 'json_nodes.dart';
-import 'json_parser.dart';
-import 'json_row.dart';
-import 'json_schema.dart';
+import 'package:proxie/src/json/json_nodes.dart';
+import 'package:proxie/src/json/json_parser.dart';
+import 'package:proxie/src/json/json_row.dart';
+import 'package:proxie/src/json/json_schema.dart';
 
 part 'json_edit.dart';
 part 'json_search.dart';
@@ -394,12 +394,12 @@ class JsonDocument {
             cursor.add(_n.firstChild[id]);
           }
         case JsonKind.string when _edited(id):
-          final s = _quotedUtf8(_values[id] as String);
+          final s = _quotedUtf8(_values[id]! as String);
           out.addRange(s, 0, s.length);
         case JsonKind.string:
           out.addRange(source, start, jsonStringEnd(source, start));
         case JsonKind.number when _edited(id):
-          out.addAscii(_values[id] as String);
+          out.addAscii(_values[id]! as String);
         case JsonKind.number:
           out.addRange(source, start, jsonNumberEnd(source, start));
         case JsonKind.boolean:
@@ -449,7 +449,7 @@ class JsonDocument {
       case JsonKind.string:
         return _quotedPreview(
           _edited(id)
-              ? _values[id] as String
+              ? _values[id]! as String
               : decodeJsonString(
                   _source!,
                   start,
@@ -459,7 +459,7 @@ class JsonDocument {
         );
       case JsonKind.number:
         if (_edited(id)) {
-          final lexeme = _values[id] as String;
+          final lexeme = _values[id]! as String;
           return lexeme.length <= _previewLimit
               ? lexeme
               : '${lexeme.substring(0, _previewLimit - 1)}…';
@@ -489,7 +489,7 @@ class JsonDocument {
   bool _edited(int id) => _n.flags[id] & editedFlag != 0;
 
   bool _boolean(int id) =>
-      _edited(id) ? _values[id] as bool : _source![_n.valueStart[id]] == 0x74;
+      _edited(id) ? _values[id]! as bool : _source![_n.valueStart[id]] == 0x74;
 }
 
 class _Children {
