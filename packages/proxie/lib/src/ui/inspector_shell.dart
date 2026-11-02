@@ -62,8 +62,10 @@ class _InspectorScope extends InheritedNotifier<ProxieInspectorController> {
 }
 
 /// The full-screen inspector page: [InspectorShell] in Proxie's own theme
-/// (see [ProxieThemed]),
-/// with its own [ScaffoldMessenger] so its messages never reach the host.
+/// (see [ProxieThemed]), with its own [ScaffoldMessenger] so its messages
+/// never reach the host, and its own [Navigator] for the pages opened from
+/// it (rules, editors; see [navigatorOf]), so they never land on the
+/// host's navigator. Back pops those pages first.
 class ProxieInspector extends StatelessWidget {
   /// Creates the inspector page driven by [controller].
   const ProxieInspector({
@@ -73,6 +75,7 @@ class ProxieInspector extends StatelessWidget {
     this.themeMode = ProxieThemeMode.dark,
     this.listBuilder,
     this.detailBuilder,
+    this.rulesBuilder,
   });
 
   /// Holds whether the inspector is open and which call it shows.
@@ -90,15 +93,82 @@ class ProxieInspector extends StatelessWidget {
   /// Builds the detail of a call; defaults to a placeholder.
   final Widget Function(BuildContext context, String callId)? detailBuilder;
 
+  /// Builds the rules screen the app bar's Rules button opens; the button
+  /// is hidden when null.
+  final WidgetBuilder? rulesBuilder;
+
+  /// The navigator of the [ProxieInspector] around [context], or the
+  /// nearest one when there is none: pages opened from the inspector go
+  /// there, above the list/detail layout, so a layout change keeps them.
+  static NavigatorState navigatorOf(BuildContext context) =>
+      context
+          .getInheritedWidgetOfExactType<_InspectorNavigatorScope>()
+          ?.navigatorKey
+          .currentState ??
+      Navigator.of(context);
+
   @override
   Widget build(BuildContext context) => ProxieThemed(
     mode: themeMode,
     child: ScaffoldMessenger(
-      child: InspectorShell(
-        controller: controller,
-        splitWidth: splitWidth,
-        listBuilder: listBuilder,
-        detailBuilder: detailBuilder,
+      child: _InspectorNavigator(
+        child: InspectorShell(
+          controller: controller,
+          splitWidth: splitWidth,
+          listBuilder: listBuilder,
+          detailBuilder: detailBuilder,
+          rulesBuilder: rulesBuilder,
+        ),
+      ),
+    ),
+  );
+}
+
+class _InspectorNavigatorScope extends InheritedWidget {
+  const _InspectorNavigatorScope({
+    required this.navigatorKey,
+    required super.child,
+  });
+
+  final GlobalKey<NavigatorState> navigatorKey;
+
+  @override
+  bool updateShouldNotify(_InspectorNavigatorScope oldWidget) =>
+      navigatorKey != oldWidget.navigatorKey;
+}
+
+class _InspectorNavigator extends StatefulWidget {
+  const _InspectorNavigator({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_InspectorNavigator> createState() => _InspectorNavigatorState();
+}
+
+class _InspectorNavigatorState extends State<_InspectorNavigator> {
+  final _navigatorKey = GlobalKey<NavigatorState>(
+    debugLabel: 'proxie-inspector',
+  );
+
+  @override
+  Widget build(BuildContext context) => _InspectorNavigatorScope(
+    navigatorKey: _navigatorKey,
+    // Blocks the enclosing route's pop while a page is open here, and pops
+    // that page instead.
+    child: NavigatorPopHandler(
+      onPopWithResult: (_) => _navigatorKey.currentState?.maybePop(),
+      child: HeroControllerScope.none(
+        child: Navigator(
+          key: _navigatorKey,
+          onDidRemovePage: (_) {},
+          pages: [
+            MaterialPage<void>(
+              key: const ValueKey('proxie-inspector'),
+              child: widget.child,
+            ),
+          ],
+        ),
       ),
     ),
   );
@@ -119,6 +189,7 @@ class InspectorShell extends StatelessWidget {
     this.splitWidth = 700,
     this.listBuilder,
     this.detailBuilder,
+    this.rulesBuilder,
   });
 
   /// Holds the selection, so it survives layout changes.
@@ -132,6 +203,10 @@ class InspectorShell extends StatelessWidget {
 
   /// Builds the detail of a call; defaults to a placeholder.
   final Widget Function(BuildContext context, String callId)? detailBuilder;
+
+  /// Builds the rules screen the app bar's Rules button opens (see
+  /// [ProxieInspector.navigatorOf]); the button is hidden when null.
+  final WidgetBuilder? rulesBuilder;
 
   static const double _minListWidth = 320;
 
@@ -151,6 +226,7 @@ class InspectorShell extends StatelessWidget {
               controller: controller,
               list: _list,
               detail: _detail,
+              rulesBuilder: rulesBuilder,
             ),
     ),
   );
@@ -158,7 +234,7 @@ class InspectorShell extends StatelessWidget {
   Widget _split(double width) {
     final listWidth = (width * 0.4).clamp(_minListWidth, width);
     return Scaffold(
-      appBar: _inspectorBar(controller),
+      appBar: _inspectorBar(controller, rulesBuilder),
       body: Row(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -187,29 +263,43 @@ class InspectorShell extends StatelessWidget {
   }
 }
 
-PreferredSizeWidget _inspectorBar(ProxieInspectorController controller) =>
-    AppBar(
-      title: const Text('Proxie'),
-      automaticallyImplyLeading: false,
-      actions: [
-        IconButton(
-          tooltip: 'Close',
-          icon: const Icon(Icons.close),
-          onPressed: controller.close,
+PreferredSizeWidget _inspectorBar(
+  ProxieInspectorController controller,
+  WidgetBuilder? rulesBuilder,
+) => AppBar(
+  title: const Text('Proxie'),
+  automaticallyImplyLeading: false,
+  actions: [
+    if (rulesBuilder != null)
+      Builder(
+        builder: (context) => IconButton(
+          tooltip: 'Rules',
+          icon: const Icon(Icons.rule),
+          onPressed: () => ProxieInspector.navigatorOf(
+            context,
+          ).push(MaterialPageRoute<void>(builder: rulesBuilder)),
         ),
-      ],
-    );
+      ),
+    IconButton(
+      tooltip: 'Close',
+      icon: const Icon(Icons.close),
+      onPressed: controller.close,
+    ),
+  ],
+);
 
 class _StackedLayout extends StatefulWidget {
   const _StackedLayout({
     required this.controller,
     required this.list,
     required this.detail,
+    required this.rulesBuilder,
   });
 
   final ProxieInspectorController controller;
   final WidgetBuilder list;
   final Widget Function(BuildContext context, String callId) detail;
+  final WidgetBuilder? rulesBuilder;
 
   @override
   State<_StackedLayout> createState() => _StackedLayoutState();
@@ -246,7 +336,7 @@ class _StackedLayoutState extends State<_StackedLayout> {
               MaterialPage<void>(
                 key: _listKey,
                 child: Scaffold(
-                  appBar: _inspectorBar(widget.controller),
+                  appBar: _inspectorBar(widget.controller, widget.rulesBuilder),
                   body: Builder(builder: widget.list),
                 ),
               ),

@@ -11,6 +11,9 @@ import 'package:proxie/src/ui/bubble.dart';
 import 'package:proxie/src/ui/detail/call_detail.dart';
 import 'package:proxie/src/ui/inspector_shell.dart';
 import 'package:proxie/src/ui/list/call_list.dart';
+import 'package:proxie/src/ui/rules/rule_editor.dart';
+import 'package:proxie/src/ui/rules/rules_controller.dart';
+import 'package:proxie/src/ui/rules/rules_screen.dart';
 import 'package:proxie/src/worker/worker.dart';
 
 /// The runtime of the active Proxie, or null while inactive. Set by the
@@ -42,7 +45,12 @@ class ProxieRuntime {
     required this.controller,
     required this.navigation,
     required this.config,
-  }) : callCount = SessionCallCounter(engine.calls) {
+  }) : callCount = SessionCallCounter(engine.calls),
+       rules = RulesController(
+         worker: worker,
+         engine: engine,
+         rawEditableLimit: config.rawEditableLimit,
+       ) {
     controller.addListener(_sync);
   }
 
@@ -66,6 +74,9 @@ class ProxieRuntime {
 
   /// The settings Proxie was started with.
   final ProxieConfig config;
+
+  /// Changes and stores [engine]'s rules for the rules screen and editors.
+  final RulesController rules;
   bool _disposed = false;
 
   /// Whether the inspector is drawn in Proxie's own overlay layer.
@@ -79,12 +90,16 @@ class ProxieRuntime {
       if (navigation.isShowing) return;
       try {
         navigation.show(
-          ProxieInspector(
-            controller: controller,
-            splitWidth: config.splitWidth,
-            themeMode: config.themeMode,
-            listBuilder: _buildList,
-            detailBuilder: _buildDetail,
+          RulesScope(
+            controller: rules,
+            child: ProxieInspector(
+              controller: controller,
+              splitWidth: config.splitWidth,
+              themeMode: config.themeMode,
+              listBuilder: _buildList,
+              detailBuilder: _buildDetail,
+              rulesBuilder: (_) => const RulesScreen(),
+            ),
           ),
           onDismissed: _onDismissed,
         );
@@ -118,6 +133,7 @@ class ProxieRuntime {
     calls: engine.calls,
     callId: callId,
     renderCap: config.renderCap,
+    actions: ruleDetailActions(context),
   );
 
   void _onDismissed() {
@@ -157,6 +173,7 @@ class ProxieRuntime {
       ..dispose();
     adapters.forEach(detachAdapter);
     callCount.dispose();
+    rules.dispose();
     engine.dispose();
     await worker.dispose();
   }

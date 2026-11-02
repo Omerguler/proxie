@@ -447,7 +447,11 @@ void main() {
       await tester.pumpAndSettle();
       expect(shellFinder, findsOneWidget);
       expect(key.currentState!.canPop(), isTrue);
-      final route = ModalRoute.of(tester.element(shellFinder))!;
+      // The inspector page is the host route; pages opened from it go on
+      // the inspector's own navigator inside it.
+      final route = ModalRoute.of(
+        tester.element(find.byType(ProxieInspector)),
+      )!;
       expect(route.navigator, same(key.currentState));
       expect(route, isA<MaterialPageRoute<void>>());
       expect((route as MaterialPageRoute<void>).fullscreenDialog, isTrue);

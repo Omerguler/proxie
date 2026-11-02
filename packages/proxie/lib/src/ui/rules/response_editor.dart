@@ -1,0 +1,492 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:developer' as developer;
+
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+
+import 'package:proxie/src/config.dart' show defaultRawEditableLimit;
+import 'package:proxie/src/core/body_classifier.dart';
+import 'package:proxie/src/model/body.dart';
+import 'package:proxie/src/model/response.dart';
+import 'package:proxie/src/ui/common.dart';
+import 'package:proxie/src/ui/json/json_tree_controller.dart';
+import 'package:proxie/src/ui/json/json_tree_view.dart';
+import 'package:proxie/src/ui/json/raw_text_view.dart';
+import 'package:proxie/src/worker/worker.dart';
+
+/// The scope (see `OpenJson.scope`) rule editors open captured bodies in,
+/// so their edits never reach the read-only detail.
+const String ruleEditorScope = 'rule-editor';
+
+/// One editable header line.
+class HeaderRow {
+  /// Creates a row holding [name] and [value].
+  HeaderRow(String name, String value)
+    : name = TextEditingController(text: name),
+      value = TextEditingController(text: value);
+
+  /// The header name.
+  final TextEditingController name;
+
+  /// The header value.
+  final TextEditingController value;
+
+  void _dispose() {
+    name.dispose();
+    value.dispose();
+  }
+}
+
+/// The response a [ResponseEditor] edits: status, headers and body.
+///
+/// A body captured from call [load]'s `callId` that is JSON opens as an
+/// editable tree in [ruleEditorScope]; any other body, or the tree's after
+/// a switch, is edited as raw text. [build] gives the response as edited;
+/// an untouched body comes back byte for byte.
+class ResponseDraft extends ChangeNotifier {
+  /// Creates an empty 200 response; [worker] holds the body's JSON
+  /// document.
+  ResponseDraft(this.worker);
+
+  /// Opens JSON documents and splits text.
+  final ProxieWorker worker;
+
+  /// The status code, as typed.
+  final TextEditingController status = TextEditingController(text: '200');
+
+  final List<HeaderRow> _headers = [];
+  int? _loadedStatus;
+  String? _reason;
+  Uint8List _bytes = Uint8List(0);
+  String? _contentType;
+  bool _json = false;
+  bool _truncated = false;
+  int _keptBytes = 0;
+  int _totalBytes = 0;
+  String? _rawText;
+  JsonTreeController? _tree;
+  bool _showRaw = true;
+  int _generation = 0;
+  bool _disposed = false;
+
+  /// The header lines, in order.
+  List<HeaderRow> get headers => List.unmodifiable(_headers);
+
+  /// The body the raw view starts from.
+  Uint8List get bytes => _bytes;
+
+  /// Whether the body parses as JSON (and is indented in the raw view).
+  bool get isJson => _json;
+
+  /// Whether the body is the captured part of a body cut at capture, not
+  /// yet edited or replaced; [validate] refuses it.
+  bool get truncated => _truncated;
+
+  /// Bytes kept of a [truncated] body.
+  int get keptBytes => _keptBytes;
+
+  /// Length of the whole [truncated] body as it was received.
+  int get totalBytes => _totalBytes;
+
+  /// The JSON tree of the captured body, or null when it is edited as text
+  /// only.
+  JsonTreeController? get tree => _tree;
+
+  /// Whether the raw text view is shown rather than the tree.
+  bool get showsRaw => _showRaw || _tree == null;
+
+  /// Whether the raw text was edited; the tree can no longer be shown.
+  bool get rawEdited => _rawText != null;
+
+  /// Changes whenever the body is replaced, so the raw view starts again.
+  int get generation => _generation;
+
+  /// The content type a saved body is classified with.
+  String? get contentType {
+    for (final h in _headers) {
+      if (h.name.text.trim().toLowerCase() == 'content-type') {
+        return h.value.text.trim();
+      }
+    }
+    return _contentType;
+  }
+
+  /// Starts over from [response]. With [callId], a JSON body opens as a
+  /// tree of that call's stored response.
+  void load(ProxieResponse response, {String? callId}) {
+    status.text = '${response.statusCode}';
+    _loadedStatus = response.statusCode;
+    _reason = response.reasonPhrase;
+    for (final h in _headers) {
+      h._dispose();
+    }
+    _headers
+      ..clear()
+      ..addAll([
+        for (final e in response.headers.entries)
+          for (final v in e.value) HeaderRow(e.key, v),
+      ]);
+    final body = response.body;
+    _bytes = body.bytes;
+    _contentType = body.contentType;
+    _json = body.kind == BodyKind.json;
+    _truncated = body.truncated;
+    _keptBytes = body.bytes.length;
+    _totalBytes = body.originalLength;
+    _rawText = null;
+    _tree?.dispose();
+    _tree = null;
+    if (callId != null && _json && !body.truncated) {
+      final tree = JsonTreeController(
+        worker,
+        callId,
+        'response',
+        editable: true,
+        scope: ruleEditorScope,
+      );
+      _tree = tree;
+      // A document left edited by an editor that closed without saving is
+      // still open in this scope; start from the captured body.
+      void fresh() {
+        if (tree.status == JsonTreeStatus.loading) return;
+        tree.removeListener(fresh);
+        if (tree.edited) unawaited(tree.revert());
+      }
+
+      tree.addListener(fresh);
+    }
+    _showRaw = _tree == null;
+    _generation++;
+    _notify();
+  }
+
+  /// Adds an empty header line.
+  void addHeader() {
+    _headers.add(HeaderRow('', ''));
+    _notify();
+  }
+
+  /// Removes header line [row].
+  void removeHeader(HeaderRow row) {
+    if (!_headers.remove(row)) return;
+    // The row's fields are still in this frame's tree.
+    WidgetsBinding.instance.addPostFrameCallback((_) => row._dispose());
+    _notify();
+  }
+
+  /// Shows the raw text, with the tree's edits when there are any.
+  Future<void> showRaw() async {
+    final tree = _tree;
+    if (tree != null && tree.edited && tree.status == JsonTreeStatus.ready) {
+      try {
+        _bytes = await tree.encode(pretty: true);
+      } on Object catch (e, st) {
+        // The tree stays shown; its edits are still saved from it.
+        developer.log(
+          'Proxie could not encode the edited body',
+          name: 'proxie',
+          error: e,
+          stackTrace: st,
+        );
+        return;
+      }
+      if (_disposed) return;
+    }
+    _showRaw = true;
+    _notify();
+  }
+
+  /// Shows the tree again, unless the raw text was edited.
+  void showTree() {
+    if (_tree == null || _rawText != null) return;
+    _showRaw = false;
+    _notify();
+  }
+
+  /// Takes the raw view's whole [text] as the body.
+  void rawChanged(String text) {
+    final first = _rawText == null || _truncated;
+    _rawText = text;
+    _truncated = false;
+    if (first) _notify();
+  }
+
+  /// Why the response cannot be saved yet, or null.
+  String? validate() {
+    final code = int.tryParse(status.text.trim());
+    if (code == null || code < 100 || code > 599) {
+      return 'Status must be a number from 100 to 599';
+    }
+    if (_truncated) {
+      return 'The captured body was truncated; edit or replace it first';
+    }
+    return null;
+  }
+
+  /// The response as edited; check [validate] first. Throws when the
+  /// edited tree cannot be encoded.
+  Future<ProxieResponse> build() async {
+    final code = int.parse(status.text.trim());
+    final headers = <String, List<String>>{};
+    for (final h in _headers) {
+      final name = h.name.text.trim();
+      if (name.isEmpty) continue;
+      (headers[name.toLowerCase()] ??= []).add(h.value.text);
+    }
+    final type = contentType;
+    final raw = _rawText;
+    final tree = _tree;
+    final Uint8List bytes;
+    if (raw != null) {
+      bytes = isLatin1Text(type) && raw.codeUnits.every((u) => u <= 0xFF)
+          ? Uint8List.fromList(latin1.encode(raw))
+          : Uint8List.fromList(utf8.encode(raw));
+    } else if (tree != null && tree.edited) {
+      bytes = await tree.encode();
+    } else {
+      bytes = _bytes;
+    }
+    return ProxieResponse(
+      statusCode: code,
+      reasonPhrase: code == _loadedStatus ? _reason : null,
+      headers: headers,
+      body: bytes.isEmpty
+          ? ProxieBody.empty()
+          : ProxieBody.from(bytes, type, cap: bytes.length),
+    );
+  }
+
+  void _notify() {
+    if (!_disposed) notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    status.dispose();
+    for (final h in _headers) {
+      h._dispose();
+    }
+    _tree?.dispose();
+    super.dispose();
+  }
+}
+
+/// Edits [draft]'s status, headers (add, edit, delete) and body, as a JSON
+/// tree or raw text.
+class ResponseEditor extends StatelessWidget {
+  /// Creates the editor of [draft].
+  const ResponseEditor({
+    required this.draft,
+    required this.worker,
+    super.key,
+    this.rawEditableLimit = defaultRawEditableLimit,
+    this.onPresets,
+    this.onSaveAsPreset,
+  });
+
+  /// The response edited.
+  final ResponseDraft draft;
+
+  /// Splits the body into lines.
+  final ProxieWorker worker;
+
+  /// Bodies of at least this many bytes open read-only until "Edit
+  /// anyway".
+  final int rawEditableLimit;
+
+  /// Opens the preset picker; hidden when null.
+  final VoidCallback? onPresets;
+
+  /// Saves the response as a custom preset; hidden when null.
+  final VoidCallback? onSaveAsPreset;
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: draft,
+    builder: (context, _) {
+      final theme = Theme.of(context);
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 8, 0),
+            child: Wrap(
+              spacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                SizedBox(
+                  width: 96,
+                  child: TextField(
+                    key: const ValueKey('response-status'),
+                    controller: draft.status,
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    decoration: const InputDecoration(labelText: 'Status'),
+                  ),
+                ),
+                if (onPresets != null)
+                  TextButton.icon(
+                    onPressed: onPresets,
+                    icon: const Icon(Icons.library_books_outlined),
+                    label: const Text('Presets'),
+                  ),
+                if (onSaveAsPreset != null)
+                  TextButton.icon(
+                    onPressed: onSaveAsPreset,
+                    icon: const Icon(Icons.bookmark_add_outlined),
+                    label: const Text('Save as preset'),
+                  ),
+              ],
+            ),
+          ),
+          if (draft.truncated)
+            ColoredBox(
+              color: theme.colorScheme.tertiaryContainer,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 6,
+                ),
+                child: Text(
+                  'The captured body was truncated '
+                  '(${formatBytes(draft.keptBytes)} of '
+                  '${formatBytes(draft.totalBytes)}). Edit or replace it '
+                  'before saving.',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onTertiaryContainer,
+                  ),
+                ),
+              ),
+            ),
+          _Headers(draft: draft),
+          const Divider(height: 1),
+          Expanded(child: _body(context)),
+        ],
+      );
+    },
+  );
+
+  Widget _body(BuildContext context) {
+    final tree = draft.tree;
+    if (tree != null && !draft.showsRaw) {
+      return ListenableBuilder(
+        listenable: tree,
+        builder: (context, _) {
+          // A body declared JSON that does not parse is edited as text.
+          if (tree.status == JsonTreeStatus.invalid) return _raw(context);
+          return JsonTreeView(
+            controller: tree,
+            actions: [
+              IconButton(
+                tooltip: 'Raw text',
+                icon: const Icon(Icons.notes),
+                onPressed: () => unawaited(draft.showRaw()),
+              ),
+            ],
+          );
+        },
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (tree != null &&
+            !draft.rawEdited &&
+            tree.status != JsonTreeStatus.invalid)
+          Align(
+            alignment: Alignment.centerRight,
+            child: IconButton(
+              tooltip: 'Tree view',
+              icon: const Icon(Icons.account_tree_outlined),
+              onPressed: draft.showTree,
+            ),
+          ),
+        Expanded(child: _raw(context)),
+      ],
+    );
+  }
+
+  Widget _raw(BuildContext context) => RawTextView(
+    key: ValueKey(draft.generation),
+    worker: worker,
+    bytes: draft.bytes,
+    prettyJson: draft.isJson,
+    latin1: isLatin1Text(draft.contentType),
+    editable: true,
+    rawEditableLimit: rawEditableLimit,
+    onChanged: draft.rawChanged,
+    undecodable: (_) => Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Text(
+          'Binary body (${formatBytes(draft.bytes.length)}), kept as '
+          'captured. Pick a preset to replace it.',
+          textAlign: TextAlign.center,
+        ),
+      ),
+    ),
+  );
+}
+
+class _Headers extends StatelessWidget {
+  const _Headers({required this.draft});
+
+  final ResponseDraft draft;
+
+  @override
+  Widget build(BuildContext context) {
+    final rows = draft.headers;
+    return ExpansionTile(
+      title: Text('Headers (${rows.length})'),
+      dense: true,
+      children: [
+        ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: 240),
+          child: ListView(
+            shrinkWrap: true,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            children: [
+              for (var i = 0; i < rows.length; i++)
+                Row(
+                  key: ObjectKey(rows[i]),
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        key: ValueKey('header-name-$i'),
+                        controller: rows[i].name,
+                        decoration: const InputDecoration(hintText: 'Name'),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      flex: 2,
+                      child: TextField(
+                        key: ValueKey('header-value-$i'),
+                        controller: rows[i].value,
+                        decoration: const InputDecoration(hintText: 'Value'),
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'Remove header',
+                      icon: const Icon(Icons.remove_circle_outline),
+                      onPressed: () => draft.removeHeader(rows[i]),
+                    ),
+                  ],
+                ),
+            ],
+          ),
+        ),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            onPressed: draft.addHeader,
+            icon: const Icon(Icons.add),
+            label: const Text('Add header'),
+          ),
+        ),
+      ],
+    );
+  }
+}
