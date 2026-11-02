@@ -1,11 +1,16 @@
 import 'package:flutter/material.dart';
 
+import '../config.dart';
 import 'theme.dart';
 
 /// Whether the inspector is open and which call it shows.
+///
+/// After [dispose] every method is a no-op, so a page still on screen after
+/// `Proxie.shutdown` cannot fail.
 class ProxieInspectorController extends ChangeNotifier {
   bool _isOpen = false;
   String? _selectedCallId;
+  bool _disposed = false;
 
   bool get isOpen => _isOpen;
 
@@ -13,22 +18,28 @@ class ProxieInspectorController extends ChangeNotifier {
   String? get selectedCallId => _selectedCallId;
 
   void open() {
-    if (_isOpen) return;
+    if (_disposed || _isOpen) return;
     _isOpen = true;
     notifyListeners();
   }
 
   void close() {
-    if (!_isOpen) return;
+    if (_disposed || !_isOpen) return;
     _isOpen = false;
     notifyListeners();
   }
 
   /// Shows [callId] in the detail pane; null shows none.
   void select(String? callId) {
-    if (_selectedCallId == callId) return;
+    if (_disposed || _selectedCallId == callId) return;
     _selectedCallId = callId;
     notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
   }
 
   /// The controller of the nearest enclosing [InspectorShell], for list and
@@ -47,25 +58,28 @@ class _InspectorScope extends InheritedNotifier<ProxieInspectorController> {
   }) : super(notifier: controller);
 }
 
-/// The full-screen inspector page: [InspectorShell] in Proxie's own theme,
+/// The full-screen inspector page: [InspectorShell] in Proxie's own theme
+/// (see [ProxieThemed]),
 /// with its own [ScaffoldMessenger] so its messages never reach the host.
 class ProxieInspector extends StatelessWidget {
   const ProxieInspector({
     super.key,
     required this.controller,
     this.splitWidth = 700,
+    this.themeMode = ProxieThemeMode.dark,
     this.listBuilder,
     this.detailBuilder,
   });
 
   final ProxieInspectorController controller;
   final double splitWidth;
+  final ProxieThemeMode themeMode;
   final WidgetBuilder? listBuilder;
   final Widget Function(BuildContext context, String callId)? detailBuilder;
 
   @override
-  Widget build(BuildContext context) => Theme(
-    data: ProxieTheme.dark(),
+  Widget build(BuildContext context) => ProxieThemed(
+    mode: themeMode,
     child: ScaffoldMessenger(
       child: InspectorShell(
         controller: controller,

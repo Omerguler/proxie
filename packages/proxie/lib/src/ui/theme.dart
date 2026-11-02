@@ -1,4 +1,7 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+
+import '../config.dart';
 
 /// Proxie's semantic colors, attached to [ProxieTheme] as a theme extension.
 @immutable
@@ -137,6 +140,18 @@ abstract final class ProxieTheme {
 
   static ThemeData light() => _light;
 
+  /// The theme for [mode]; [ProxieThemeMode.system] picks by
+  /// [platformBrightness] (never by the host app's theme).
+  static ThemeData resolve(
+    ProxieThemeMode mode,
+    Brightness platformBrightness,
+  ) => switch (mode) {
+    ProxieThemeMode.dark => _dark,
+    ProxieThemeMode.light => _light,
+    ProxieThemeMode.system =>
+      platformBrightness == Brightness.dark ? _dark : _light,
+  };
+
   static ThemeData _build(Brightness brightness) {
     const colors = ProxieColors();
     final dark = brightness == Brightness.dark;
@@ -172,5 +187,54 @@ abstract final class ProxieTheme {
       ),
       extensions: const [colors],
     );
+  }
+}
+
+/// Puts [child] in Proxie's theme for [mode], and supplies what Proxie's
+/// Material widgets need when the host does not: a [MediaQuery] (from the
+/// view), Material/Cupertino/Widgets localizations (English defaults) and
+/// a [Directionality] (the host's, else left-to-right). Lets `Proxie.wrap`
+/// work under a `WidgetsApp`, a `CupertinoApp` or no app at all.
+class ProxieThemed extends StatelessWidget {
+  const ProxieThemed({super.key, required this.mode, required this.child});
+
+  final ProxieThemeMode mode;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final direction = Directionality.maybeOf(context) ?? TextDirection.ltr;
+    Widget result = Directionality(
+      textDirection: direction,
+      child: Builder(
+        builder: (context) => Theme(
+          data: ProxieTheme.resolve(
+            mode,
+            MediaQuery.platformBrightnessOf(context),
+          ),
+          child: child,
+        ),
+      ),
+    );
+    if (Localizations.of<MaterialLocalizations>(
+          context,
+          MaterialLocalizations,
+        ) ==
+        null) {
+      result = Localizations(
+        locale:
+            Localizations.maybeLocaleOf(context) ?? const Locale('en', 'US'),
+        delegates: const [
+          DefaultMaterialLocalizations.delegate,
+          DefaultCupertinoLocalizations.delegate,
+          DefaultWidgetsLocalizations.delegate,
+        ],
+        child: result,
+      );
+    }
+    if (MediaQuery.maybeOf(context) == null) {
+      result = MediaQuery.fromView(view: View.of(context), child: result);
+    }
+    return result;
   }
 }

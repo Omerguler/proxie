@@ -200,6 +200,7 @@ class _ProxieBubbleState extends State<ProxieBubble>
         label: 'Open Proxie inspector',
         value: count == 1 ? '1 call' : '$count calls',
         excludeSemantics: true,
+        onTap: widget.onTap,
         child: GestureDetector(
           onTap: widget.onTap,
           onPanStart: _onPanStart,

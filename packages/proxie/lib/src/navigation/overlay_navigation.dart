@@ -4,27 +4,33 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
 import 'navigation_adapter.dart';
+import 'navigator_observer.dart';
 
 /// Shows the inspector in the layer `Proxie.wrap` draws above the app.
 ///
 /// The layer listens to this adapter and builds [page] inside a nested
-/// [Navigator] keyed with [navigatorKey]. As a [WidgetsBindingObserver]
-/// registered before the app's (see [attachBackButton]) it handles the
-/// Android back button while showing: it pops the inspector's own routes
-/// first, then closes the inspector, and never lets the press reach the
-/// app's navigator.
+/// [Navigator] keyed with [navigatorKey]. While showing, the Android back
+/// button pops the inspector's own routes first, then closes it, and never
+/// reaches the app:
+/// * as a [WidgetsBindingObserver] registered before the app's (see
+///   [attachBackButton]) it sees back presses and predictive back gestures
+///   first;
+/// * through [HostPopGuard] (needs `Proxie.navigatorObserver` on the app's
+///   navigator) the app's top route refuses to pop, so its predictive back
+///   transition never starts and a press that reaches it first still lands
+///   here.
 class OverlayNavigationAdapter extends ChangeNotifier
     with WidgetsBindingObserver
     implements ProxieNavigationAdapter {
-  OverlayNavigationAdapter({required this.onDismissed});
-
-  /// Called after the inspector closed itself (back button).
-  final VoidCallback onDismissed;
+  OverlayNavigationAdapter({ProxieNavigatorObserver? observer})
+    : _guard = HostPopGuard(observer ?? proxieNavigatorObserver);
 
   /// Key of the navigator the layer builds around [page].
   final navigatorKey = GlobalKey<NavigatorState>(debugLabel: 'proxie');
 
+  final HostPopGuard _guard;
   Widget? _page;
+  VoidCallback? _onDismissed;
   bool _observing = false;
 
   /// The inspector page while showing.
@@ -34,9 +40,11 @@ class OverlayNavigationAdapter extends ChangeNotifier
   bool get isShowing => _page != null;
 
   @override
-  void show(BuildContext? context, Widget inspector) {
+  void show(Widget inspector, {required VoidCallback onDismissed}) {
     if (_page != null) return;
     _page = inspector;
+    _onDismissed = onDismissed;
+    _guard.engage(() => unawaited(_back()));
     notifyListeners();
   }
 
@@ -44,6 +52,8 @@ class OverlayNavigationAdapter extends ChangeNotifier
   void hide() {
     if (_page == null) return;
     _page = null;
+    _onDismissed = null;
+    _guard.release();
     notifyListeners();
   }
 
@@ -60,6 +70,13 @@ class OverlayNavigationAdapter extends ChangeNotifier
     if (!_observing) return;
     _observing = false;
     WidgetsBinding.instance.removeObserver(this);
+  }
+
+  @override
+  void dispose() {
+    hide();
+    detachBackButton();
+    super.dispose();
   }
 
   @override
@@ -83,7 +100,8 @@ class OverlayNavigationAdapter extends ChangeNotifier
     // Pops a dialog or the phone layout's detail page; false when only the
     // inspector itself is left.
     if (navigator != null && await navigator.maybePop()) return;
-    if (!isShowing) return;
+    final onDismissed = _onDismissed;
+    if (!isShowing || onDismissed == null) return;
     hide();
     onDismissed();
   }

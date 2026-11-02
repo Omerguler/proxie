@@ -1,5 +1,6 @@
 import 'package:flutter/widgets.dart';
 
+import '../enablement.dart';
 import '../model/call.dart';
 import '../storage/call_query.dart';
 
@@ -48,11 +49,17 @@ abstract final class ProxieSections {
   static final List<ProxieDetailTab> _tabs = [];
   static final List<ProxieListBadge> _badges = [];
 
-  static void addDetailTab(ProxieDetailTab tab) =>
-      _put(_tabs, tab, (t) => t.id == tab.id);
+  /// A no-op unless [kProxieEnabled], so release builds drop the entries.
+  static void addDetailTab(ProxieDetailTab tab) {
+    if (!kProxieEnabled) return;
+    _put(_tabs, tab, (t) => t.id == tab.id);
+  }
 
-  static void addListBadge(ProxieListBadge badge) =>
-      _put(_badges, badge, (b) => b.id == badge.id);
+  /// A no-op unless [kProxieEnabled], so release builds drop the entries.
+  static void addListBadge(ProxieListBadge badge) {
+    if (!kProxieEnabled) return;
+    _put(_badges, badge, (b) => b.id == badge.id);
+  }
 
   /// Registered detail tabs, in registration order. Unmodifiable.
   static List<ProxieDetailTab> get detailTabs => List.unmodifiable(_tabs);

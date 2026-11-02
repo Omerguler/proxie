@@ -4,17 +4,10 @@ import 'navigation_adapter.dart';
 
 /// Hands the inspector page to app-provided [push] and [pop] callbacks.
 class CustomNavigationAdapter implements ProxieNavigationAdapter {
-  CustomNavigationAdapter({
-    required this.push,
-    required this.pop,
-    required this.onDismissed,
-  });
+  CustomNavigationAdapter({required this.push, required this.pop});
 
   final void Function(Widget page) push;
   final void Function() pop;
-
-  /// Called after the page left the widget tree without [hide].
-  final VoidCallback onDismissed;
 
   // Identifies the page currently shown; a late dispose of an earlier page
   // must not close a newer one.
@@ -23,8 +16,10 @@ class CustomNavigationAdapter implements ProxieNavigationAdapter {
   @override
   bool get isShowing => _shown != null;
 
+  /// [onDismissed] runs after the page left the widget tree without [hide].
+  /// If [push] throws, nothing is showing and the error propagates.
   @override
-  void show(BuildContext? context, Widget inspector) {
+  void show(Widget inspector, {required VoidCallback onDismissed}) {
     if (_shown != null) return;
     final token = Object();
     _shown = token;

@@ -1,0 +1,551 @@
+import 'package:flutter/cupertino.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:proxie/proxie.dart';
+
+import '../support/ui_harness.dart';
+
+class _RecordingAdapter implements ProxieNavigationAdapter {
+  final shown = <Widget>[];
+  VoidCallback? dismiss;
+  int hides = 0;
+
+  @override
+  bool isShowing = false;
+
+  @override
+  void show(Widget inspector, {required VoidCallback onDismissed}) {
+    shown.add(inspector);
+    dismiss = onDismissed;
+    isShowing = true;
+  }
+
+  @override
+  void hide() {
+    hides++;
+    isShowing = false;
+  }
+}
+
+Future<void> _backGesture(WidgetTester tester, String method) async {
+  final message = const StandardMethodCodec().encodeMethodCall(
+    MethodCall(
+      method,
+      method == 'commitBackGesture'
+          ? null
+          : <String, Object?>{
+              'touchOffset': <double>[5.0, 300.0],
+              'progress': 0.0,
+              'swipeEdge': 0,
+            },
+    ),
+  );
+  await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+    'flutter/backgesture',
+    message,
+    (_) {},
+  );
+}
+
+Brightness _proxieBrightness(WidgetTester tester) =>
+    Theme.of(tester.element(find.text('No requests yet'))).brightness;
+
+Brightness _bubbleBrightness(WidgetTester tester) =>
+    Theme.of(tester.element(bubbleButton)).brightness;
+
+void main() {
+  tearDown(() async {
+    await Proxie.shutdown();
+  });
+
+  group('theme mode', () {
+    testWidgets('light: Proxie is light while the host stays dark', (
+      tester,
+    ) async {
+      addTearDown(tester.view.reset);
+      setViewSize(tester, phoneSize);
+      await initProxie(
+        tester,
+        config: const ProxieConfig(
+          persistHistory: false,
+          themeMode: ProxieThemeMode.light,
+        ),
+      );
+      await tester.pumpWidget(
+        hostApp(
+          theme: ThemeData.light(),
+          darkTheme: ThemeData.dark(),
+          themeMode: ThemeMode.dark,
+        ),
+      );
+      expect(_bubbleBrightness(tester), Brightness.light);
+      Proxie.open();
+      await tester.pumpAndSettle();
+      expect(_proxieBrightness(tester), Brightness.light);
+      final host = Theme.of(tester.element(find.text('host home')));
+      expect(host.brightness, Brightness.dark);
+      expect(host.extension<ProxieColors>(), isNull);
+      await tester.runAsync(Proxie.shutdown);
+    });
+
+    testWidgets('dark (default): Proxie is dark while the host stays light', (
+      tester,
+    ) async {
+      addTearDown(tester.view.reset);
+      setViewSize(tester, phoneSize);
+      await initProxie(tester);
+      await tester.pumpWidget(
+        hostApp(theme: ThemeData.light(), themeMode: ThemeMode.light),
+      );
+      expect(_bubbleBrightness(tester), Brightness.dark);
+      Proxie.open();
+      await tester.pumpAndSettle();
+      expect(_proxieBrightness(tester), Brightness.dark);
+      expect(
+        Theme.of(tester.element(find.text('host home'))).brightness,
+        Brightness.light,
+      );
+      await tester.runAsync(Proxie.shutdown);
+    });
+
+    testWidgets('system: follows the platform brightness live, not the host '
+        'theme', (tester) async {
+      addTearDown(tester.view.reset);
+      addTearDown(tester.platformDispatcher.clearPlatformBrightnessTestValue);
+      setViewSize(tester, phoneSize);
+      tester.platformDispatcher.platformBrightnessTestValue = Brightness.light;
+      await initProxie(
+        tester,
+        config: const ProxieConfig(
+          persistHistory: false,
+          themeMode: ProxieThemeMode.system,
+        ),
+      );
+      // The host forces dark regardless of the platform.
+      await tester.pumpWidget(
+        hostApp(theme: ThemeData.dark(), themeMode: ThemeMode.light),
+      );
+      Proxie.open();
+      await tester.pumpAndSettle();
+      expect(_proxieBrightness(tester), Brightness.light);
+
+      tester.platformDispatcher.platformBrightnessTestValue = Brightness.dark;
+      await tester.pumpAndSettle();
+      expect(_proxieBrightness(tester), Brightness.dark);
+      expect(
+        Theme.of(tester.element(find.text('host home'))).brightness,
+        Brightness.dark,
+      );
+
+      tester.platformDispatcher.platformBrightnessTestValue = Brightness.light;
+      await tester.pumpAndSettle();
+      expect(_proxieBrightness(tester), Brightness.light);
+      await tester.runAsync(Proxie.shutdown);
+    });
+
+    testWidgets('ProxieInspector honours its themeMode', (tester) async {
+      final controller = ProxieInspectorController();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ProxieInspector(
+            controller: controller,
+            themeMode: ProxieThemeMode.light,
+          ),
+        ),
+      );
+      expect(_proxieBrightness(tester), Brightness.light);
+    });
+  });
+
+  group('wrap outside MaterialApp', () {
+    testWidgets('under WidgetsApp', (tester) async {
+      addTearDown(tester.view.reset);
+      setViewSize(tester, phoneSize);
+      await initProxie(tester);
+      await tester.pumpWidget(
+        WidgetsApp(
+          color: const Color(0xFF000000),
+          builder: Proxie.wrap,
+          pageRouteBuilder: <T>(settings, builder) => PageRouteBuilder<T>(
+            settings: settings,
+            pageBuilder: (context, _, _) => builder(context),
+          ),
+          home: const Text('widgets home'),
+        ),
+      );
+      expect(bubbleFinder, findsOneWidget);
+      await tester.tap(bubbleButton);
+      await tester.pumpAndSettle();
+      expect(shellFinder, findsOneWidget);
+      await tester.tap(find.byTooltip('Close'));
+      await tester.pumpAndSettle();
+      expect(shellFinder, findsNothing);
+      await tester.runAsync(Proxie.shutdown);
+    });
+
+    testWidgets('under CupertinoApp', (tester) async {
+      addTearDown(tester.view.reset);
+      setViewSize(tester, tabletSize);
+      await initProxie(tester);
+      await tester.pumpWidget(
+        const CupertinoApp(
+          builder: Proxie.wrap,
+          home: CupertinoPageScaffold(child: Text('cupertino home')),
+        ),
+      );
+      await tester.tap(bubbleButton);
+      await tester.pumpAndSettle();
+      expect(find.text('No requests yet'), findsOneWidget);
+      expect(find.text('Select a request'), findsOneWidget);
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(shellFinder, findsNothing);
+      expect(find.text('cupertino home'), findsOneWidget);
+      await tester.runAsync(Proxie.shutdown);
+    });
+
+    testWidgets('at the root, without any app', (tester) async {
+      addTearDown(tester.view.reset);
+      setViewSize(tester, phoneSize);
+      await initProxie(tester);
+      await tester.pumpWidget(
+        Builder(
+          builder: (context) => Proxie.wrap(
+            context,
+            const Text('bare', textDirection: TextDirection.ltr),
+          ),
+        ),
+      );
+      Proxie.open();
+      await tester.pumpAndSettle();
+      expect(shellFinder, findsOneWidget);
+      await tester.tap(find.byTooltip('Close'));
+      await tester.pumpAndSettle();
+      expect(bubbleFinder, findsOneWidget);
+      await tester.runAsync(Proxie.shutdown);
+    });
+
+    testWidgets('keeps the host text direction', (tester) async {
+      addTearDown(tester.view.reset);
+      setViewSize(tester, phoneSize);
+      await initProxie(tester);
+      await tester.pumpWidget(
+        Directionality(
+          textDirection: TextDirection.rtl,
+          child: Builder(
+            builder: (context) => Proxie.wrap(context, const Text('bare')),
+          ),
+        ),
+      );
+      Proxie.open();
+      await tester.pumpAndSettle();
+      expect(
+        Directionality.of(tester.element(find.text('No requests yet'))),
+        TextDirection.rtl,
+      );
+      await tester.runAsync(Proxie.shutdown);
+    });
+  });
+
+  group('accessibility', () {
+    testWidgets('the bubble exposes a tap action that opens the inspector', (
+      tester,
+    ) async {
+      addTearDown(tester.view.reset);
+      setViewSize(tester, phoneSize);
+      final semantics = tester.ensureSemantics();
+      await initProxie(tester);
+      await tester.pumpWidget(hostApp());
+      final node = find.semantics.byLabel('Open Proxie inspector');
+      expect(
+        tester.getSemantics(find.bySemanticsLabel('Open Proxie inspector')),
+        isSemantics(isButton: true, hasTapAction: true),
+      );
+      tester.semantics.tap(node);
+      await tester.pumpAndSettle();
+      expect(shellFinder, findsOneWidget);
+      semantics.dispose();
+      await tester.runAsync(Proxie.shutdown);
+    });
+
+    testWidgets('the host is hidden from semantics while the overlay is '
+        'open', (tester) async {
+      addTearDown(tester.view.reset);
+      setViewSize(tester, phoneSize);
+      final semantics = tester.ensureSemantics();
+      await initProxie(tester);
+      await tester.pumpWidget(hostApp());
+      expect(find.semantics.byLabel('host home'), findsOneWidget);
+      Proxie.open();
+      await tester.pumpAndSettle();
+      expect(find.semantics.byLabel('host home'), findsNothing);
+      expect(find.semantics.byLabel('No requests yet'), findsOneWidget);
+      await tester.tap(find.byTooltip('Close'));
+      await tester.pumpAndSettle();
+      expect(find.semantics.byLabel('host home'), findsOneWidget);
+      semantics.dispose();
+      await tester.runAsync(Proxie.shutdown);
+    });
+  });
+
+  group('back handling', () {
+    testWidgets('predictive back closes only the inspector, not the host '
+        'route', (tester) async {
+      addTearDown(tester.view.reset);
+      setViewSize(tester, phoneSize);
+      final key = GlobalKey<NavigatorState>();
+      await initProxie(tester);
+      await tester.pumpWidget(
+        hostApp(
+          navigatorKey: key,
+          observers: [Proxie.navigatorObserver],
+          theme: ThemeData(
+            pageTransitionsTheme: const PageTransitionsTheme(
+              builders: {
+                TargetPlatform.android: PredictiveBackPageTransitionsBuilder(),
+              },
+            ),
+          ),
+        ),
+      );
+      key.currentState!.push(
+        MaterialPageRoute<void>(
+          builder: (_) => const Scaffold(body: Text('host second')),
+        ),
+      );
+      await tester.pumpAndSettle();
+      Proxie.open();
+      await tester.pumpAndSettle();
+
+      await _backGesture(tester, 'startBackGesture');
+      await tester.pump();
+      await _backGesture(tester, 'commitBackGesture');
+      await tester.pumpAndSettle();
+      expect(shellFinder, findsNothing);
+      expect(find.text('host second'), findsOneWidget);
+      expect(key.currentState!.canPop(), isTrue);
+
+      // Closed: the host's own predictive back works again.
+      await _backGesture(tester, 'startBackGesture');
+      await tester.pump();
+      await _backGesture(tester, 'commitBackGesture');
+      await tester.pumpAndSettle();
+      expect(find.text('host home'), findsOneWidget);
+      await tester.runAsync(Proxie.shutdown);
+    });
+
+    testWidgets('the guard follows a route the host pushes while open', (
+      tester,
+    ) async {
+      addTearDown(tester.view.reset);
+      setViewSize(tester, phoneSize);
+      final key = GlobalKey<NavigatorState>();
+      await initProxie(tester);
+      await tester.pumpWidget(
+        hostApp(navigatorKey: key, observers: [Proxie.navigatorObserver]),
+      );
+      Proxie.open();
+      await tester.pumpAndSettle();
+      key.currentState!.push(
+        MaterialPageRoute<void>(
+          builder: (_) => const Scaffold(body: Text('host pushed')),
+        ),
+      );
+      await tester.pumpAndSettle();
+      // The host's navigator itself cannot pop while the inspector is open.
+      expect(await key.currentState!.maybePop(), isTrue);
+      await tester.pumpAndSettle();
+      expect(shellFinder, findsNothing, reason: 'the attempt closed Proxie');
+      expect(find.text('host pushed'), findsOneWidget);
+      await tester.runAsync(Proxie.shutdown);
+    });
+
+    testWidgets('setFrameworkHandlesBack is true while open and restored '
+        'after', (tester) async {
+      addTearDown(tester.view.reset);
+      setViewSize(tester, phoneSize);
+      final calls = <Object?>[];
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async {
+          if (call.method == 'SystemNavigator.setFrameworkHandlesBack') {
+            calls.add(call.arguments);
+          }
+          return null;
+        },
+      );
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          null,
+        ),
+      );
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await initProxie(tester);
+      await tester.pumpWidget(hostApp());
+      await tester.pumpAndSettle();
+      calls.clear();
+
+      Proxie.open();
+      await tester.pumpAndSettle();
+      expect(calls.last, isTrue);
+
+      await tester.tap(find.byTooltip('Close'));
+      await tester.pumpAndSettle();
+      expect(calls.last, isFalse, reason: "the app's single route can't pop");
+      await tester.runAsync(Proxie.shutdown);
+    });
+  });
+
+  group('layer', () {
+    testWidgets('host taps pass through while the inspector is closed', (
+      tester,
+    ) async {
+      addTearDown(tester.view.reset);
+      setViewSize(tester, phoneSize);
+      var taps = 0;
+      await initProxie(tester);
+      await tester.pumpWidget(
+        hostApp(
+          home: Scaffold(
+            body: Align(
+              alignment: Alignment.topLeft,
+              child: TextButton(
+                onPressed: () => taps++,
+                child: const Text('host button'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('host button'));
+      expect(taps, 1);
+      await tester.runAsync(Proxie.shutdown);
+    });
+
+    testWidgets('the bubble stays on screen after rotating', (tester) async {
+      addTearDown(tester.view.reset);
+      setViewSize(tester, phoneSize);
+      await initProxie(tester);
+      await tester.pumpWidget(hostApp());
+      // To the bottom-right corner.
+      await tester.drag(bubbleButton, const Offset(200, 2000));
+      await tester.pumpAndSettle();
+
+      setViewSize(tester, const Size(844, 390));
+      await tester.pumpAndSettle();
+      final rect = tester.getRect(bubbleButton);
+      expect(rect.left, greaterThanOrEqualTo(0));
+      expect(rect.top, greaterThanOrEqualTo(0));
+      expect(rect.right, lessThanOrEqualTo(844));
+      expect(rect.bottom, lessThanOrEqualTo(390));
+      expect(rect.right, greaterThan(844 - 70), reason: 'still on the right');
+      await tester.runAsync(Proxie.shutdown);
+    });
+  });
+
+  group('navigation adapters', () {
+    testWidgets('navigatorKey without a mounted navigator stays closed', (
+      tester,
+    ) async {
+      addTearDown(tester.view.reset);
+      setViewSize(tester, phoneSize);
+      final unmounted = GlobalKey<NavigatorState>();
+      await initProxie(
+        tester,
+        navigation: ProxieNavigation.navigatorKey(unmounted),
+      );
+      await tester.pumpWidget(hostApp());
+      Proxie.open();
+      await tester.pumpAndSettle();
+      expect(shellFinder, findsNothing);
+      expect(bubbleFinder, findsOneWidget, reason: 'closed again');
+      await tester.runAsync(Proxie.shutdown);
+    });
+
+    testWidgets('navigatorKey hide removes the route when it is not on '
+        'top', (tester) async {
+      addTearDown(tester.view.reset);
+      setViewSize(tester, phoneSize);
+      final key = GlobalKey<NavigatorState>();
+      await initProxie(tester, navigation: ProxieNavigation.navigatorKey(key));
+      await tester.pumpWidget(hostApp(navigatorKey: key));
+      Proxie.open();
+      await tester.pumpAndSettle();
+      key.currentState!.push(
+        MaterialPageRoute<void>(
+          builder: (_) => const Scaffold(body: Text('host on top')),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.runAsync(Proxie.shutdown);
+      await tester.pumpAndSettle();
+      expect(find.byType(InspectorShell, skipOffstage: false), findsNothing);
+      expect(find.text('host on top'), findsOneWidget);
+      key.currentState!.pop();
+      await tester.pumpAndSettle();
+      expect(find.text('host home'), findsOneWidget);
+    });
+
+    testWidgets('custom push that throws is reported and the inspector '
+        'stays closed', (tester) async {
+      addTearDown(tester.view.reset);
+      setViewSize(tester, phoneSize);
+      var fail = true;
+      final pushed = <Widget>[];
+      await initProxie(
+        tester,
+        navigation: ProxieNavigation.custom(
+          push: (page) {
+            if (fail) throw StateError('router not ready');
+            pushed.add(page);
+          },
+          pop: () {},
+        ),
+      );
+      await tester.pumpWidget(hostApp());
+      Proxie.open();
+      final error = tester.takeException();
+      expect(error, isA<StateError>());
+      await tester.pump();
+      expect(bubbleFinder, findsOneWidget, reason: 'closed again');
+
+      fail = false;
+      Proxie.open();
+      expect(pushed, hasLength(1));
+      await tester.runAsync(Proxie.shutdown);
+    });
+
+    testWidgets('ProxieNavigation.adapter plugs in an app adapter', (
+      tester,
+    ) async {
+      addTearDown(tester.view.reset);
+      setViewSize(tester, phoneSize);
+      final adapter = _RecordingAdapter();
+      await initProxie(tester, navigation: ProxieNavigation.adapter(adapter));
+      await tester.pumpWidget(hostApp());
+      await tester.tap(bubbleButton);
+      await tester.pump();
+      expect(adapter.shown, hasLength(1));
+      expect(bubbleFinder, findsNothing, reason: 'open');
+
+      // The page, shown by the app, closes through the adapter.
+      await tester.pumpWidget(MaterialApp(home: adapter.shown.single));
+      await tester.tap(find.byTooltip('Close'));
+      expect(adapter.hides, 1);
+
+      // The app dismissed it on its own.
+      Proxie.open();
+      expect(adapter.shown, hasLength(2));
+      adapter.isShowing = false;
+      adapter.dismiss!();
+      Proxie.open();
+      expect(adapter.shown, hasLength(3));
+      expect(adapter.hides, 1);
+      await tester.runAsync(Proxie.shutdown);
+      expect(adapter.hides, 2);
+    });
+  });
+}

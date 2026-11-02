@@ -7,21 +7,19 @@ import 'navigation_adapter.dart';
 /// Pushes the inspector as a full-screen dialog route onto the navigator of
 /// [navigatorKey].
 class NavigatorKeyNavigationAdapter implements ProxieNavigationAdapter {
-  NavigatorKeyNavigationAdapter(this.navigatorKey, {required this.onDismissed});
+  NavigatorKeyNavigationAdapter(this.navigatorKey);
 
   final GlobalKey<NavigatorState> navigatorKey;
-
-  /// Called after the route left on its own (system back, removed by the
-  /// app), or when the navigator is not mounted.
-  final VoidCallback onDismissed;
 
   Route<void>? _route;
 
   @override
   bool get isShowing => _route != null;
 
+  /// [onDismissed] runs after the route left on its own (system back,
+  /// removed by the app), or right away when the navigator is not mounted.
   @override
-  void show(BuildContext? context, Widget inspector) {
+  void show(Widget inspector, {required VoidCallback onDismissed}) {
     if (_route != null) return;
     final navigator = navigatorKey.currentState;
     if (navigator == null) {

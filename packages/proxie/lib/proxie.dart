@@ -31,7 +31,8 @@ export 'src/navigation/navigation_adapter.dart'
         ProxieNavigationAdapter,
         OverlayNavigation,
         NavigatorKeyNavigation,
-        CustomNavigation;
+        CustomNavigation,
+        AdapterNavigation;
 export 'src/proxie.dart';
 export 'src/storage/call_query.dart';
 export 'src/storage/memory_store.dart';

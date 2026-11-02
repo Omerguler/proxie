@@ -2,13 +2,15 @@ import 'package:flutter/widgets.dart';
 
 /// Shows and hides the inspector page for one navigation style.
 ///
-/// Implementations report a page the host dismissed on its own (system back,
-/// a route removed by the host) through the `onDismissed` callback they are
-/// created with, after [isShowing] has turned false.
+/// Implement it to plug in another router; pass the instance to
+/// [ProxieNavigation.adapter]. Keep one adapter per file.
 abstract interface class ProxieNavigationAdapter {
-  /// Shows [inspector], an already themed full-screen page. [context] is
-  /// the context of `Proxie.wrap`'s widget when it is mounted.
-  void show(BuildContext? context, Widget inspector);
+  /// Shows [inspector], an already themed full-screen page.
+  ///
+  /// When the page goes away without [hide] (the app's router popped it, the
+  /// system back button), set [isShowing] to false and call [onDismissed] so
+  /// Proxie knows the inspector is closed.
+  void show(Widget inspector, {required VoidCallback onDismissed});
 
   /// Hides the inspector; does nothing when it is not showing.
   void hide();
@@ -44,13 +46,18 @@ abstract interface class ProxieNavigationAdapter {
 ///   );
 ///   ```
 /// * [ProxieNavigation.custom]: the app shows and removes the page itself.
+/// * [ProxieNavigation.adapter]: an app-provided [ProxieNavigationAdapter].
 sealed class ProxieNavigation {
   const ProxieNavigation();
 
   /// Draws the inspector in Proxie's own layer from `Proxie.wrap`.
   ///
-  /// The Android back button closes it. Call `Proxie.init` before `runApp`
-  /// so Proxie sees the back button before the app's navigator does.
+  /// The Android back button closes it and never reaches the app. Call
+  /// `Proxie.init` before `runApp` so Proxie sees the back button before the
+  /// app's navigator does. Apps using predictive back page transitions (or
+  /// calling `init` after `runApp`) must also add `Proxie.navigatorObserver`
+  /// to their root navigator's observers, so the app's top route is held in
+  /// place while the inspector is open.
   const factory ProxieNavigation.overlay() = OverlayNavigation;
 
   /// Pushes the inspector as a full-screen dialog route onto [key]'s
@@ -64,6 +71,11 @@ sealed class ProxieNavigation {
     required void Function(Widget page) push,
     required void Function() pop,
   }) = CustomNavigation;
+
+  /// Uses an app-provided [adapter], e.g. for a router Proxie has no
+  /// built-in support for.
+  const factory ProxieNavigation.adapter(ProxieNavigationAdapter adapter) =
+      AdapterNavigation;
 }
 
 /// See [ProxieNavigation.overlay].
@@ -84,6 +96,13 @@ final class CustomNavigation extends ProxieNavigation {
 
   final void Function(Widget page) push;
   final void Function() pop;
+}
+
+/// See [ProxieNavigation.adapter].
+final class AdapterNavigation extends ProxieNavigation {
+  const AdapterNavigation(this.adapter);
+
+  final ProxieNavigationAdapter adapter;
 }
 
 /// Calls [onDispose] when it leaves the tree, so an adapter learns that the
