@@ -143,7 +143,11 @@ class _RuleEditorState extends State<RuleEditor> {
     final captured = existing != null ? action?.response : from?.response;
     _captured = captured;
     if (captured != null) {
-      _draft.load(captured, callId: existing == null ? from?.id : null);
+      _draft.load(
+        captured,
+        callId: existing == null ? from?.id : null,
+        captured: existing == null,
+      );
     } else {
       _draft.load(
         ProxieResponse(
@@ -281,7 +285,11 @@ class _RuleEditorState extends State<RuleEditor> {
     if (response == null) return;
     // The captured response itself opens as the call's tree again.
     final fromCall = widget.existing == null && identical(response, captured);
-    _draft.load(response, callId: fromCall ? widget.from?.id : null);
+    _draft.load(
+      response,
+      callId: fromCall ? widget.from?.id : null,
+      captured: fromCall,
+    );
   }
 
   Future<void> _saveAsPreset() async {

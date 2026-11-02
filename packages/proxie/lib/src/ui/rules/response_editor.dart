@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 
 import 'package:proxie/src/config.dart' show defaultRawEditableLimit;
 import 'package:proxie/src/core/body_classifier.dart';
+import 'package:proxie/src/core/masking.dart' show kMask;
 import 'package:proxie/src/model/body.dart';
 import 'package:proxie/src/model/response.dart';
 import 'package:proxie/src/ui/common.dart';
@@ -18,6 +19,33 @@ import 'package:proxie/src/worker/worker.dart';
 /// The scope (see `OpenJson.scope`) rule editors open captured bodies in,
 /// so their edits never reach the read-only detail.
 const String ruleEditorScope = 'rule-editor';
+
+/// Headers that describe how a response travelled, not its body; a
+/// captured body is stored decoded and whole, so they would be wrong on a
+/// mock.
+const Set<String> transportHeaders = {
+  'content-encoding',
+  'content-length',
+  'transfer-encoding',
+};
+
+/// How often [pattern] occurs in [bytes].
+int _count(Uint8List bytes, List<int> pattern) {
+  var n = 0;
+  final last = bytes.length - pattern.length;
+  outer:
+  for (var i = 0; i <= last; i++) {
+    for (var j = 0; j < pattern.length; j++) {
+      if (bytes[i + j] != pattern[j]) continue outer;
+    }
+    n++;
+    i += pattern.length - 1;
+  }
+  return n;
+}
+
+final List<int> _maskedUtf8 = utf8.encode('"$kMask"');
+final List<int> _maskedLatin1 = latin1.encode('"******"');
 
 /// One editable header line.
 class HeaderRow {
@@ -62,6 +90,7 @@ class ResponseDraft extends ChangeNotifier {
   String? _contentType;
   bool _json = false;
   bool _truncated = false;
+  int _masked = 0;
   int _keptBytes = 0;
   int _totalBytes = 0;
   String? _rawText;
@@ -82,6 +111,10 @@ class ResponseDraft extends ChangeNotifier {
   /// Whether the body is the captured part of a body cut at capture, not
   /// yet edited or replaced; [validate] refuses it.
   bool get truncated => _truncated;
+
+  /// Values the stored copy had masked (P19): header values and JSON
+  /// strings equal to the mask, which a mock would send as they are.
+  int get maskedCount => _masked;
 
   /// Bytes kept of a [truncated] body.
   int get keptBytes => _keptBytes;
@@ -113,8 +146,9 @@ class ResponseDraft extends ChangeNotifier {
   }
 
   /// Starts over from [response]. With [callId], a JSON body opens as a
-  /// tree of that call's stored response.
-  void load(ProxieResponse response, {String? callId}) {
+  /// tree of that call's stored response. A [captured] response loses its
+  /// [transportHeaders]; its masked values are counted in [maskedCount].
+  void load(ProxieResponse response, {String? callId, bool captured = false}) {
     status.text = '${response.statusCode}';
     _loadedStatus = response.statusCode;
     _reason = response.reasonPhrase;
@@ -125,9 +159,17 @@ class ResponseDraft extends ChangeNotifier {
       ..clear()
       ..addAll([
         for (final e in response.headers.entries)
-          for (final v in e.value) HeaderRow(e.key, v),
+          if (!captured || !transportHeaders.contains(e.key))
+            for (final v in e.value) HeaderRow(e.key, v),
       ]);
     final body = response.body;
+    _masked = !captured
+        ? 0
+        : _headers.where((h) => h.value.text == kMask).length +
+              _count(
+                body.bytes,
+                isLatin1Text(body.contentType) ? _maskedLatin1 : _maskedUtf8,
+              );
     _bytes = body.bytes;
     _contentType = body.contentType;
     _json = body.kind == BodyKind.json;
@@ -360,7 +402,32 @@ class ResponseEditor extends StatelessWidget {
                 ),
               ),
             ),
-          _Headers(draft: draft),
+          if (draft.maskedCount > 0)
+            ColoredBox(
+              color: theme.colorScheme.errorContainer,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 6,
+                ),
+                child: Text(
+                  draft.maskedCount == 1
+                      ? '1 value was masked at capture and will be sent as '
+                            '$kMask. Replace it before saving.'
+                      : '${draft.maskedCount} values were masked at capture '
+                            'and will be sent as $kMask. Replace them before '
+                            'saving.',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onErrorContainer,
+                  ),
+                ),
+              ),
+            ),
+          _Headers(
+            key: ValueKey(draft.generation),
+            draft: draft,
+            expanded: draft.headers.any((h) => h.value.text == kMask),
+          ),
           const Divider(height: 1),
           Expanded(child: _body(context)),
         ],
@@ -431,9 +498,12 @@ class ResponseEditor extends StatelessWidget {
 }
 
 class _Headers extends StatelessWidget {
-  const _Headers({required this.draft});
+  const _Headers({required this.draft, required this.expanded, super.key});
 
   final ResponseDraft draft;
+
+  /// Whether the tile starts open, as when a value is masked.
+  final bool expanded;
 
   @override
   Widget build(BuildContext context) {
@@ -441,6 +511,7 @@ class _Headers extends StatelessWidget {
     return ExpansionTile(
       title: Text('Headers (${rows.length})'),
       dense: true,
+      initiallyExpanded: expanded,
       children: [
         ConstrainedBox(
           constraints: const BoxConstraints(maxHeight: 240),
@@ -462,10 +533,29 @@ class _Headers extends StatelessWidget {
                     const SizedBox(width: 8),
                     Expanded(
                       flex: 2,
-                      child: TextField(
-                        key: ValueKey('header-value-$i'),
-                        controller: rows[i].value,
-                        decoration: const InputDecoration(hintText: 'Value'),
+                      child: ValueListenableBuilder<TextEditingValue>(
+                        valueListenable: rows[i].value,
+                        builder: (context, value, _) {
+                          final masked = value.text == kMask;
+                          final error = Theme.of(context).colorScheme.error;
+                          return TextField(
+                            key: ValueKey('header-value-$i'),
+                            controller: rows[i].value,
+                            style: masked ? TextStyle(color: error) : null,
+                            decoration: InputDecoration(
+                              hintText: 'Value',
+                              prefixIcon: masked
+                                  ? Tooltip(
+                                      message: 'Masked at capture',
+                                      child: Icon(
+                                        Icons.warning_amber,
+                                        color: error,
+                                      ),
+                                    )
+                                  : null,
+                            ),
+                          );
+                        },
                       ),
                     ),
                     IconButton(

@@ -1089,4 +1089,39 @@ void main() {
       contains('Duplicate'),
     );
   });
+
+  testWidgets('value dialogs open on the nearest navigator, not the root', (
+    tester,
+  ) async {
+    final inner = GlobalKey<NavigatorState>();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Navigator(
+          key: inner,
+          onGenerateRoute: (_) => MaterialPageRoute<void>(
+            builder: (_) => const Scaffold(body: Text('page')),
+          ),
+        ),
+      ),
+    );
+    final context = tester.element(find.text('page'));
+    final opens = <Future<Object?> Function()>[
+      () => showValueEditor(context, title: 'v'),
+      () => showKeyEditor(context, title: 'k'),
+      () => showKeyPicker(context, title: 'p', keys: const ['x']),
+    ];
+    for (final open in opens) {
+      unawaited(open());
+      await tester.pumpAndSettle();
+      final dialog = find.byWidgetPredicate(
+        (w) => w is Dialog || w is SimpleDialog || w is AlertDialog,
+      );
+      expect(
+        ModalRoute.of(tester.element(dialog.first))!.navigator,
+        same(inner.currentState),
+      );
+      inner.currentState!.pop();
+      await tester.pumpAndSettle();
+    }
+  });
 }

@@ -173,6 +173,8 @@ class ProxieRuntime {
       ..dispose();
     adapters.forEach(detachAdapter);
     callCount.dispose();
+    // The last rule change reaches the worker before it goes.
+    await rules.flush();
     rules.dispose();
     engine.dispose();
     await worker.dispose();

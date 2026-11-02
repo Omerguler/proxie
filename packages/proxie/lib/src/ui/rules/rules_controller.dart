@@ -55,13 +55,13 @@ class RulesController extends ChangeNotifier {
   String newId(String prefix) =>
       '$prefix-${DateTime.now().microsecondsSinceEpoch}-${_nextId++}';
 
-  /// Replaces the rule with [rule]'s id, or appends [rule]; true once
-  /// saved.
+  /// Replaces the rule with [rule]'s id, or inserts [rule] first, so no
+  /// older rule shadows the one just made; true once saved.
   Future<bool> save(ProxieRule rule) {
     final next = [...rules];
     final i = next.indexWhere((r) => r.id == rule.id);
     if (i < 0) {
-      next.add(rule);
+      next.insert(0, rule);
     } else {
       next[i] = rule;
     }
@@ -90,13 +90,24 @@ class RulesController extends ChangeNotifier {
     return _commit(next);
   }
 
-  /// Moves the rule at [from] to [to], both indexes into [rules] before
-  /// the move.
+  /// Moves the rule at [from] to [to]: [from] indexes [rules] before the
+  /// move, [to] the list with the rule already removed (as
+  /// `ReorderableListView.onReorderItem` reports them).
   Future<bool> reorder(int from, int to) {
     final next = [...rules];
     final rule = next.removeAt(from);
     next.insert(to.clamp(0, next.length), rule);
     return _commit(next);
+  }
+
+  /// Completes once every save started so far has finished (saves never
+  /// throw), so the worker can be disposed without losing the last change.
+  Future<void> flush() async {
+    Future<bool>? last;
+    while (_tail != null && !identical(_tail, last)) {
+      last = _tail;
+      await last;
+    }
   }
 
   /// Saves the rules as they are now again, after a failure.

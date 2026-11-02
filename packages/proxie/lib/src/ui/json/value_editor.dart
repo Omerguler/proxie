@@ -81,6 +81,8 @@ Future<JsonValueInput?> showValueEditor(
   String initialText = '',
 }) => showDialog<JsonValueInput>(
   context: context,
+  // Proxie's own navigator, never the host app's root one.
+  useRootNavigator: false,
   builder: (context) => ValueEditorDialog(
     title: title,
     askKey: askKey,
@@ -98,6 +100,7 @@ Future<String?> showKeyEditor(
 }) async {
   final result = await showDialog<JsonValueInput>(
     context: context,
+    useRootNavigator: false,
     builder: (context) => ValueEditorDialog(
       title: title,
       askKey: true,
@@ -115,6 +118,7 @@ Future<String?> showKeyPicker(
   required List<String> keys,
 }) => showDialog<String>(
   context: context,
+  useRootNavigator: false,
   builder: (context) => SimpleDialog(
     title: Text(title),
     children: [

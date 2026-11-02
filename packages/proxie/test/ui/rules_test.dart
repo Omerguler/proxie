@@ -28,6 +28,9 @@ class _Worker implements ProxieWorker {
   /// Commands for which this returns true fail instead of running.
   bool Function(WorkerCommand<Object?> cmd)? failWhen;
 
+  /// While non-null and incomplete, [SaveRules] waits for it.
+  Completer<void>? gate;
+
   Iterable<T> sentOf<T>() => sent.whereType<T>();
 
   @override
@@ -40,6 +43,7 @@ class _Worker implements ProxieWorker {
   Future<R> run<R>(WorkerCommand<R> cmd) async {
     sent.add(cmd);
     if (failWhen?.call(cmd) ?? false) throw StateError('worker down');
+    if (cmd is SaveRules) await gate?.future;
     try {
       return await cmd.execute(ctx);
     } on Object catch (e, st) {
@@ -57,7 +61,14 @@ ProxieBody _json(String text) => ProxieBody(
   kind: BodyKind.json,
 );
 
-ProxieCall _call({ProxieBody? body, int status = 201}) => ProxieCall(
+ProxieCall _call({
+  ProxieBody? body,
+  int status = 201,
+  Map<String, List<String>> headers = const {
+    'content-type': ['application/json'],
+    'x-trace': ['abc'],
+  },
+}) => ProxieCall(
   id: 'c1',
   sessionId: 1,
   adapter: 'test',
@@ -70,10 +81,7 @@ ProxieCall _call({ProxieBody? body, int status = 201}) => ProxieCall(
   response: ProxieResponse(
     statusCode: status,
     reasonPhrase: 'Created',
-    headers: const {
-      'content-type': ['application/json'],
-      'x-trace': ['abc'],
-    },
+    headers: headers,
     body: body ?? _json('{"id":7,"name":"ada"}'),
   ),
   startedAt: DateTime(2026, 11, 2),
@@ -403,6 +411,99 @@ void main() {
     expect([for (final r in await store.rules()) r.id], ['c', 'a', 'b']);
   });
 
+  testWidgets('reorder downwards persists order', (tester) async {
+    engine.rules = RuleSet([_rule('a'), _rule('b'), _rule('c')]);
+    await tester.pumpWidget(app(const RulesScreen()));
+    await tester.pumpAndSettle();
+    final handle = find.byKey(const ValueKey('rule-drag-a'));
+    final gesture = await tester.startGesture(tester.getCenter(handle));
+    await tester.pump();
+    for (var i = 0; i < 20; i++) {
+      await gesture.moveBy(const Offset(0, 10));
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    await gesture.up();
+    await tester.pumpAndSettle();
+    expect([for (final r in engine.rules.rules) r.id], ['b', 'c', 'a']);
+    expect([for (final r in await store.rules()) r.id], ['b', 'c', 'a']);
+  });
+
+  testWidgets('a new rule goes first, so no older rule shadows it', (
+    tester,
+  ) async {
+    engine.rules = RuleSet([_rule('a')]);
+    await openMapLocal(tester, _call());
+    await save(tester);
+    expect(engine.rules.rules, hasLength(2));
+    expect(engine.rules.rules.last.id, 'a');
+    expect(engine.rules.rules.first.matcher.pattern, 'https://api.test/users*');
+    expect((await store.rules()).last.id, 'a');
+  });
+
+  testWidgets('values masked at capture are flagged but can be saved', (
+    tester,
+  ) async {
+    await openMapLocal(
+      tester,
+      _call(
+        headers: const {
+          'content-type': ['application/json'],
+          'set-cookie': [kMask],
+        },
+        body: _json('{"access_token":"$kMask","id":1}'),
+      ),
+    );
+    await showResponseTab(tester);
+    expect(
+      find.textContaining('2 values were masked at capture'),
+      findsOneWidget,
+    );
+    // The headers open by themselves, with the masked row marked.
+    expect(find.byKey(const ValueKey('header-value-1')), findsOneWidget);
+    expect(find.byTooltip('Masked at capture'), findsOneWidget);
+
+    await save(tester);
+    expect(find.byType(RuleEditor), findsNothing);
+    expect(engine.rules.rules, hasLength(1));
+  });
+
+  testWidgets('transport headers of a captured response are dropped', (
+    tester,
+  ) async {
+    await openMapLocal(
+      tester,
+      _call(
+        headers: const {
+          'content-type': ['application/json'],
+          'content-length': ['21'],
+          'transfer-encoding': ['chunked'],
+          'content-encoding': ['gzip'],
+        },
+      ),
+    );
+    await save(tester);
+    expect(engine.rules.rules.single.mapLocal!.response!.headers, {
+      'content-type': ['application/json'],
+    });
+  });
+
+  test('flush waits for a pending save', () async {
+    final gate = Completer<void>();
+    final slow = _Worker(store)..gate = gate;
+    final controller = RulesController(worker: slow, engine: engine);
+    addTearDown(controller.dispose);
+    unawaited(controller.save(_rule('a')));
+    var flushed = false;
+    unawaited(controller.flush().then((_) => flushed = true));
+    await Future<void>.delayed(Duration.zero);
+    expect(flushed, isFalse);
+    gate.complete();
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+    expect(flushed, isTrue);
+    expect(await store.rules(), hasLength(1));
+  });
+
   testWidgets('delete removes the rule; Undo restores it', (tester) async {
     engine.rules = RuleSet([_rule('a'), _rule('b')]);
     await tester.pumpWidget(app(const RulesScreen()));
@@ -513,6 +614,45 @@ void main() {
       await tester.tap(find.byTooltip('Map Local from this response'));
       await tester.pumpAndSettle();
       expect(find.byType(RuleEditor), findsOneWidget);
+      await tester.runAsync(Proxie.shutdown);
+    });
+
+    testWidgets('phone: back closes the editor, then the detail', (
+      tester,
+    ) async {
+      addTearDown(tester.view.reset);
+      setViewSize(tester, phoneSize);
+      await initProxie(tester);
+      final engine = Proxie.engine!;
+      final id = engine.newCallId();
+      await tester.runAsync(() async {
+        await engine.onRequest(id, 'test', _call().request);
+        await engine.onResponse(id, _call().response!);
+      });
+      await tester.pumpWidget(hostApp());
+      Proxie.open();
+      await tester.pumpAndSettle();
+      controllerIn(tester).select(id);
+      for (var i = 0; i < 5; i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 50)),
+        );
+        await tester.pumpAndSettle();
+      }
+      await tester.tap(find.byTooltip('Map Local from this response'));
+      await tester.pumpAndSettle();
+      expect(find.byType(RuleEditor), findsOneWidget);
+
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.byType(RuleEditor), findsNothing);
+      expect(find.byTooltip('Map Local from this response'), findsOneWidget);
+
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('Map Local from this response'), findsNothing);
+      expect(find.text('No requests yet'), findsNothing);
+      expect(shellFinder, findsOneWidget);
       await tester.runAsync(Proxie.shutdown);
     });
   });
