@@ -1,18 +1,9 @@
 import 'dart:convert';
 import 'dart:io';
 
-const _separators = '()<>@,;:\\"/[]?={} \t';
+import 'package:proxie/src/core/http_rules.dart';
 
-/// Whether every character of [s] is an HTTP token character (RFC 2616:
-/// visible US-ASCII except separators), as `dart:io` checks methods and
-/// header names.
-bool isHttpToken(String s) {
-  for (var i = 0; i < s.length; i++) {
-    final c = s.codeUnitAt(i);
-    if (c <= 31 || c >= 127 || _separators.contains(s[i])) return false;
-  }
-  return true;
-}
+export 'package:proxie/src/core/http_rules.dart' show isHttpToken;
 
 /// [name] lowercased; throws a [FormatException] if it is not a token.
 String validateHeaderName(String name) {
@@ -30,15 +21,13 @@ String validateHeaderName(String name) {
 /// tab, so no line breaks.
 Object validateHeaderValue(Object value) {
   if (value is String) {
-    for (var i = 0; i < value.length; i++) {
-      final c = value.codeUnitAt(i);
-      if (!((c > 31 && c < 128) || c == 9)) {
-        throw FormatException(
-          'Invalid HTTP header field value: ${json.encode(value)}',
-          value,
-          i,
-        );
-      }
+    final i = unsendableHeaderChar(value);
+    if (i >= 0) {
+      throw FormatException(
+        'Invalid HTTP header field value: ${json.encode(value)}',
+        value,
+        i,
+      );
     }
   }
   return value;
@@ -48,15 +37,13 @@ Object validateHeaderValue(Object value) {
 /// LF or NUL, the only characters a header `dart:io` receives cannot hold.
 Object validateReceivedHeaderValue(Object value) {
   if (value is String) {
-    for (var i = 0; i < value.length; i++) {
-      final c = value.codeUnitAt(i);
-      if (c == 13 || c == 10 || c == 0) {
-        throw FormatException(
-          'Invalid HTTP header field value: ${json.encode(value)}',
-          value,
-          i,
-        );
-      }
+    final i = unreceivableHeaderChar(value);
+    if (i >= 0) {
+      throw FormatException(
+        'Invalid HTTP header field value: ${json.encode(value)}',
+        value,
+        i,
+      );
     }
   }
   return value;

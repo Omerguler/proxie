@@ -53,6 +53,22 @@ void main() {
 
   Iterable<JsonDocument> openDocs() => ctx.resources.values.whereType();
 
+  test('live bytes open in an editor scope without a stored call, never '
+      'in the view scope', () async {
+    final bytes = Uint8List.fromList(utf8.encode('{"a":1}'));
+    final h = await OpenJson(
+      'live',
+      JsonBodySide.request,
+      scope: 'breakpoint:live:request',
+      bytes: bytes,
+    ).execute(ctx);
+    expect(h.parseError, isNull);
+    expect(
+      () => OpenJson('live', JsonBodySide.request, bytes: bytes).execute(ctx),
+      throwsA(isA<ArgumentError>()),
+    );
+  });
+
   test('open, page, toggle and close a request body', () async {
     await store.upsert(_call('c1', response: _body('{"ok":true}')));
     final h = await open('c1', JsonBodySide.request);

@@ -98,6 +98,7 @@ class OpenJson extends WorkerCommand<JsonHandle> {
 
   /// A whole body to open instead of the stored one, such as a paused
   /// call's live body (not stored yet, and stored masked once it is).
+  /// Refused in [viewScope] with an [ArgumentError].
   final Uint8List? bytes;
 
   /// The parse error reported for a body that was cut at capture, since
@@ -108,6 +109,11 @@ class OpenJson extends WorkerCommand<JsonHandle> {
   @override
   Future<JsonHandle> execute(WorkerContext ctx) async {
     final live = this.bytes;
+    // The view scope is shared by the read-only detail, which must only
+    // ever show the stored (masked) body.
+    if (live != null && scope == viewScope) {
+      throw ArgumentError.value(scope, 'scope', 'Live bytes need own scope');
+    }
     final (bytes, truncated) = live != null
         ? (live, false)
         : await _stored(ctx);

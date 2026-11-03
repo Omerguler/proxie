@@ -24,6 +24,13 @@ class _Worker implements ProxieWorker {
   );
   final List<WorkerCommand<Object?>> sent = [];
 
+  /// While non-null and incomplete, [JsonEncode] waits for it.
+  Completer<void>? encodeGate;
+
+  /// JSON documents the worker holds open.
+  Iterable<String> get openDocs =>
+      ctx.resources.keys.where(RegExp(r'^json:\d+$').hasMatch);
+
   @override
   int get sessionId => 1;
 
@@ -33,6 +40,7 @@ class _Worker implements ProxieWorker {
   @override
   Future<R> run<R>(WorkerCommand<R> cmd) async {
     sent.add(cmd);
+    if (cmd is JsonEncode) await encodeGate?.future;
     try {
       return await cmd.execute(ctx);
     } on Object catch (e, st) {
@@ -201,6 +209,239 @@ void main() {
       expect(request.body.bytes, original.body.bytes);
     });
 
+    for (final url in [
+      'https://api.test/s?a=1&&b',
+      'https://api.test/p?',
+      'https://api.test/s?q=%E9',
+      'https://api.test/s?t=%FF&u=%zz',
+    ]) {
+      testWidgets('untouched, Execute keeps $url as it is', (tester) async {
+        final done = breakpoints.pause(_paused('a', _request(url)));
+        await pumpEditor(tester);
+        expect(find.byType(BreakpointEditor), findsOneWidget);
+        await tester.tap(_execute);
+        await tester.pumpAndSettle();
+        final request = ((await done) as ExecuteRequest).request;
+        expect(request.url.toString(), Uri.parse(url).toString());
+      });
+    }
+
+    testWidgets('a query escape that is not UTF-8 shows raw in the table', (
+      tester,
+    ) async {
+      unawaited(
+        breakpoints.pause(
+          _paused('a', _request('https://api.test/s?q=%E9&r=caf%C3%A9')),
+        ),
+      );
+      await pumpEditor(tester);
+      await tester.tap(find.text('Query parameters (2)'));
+      await tester.pumpAndSettle();
+      String value(int i) => tester
+          .widget<TextField>(find.byKey(ValueKey('query-value-$i')))
+          .controller!
+          .text;
+      expect(value(0), '%E9');
+      expect(value(1), 'café');
+      await release(tester);
+    });
+
+    testWidgets('a query typed into the URL field replaces the table rows', (
+      tester,
+    ) async {
+      final done = breakpoints.pause(
+        _paused('a', _request('https://api.test/s?a=1')),
+      );
+      await pumpEditor(tester);
+      await tester.enterText(
+        find.byKey(const ValueKey('request-url')),
+        'https://api.test/s?a=1&b=2',
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Query parameters (2)'), findsOneWidget);
+      await tester.tap(_execute);
+      await tester.pumpAndSettle();
+      final request = ((await done) as ExecuteRequest).request;
+      expect(request.url.toString(), 'https://api.test/s?a=1&b=2');
+    });
+
+    final invalid = <(String, Future<void> Function(WidgetTester), String)>[
+      (
+        'a method that is not a token',
+        (t) =>
+            t.enterText(find.byKey(const ValueKey('request-method')), 'GE T'),
+        'not a valid method',
+      ),
+      (
+        'a URL that is not http or https',
+        (t) =>
+            t.enterText(find.byKey(const ValueKey('request-url')), 'ftp://x/y'),
+        'http or https',
+      ),
+      (
+        'a header name with a space',
+        (t) => t.enterText(find.byKey(const ValueKey('header-name-0')), 'x a'),
+        'not a valid header name',
+      ),
+      (
+        'a header value that cannot be sent',
+        (t) =>
+            t.enterText(find.byKey(const ValueKey('header-value-0')), 'café'),
+        'cannot be sent',
+      ),
+    ];
+    for (final (what, edit, error) in invalid) {
+      testWidgets('Execute refuses $what, inline, and keeps the pause', (
+        tester,
+      ) async {
+        unawaited(
+          breakpoints.pause(_paused('a', _request('https://api.test/a'))),
+        );
+        await pumpEditor(tester);
+        await tester.tap(find.text('Headers (1)'));
+        await tester.pumpAndSettle();
+        await edit(tester);
+        await tester.tap(_execute);
+        await tester.pumpAndSettle();
+        expect(breakpoints.pending, hasLength(1));
+        // In the snackbar and next to the field.
+        expect(find.textContaining(error), findsNWidgets(2));
+        await release(tester);
+      });
+    }
+
+    testWidgets('response headers follow the received-value rule', (
+      tester,
+    ) async {
+      final done = breakpoints.pause(
+        _paused(
+          'a',
+          _request('https://api.test/a'),
+          phase: BreakpointPhase.response,
+          response: ProxieResponse(
+            statusCode: 200,
+            headers: const {
+              'x-a': ['é is fine as received'],
+            },
+            body: ProxieBody.empty(),
+          ),
+        ),
+      );
+      await pumpEditor(tester);
+      await tester.tap(find.text('Headers (1)'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const ValueKey('header-name-0')),
+        'x a',
+      );
+      await tester.tap(_execute);
+      await tester.pumpAndSettle();
+      expect(breakpoints.pending, hasLength(1));
+      expect(find.textContaining('not a valid header name'), findsNWidgets(2));
+      tester
+          .state<ScaffoldMessengerState>(find.byType(ScaffoldMessenger).first)
+          .removeCurrentSnackBar();
+      await tester.enterText(
+        find.byKey(const ValueKey('header-name-0')),
+        'x-a',
+      );
+      await tester.pumpAndSettle();
+      expect(find.textContaining('not a valid header name'), findsNothing);
+      await tester.tap(_execute);
+      await tester.pumpAndSettle();
+      final response = ((await done) as ExecuteResponse).response;
+      expect(response.headers['x-a'], ['é is fine as received']);
+    });
+
+    testWidgets('a response breakpoint without a response offers no '
+        'Execute', (tester) async {
+      final done = breakpoints.pause(
+        _paused(
+          'a',
+          _request('https://api.test/a'),
+          phase: BreakpointPhase.response,
+        ),
+      );
+      await pumpEditor(tester);
+      expect(find.textContaining('No response'), findsOneWidget);
+      expect(tester.widget<FilledButton>(_execute).onPressed, isNull);
+      await tester.tap(_abort);
+      await tester.pumpAndSettle();
+      expect(await done, isA<Abort>());
+    });
+
+    testWidgets('JSON documents of paused calls are closed once the calls '
+        'are resolved: Execute, Abort, Continue, timeout', (tester) async {
+      Future<BreakpointResolution> pause(String id) => breakpoints.pause(
+        _paused(
+          id,
+          _request(
+            'https://api.test/$id',
+            method: 'POST',
+            body: _json('{"a":1}'),
+          ),
+        ),
+      );
+      final a = pause('a');
+      final b = pause('b');
+      final c = pause('c');
+      final d = pause('d');
+      await pumpEditor(tester);
+      expect(worker.openDocs, hasLength(1));
+      await tester.tap(_execute);
+      await tester.pumpAndSettle();
+      expect(await a, isA<ExecuteRequest>());
+      await tester.tap(_abort);
+      await tester.pumpAndSettle();
+      expect(await b, isA<Abort>());
+      await tester.tap(_continue);
+      await tester.pumpAndSettle();
+      expect(await c, isA<ContinueUnchanged>());
+      expect(worker.openDocs, hasLength(1), reason: 'only d is open');
+      await tester.pump(const Duration(seconds: 6));
+      await tester.pumpAndSettle();
+      expect(await d, isA<ContinueUnchanged>());
+      expect(find.byType(BreakpointEditor), findsNothing);
+      expect(worker.openDocs, isEmpty);
+    });
+
+    testWidgets('a call that continues while Execute builds tells the user '
+        'and sends nothing', (tester) async {
+      final done = breakpoints.pause(
+        _paused(
+          'a',
+          _request(
+            'https://api.test/a',
+            method: 'POST',
+            body: _json('{"a":1}'),
+          ),
+        ),
+      );
+      unawaited(
+        breakpoints.pause(_paused('b', _request('https://api.test/b'))),
+      );
+      await pumpEditor(tester);
+      final tree = tester
+          .widget<JsonTreeView>(find.byType(JsonTreeView))
+          .controller;
+      await tree.apply(const DeleteNode(1));
+      await tester.pumpAndSettle();
+      worker.encodeGate = Completer<void>();
+      await tester.tap(_execute);
+      await tester.pump();
+      expect(find.byType(LinearProgressIndicator), findsOneWidget);
+      breakpoints.resolve('a', const ContinueUnchanged());
+      await tester.pump();
+      worker.encodeGate!.complete();
+      await tester.pumpAndSettle();
+      expect(await done, isA<ContinueUnchanged>());
+      expect(find.textContaining('already continued'), findsOneWidget);
+      expect(find.textContaining("Couldn't"), findsNothing);
+      expect(find.text('GET https://api.test/b'), findsOneWidget);
+      expect(breakpoints.pending, hasLength(1));
+      await release(tester);
+    });
+
     testWidgets('method, URL and query parameters are edited', (tester) async {
       final done = breakpoints.pause(
         _paused('a', _request('https://api.test/s?q=a%20b&page=1')),
@@ -211,7 +452,7 @@ void main() {
             .widget<TextField>(find.byKey(const ValueKey('request-url')))
             .controller!
             .text,
-        'https://api.test/s',
+        'https://api.test/s?q=a%20b&page=1',
       );
       await tester.enterText(
         find.byKey(const ValueKey('request-method')),
@@ -234,6 +475,14 @@ void main() {
       await tester.pumpAndSettle();
       await tester.enterText(find.byKey(const ValueKey('query-name-2')), 'n');
       await tester.enterText(find.byKey(const ValueKey('query-value-2')), 'v');
+      // The URL field follows the table.
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const ValueKey('request-url')))
+            .controller!
+            .text,
+        'https://api.test/s?q=a%20b&page=2%263&n=v',
+      );
       await tester.tap(_execute);
       await tester.pumpAndSettle();
       final request = ((await done) as ExecuteRequest).request;
@@ -525,6 +774,8 @@ void main() {
         await tester.pumpAndSettle();
         final d = await tester.runAsync(() => decision);
         expect(d, isA<Proceed>());
+        // The drain check runs once the real event loop delivered the drain.
+        await tester.pumpAndSettle();
         expect(find.byType(BreakpointEditor), findsNothing);
         expect(
           shellFinder,
@@ -614,6 +865,112 @@ void main() {
       await tester.runAsync(Proxie.shutdown);
       expect(await tester.runAsync(() => a), isA<Proceed>());
       expect(await tester.runAsync(() => b), isA<Proceed>());
+    });
+
+    testWidgets('backing out of an auto-opened editor hands the inspector to '
+        'the user: it stays open when the queue drains', (tester) async {
+      addTearDown(tester.view.reset);
+      setViewSize(tester, phoneSize);
+      await initProxie(tester);
+      final breakpoints = Proxie.engine!.breakpoints;
+      Proxie.engine!.rules = RuleSet([_breakpointRule()]);
+      await tester.pumpWidget(hostApp());
+      final (a,) = await pauseRequest(tester, '/a');
+      expect(find.byType(BreakpointEditor), findsOneWidget);
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(shellFinder, findsOneWidget);
+
+      await tester.runAsync(() async {
+        breakpoints.resolve(
+          breakpoints.pending.single.callId,
+          const ContinueUnchanged(),
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      });
+      await settleTransitions(tester);
+      expect(await tester.runAsync(() => a), isA<Proceed>());
+      expect(shellFinder, findsOneWidget);
+      await tester.runAsync(Proxie.shutdown);
+    });
+
+    testWidgets('a call resolved and another paused in the same turn keeps '
+        'the inspector up and shows the next call', (tester) async {
+      addTearDown(tester.view.reset);
+      setViewSize(tester, phoneSize);
+      final page = ValueNotifier<Widget?>(null);
+      addTearDown(page.dispose);
+      final adapter = _NotifierAdapter(page);
+      await initProxie(tester, navigation: ProxieNavigation.adapter(adapter));
+      final engine = Proxie.engine!..rules = RuleSet([_breakpointRule()]);
+      await tester.pumpWidget(
+        MaterialApp(
+          builder: Proxie.wrap,
+          home: ValueListenableBuilder<Widget?>(
+            valueListenable: page,
+            builder: (_, p, _) => p ?? const Text('host home'),
+          ),
+        ),
+      );
+      final (a,) = await pauseRequest(tester, '/a');
+      expect(adapter.shows, 1);
+      late Future<RequestDecision> b;
+      await tester.runAsync(() async {
+        engine.breakpoints.resolve(
+          engine.breakpoints.pending.single.callId,
+          const ContinueUnchanged(),
+        );
+        b = engine.onRequest(engine.newCallId(), 'test', getRequest('/b'));
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      });
+      await settleTransitions(tester);
+      expect(await tester.runAsync(() => a), isA<Proceed>());
+      expect(find.text('GET https://api.test/b'), findsOneWidget);
+      expect(adapter.shows, 1);
+      expect(adapter.hides, 0);
+
+      await tester.tap(_continue);
+      await settleTransitions(tester);
+      expect(await tester.runAsync(() => b), isA<Proceed>());
+      expect(adapter.hides, 1, reason: 'opened for the pause, drained');
+      await tester.runAsync(Proxie.shutdown);
+    });
+
+    testWidgets('while calls stay paused behind the inspector, a bar offers '
+        'to open the editor again', (tester) async {
+      addTearDown(tester.view.reset);
+      setViewSize(tester, phoneSize);
+      await initProxie(tester);
+      Proxie.engine!.rules = RuleSet([_breakpointRule()]);
+      await tester.pumpWidget(hostApp());
+      final (a,) = await pauseRequest(tester, '/a');
+      expect(find.text('1 paused'), findsNothing, reason: 'editor on top');
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.text('1 paused'), findsOneWidget);
+      await tester.tap(find.widgetWithText(TextButton, 'Open'));
+      await tester.pumpAndSettle();
+      expect(find.byType(BreakpointEditor), findsOneWidget);
+      await tester.tap(_continue);
+      await tester.pumpAndSettle();
+      expect(await tester.runAsync(() => a), isA<Proceed>());
+      await tester.runAsync(Proxie.shutdown);
+    });
+
+    testWidgets('tablet: the editor covers the split layout', (tester) async {
+      addTearDown(tester.view.reset);
+      setViewSize(tester, tabletSize);
+      await initProxie(tester);
+      Proxie.engine!.rules = RuleSet([_breakpointRule()]);
+      await tester.pumpWidget(hostApp());
+      final (a,) = await pauseRequest(tester, '/a');
+      expect(find.byType(BreakpointEditor), findsOneWidget);
+      expect(tester.getSize(find.byType(BreakpointEditor)), tabletSize);
+      expect(find.text('No requests yet'), findsNothing);
+      await tester.tap(_continue);
+      await tester.pumpAndSettle();
+      expect(await tester.runAsync(() => a), isA<Proceed>());
+      await tester.runAsync(Proxie.shutdown);
     });
 
     testWidgets('shutdown while paused releases every pause', (tester) async {
@@ -707,14 +1064,22 @@ class _NotifierAdapter implements ProxieNavigationAdapter {
   _NotifierAdapter(this.page);
 
   final ValueNotifier<Widget?> page;
+  int shows = 0;
+  int hides = 0;
 
   @override
   bool get isShowing => page.value != null;
 
   @override
-  void show(Widget inspector, {required VoidCallback onDismissed}) =>
-      page.value = inspector;
+  void show(Widget inspector, {required VoidCallback onDismissed}) {
+    shows++;
+    page.value = inspector;
+  }
 
   @override
-  void hide() => page.value = null;
+  void hide() {
+    if (page.value == null) return;
+    hides++;
+    page.value = null;
+  }
 }

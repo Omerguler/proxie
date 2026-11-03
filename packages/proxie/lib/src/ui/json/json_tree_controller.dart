@@ -47,6 +47,7 @@ class JsonTreeController extends ChangeNotifier {
     required this.editable,
     this.scope = OpenJson.viewScope,
     this.bytes,
+    this.closeOnDispose = false,
   }) : side = JsonBodySide.values.byName(which) {
     unawaited(_serial(_open));
   }
@@ -80,6 +81,10 @@ class JsonTreeController extends ChangeNotifier {
 
   /// The body opened instead of the stored one; see [OpenJson.bytes].
   final Uint8List? bytes;
+
+  /// Whether [dispose] closes the document in the worker, as editors do
+  /// with their own scope; read-only views keep theirs cached (P39).
+  final bool closeOnDispose;
 
   JsonRow? _root;
 
@@ -337,6 +342,8 @@ class JsonTreeController extends ChangeNotifier {
       final handle = await worker.run(
         OpenJson(callId, side, scope: scope, bytes: bytes),
       );
+      // Known even when disposed meanwhile, so dispose can close it.
+      _docId = handle.docId;
       if (_disposed) return;
       final root = handle.parseError == null
           ? await worker.run(JsonRootRow(handle.docId))
@@ -516,6 +523,25 @@ class JsonTreeController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    if (closeOnDispose) {
+      // After the operation in flight, which may still be opening it.
+      unawaited(
+        _tail.then((_) async {
+          final docId = _docId;
+          if (docId == null) return;
+          try {
+            await worker.run(CloseJson(docId));
+          } on Object catch (e, st) {
+            developer.log(
+              'Proxie could not close a JSON document',
+              name: 'proxie',
+              error: e,
+              stackTrace: st,
+            );
+          }
+        }),
+      );
+    }
     super.dispose();
   }
 }

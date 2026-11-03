@@ -84,9 +84,10 @@ class ProxieRuntime {
   bool _disposed = false;
   late final StreamSubscription<List<PausedCall>> _paused;
   bool _hadPaused = false;
-  // Whether the inspector was opened for a pause, so it closes again when
-  // the last paused call is resolved.
+  // Whether the inspector was opened for a pause and the user is still on
+  // its editor, so it closes again when the last paused call is resolved.
   bool _openedForPause = false;
+  bool _drainCheck = false;
 
   /// Whether the inspector is drawn in Proxie's own overlay layer.
   bool get isOverlay => navigation is OverlayNavigationAdapter;
@@ -113,6 +114,9 @@ class ProxieRuntime {
                 breakpoints: engine.breakpoints,
                 worker: worker,
                 rawEditableLimit: config.rawEditableLimit,
+                // Going back from the editor to stay in the inspector makes
+                // it the user's: it no longer closes when the queue drains.
+                onEditorLeft: () => _openedForPause = false,
                 child: shell,
               ),
             ),
@@ -134,7 +138,7 @@ class ProxieRuntime {
 
   // The inspector opens when calls start pausing (its BreakpointHost shows
   // the editor), and closes when they are all resolved, unless the user
-  // had it open.
+  // had it open or left the editor for it (P49b).
   void _onPaused(List<PausedCall> pending) {
     if (_disposed) return;
     final had = _hadPaused;
@@ -142,8 +146,15 @@ class ProxieRuntime {
     if (!had && pending.isNotEmpty && !controller.isOpen) {
       controller.open();
       _openedForPause = controller.isOpen;
-    } else if (had && pending.isEmpty && _openedForPause) {
-      controller.close();
+    } else if (had && pending.isEmpty && _openedForPause && !_drainCheck) {
+      // After the events delivered with this one: a call resolved and
+      // another paused at once must not close and reopen the inspector.
+      _drainCheck = true;
+      scheduleMicrotask(() {
+        _drainCheck = false;
+        if (_disposed || !_openedForPause) return;
+        if (engine.breakpoints.pending.isEmpty) controller.close();
+      });
     }
   }
 

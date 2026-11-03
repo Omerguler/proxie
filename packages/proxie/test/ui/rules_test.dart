@@ -8,7 +8,7 @@ import 'package:proxie/proxie.dart';
 import 'package:proxie/src/ui/detail/call_detail.dart';
 import 'package:proxie/src/ui/json/json_tree_controller.dart';
 import 'package:proxie/src/ui/json/json_tree_view.dart';
-import 'package:proxie/src/ui/rules/response_editor.dart';
+import 'package:proxie/src/ui/rules/message_draft.dart';
 import 'package:proxie/src/ui/rules/rule_editor.dart';
 import 'package:proxie/src/ui/rules/rules_controller.dart';
 import 'package:proxie/src/ui/rules/rules_screen.dart';
@@ -254,6 +254,18 @@ void main() {
     final body = engine.rules.rules.single.mapLocal!.response!.body;
     expect(utf8.decode(body.bytes), '{"id":8}');
     expect(body.kind, BodyKind.json);
+  });
+
+  testWidgets('a closed editor releases its document; the detail keeps '
+      'its view', (tester) async {
+    Iterable<String> docs() =>
+        worker.ctx.resources.keys.where(RegExp(r'^json:\d+$').hasMatch);
+    await openMapLocal(tester, _call());
+    await showResponseTab(tester);
+    expect(docs(), hasLength(2));
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(docs(), hasLength(1));
   });
 
   testWidgets('a tree edit is saved from the document; an editor closed '

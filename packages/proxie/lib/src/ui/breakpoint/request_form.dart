@@ -1,20 +1,19 @@
 import 'package:flutter/material.dart';
 
 import 'package:proxie/src/config.dart' show defaultRawEditableLimit;
+import 'package:proxie/src/core/http_rules.dart';
 import 'package:proxie/src/json/json_commands.dart' show JsonBodySide;
 import 'package:proxie/src/model/request.dart';
-import 'package:proxie/src/ui/rules/response_editor.dart';
+import 'package:proxie/src/ui/rules/message_draft.dart';
 import 'package:proxie/src/worker/worker.dart';
 
-/// One editable query parameter. Its text is decoded; an untouched part
-/// keeps its original encoding when the URL is built again.
+/// One query parameter of a [RequestDraft]'s URL, shown decoded. An
+/// untouched part keeps its original encoding when the query is written
+/// back.
 class QueryRow {
   QueryRow._(this._rawName, this._rawValue)
     : name = TextEditingController(text: _decode(_rawName)),
       value = TextEditingController(text: _decode(_rawValue ?? ''));
-
-  /// An empty, new parameter.
-  QueryRow.empty() : this._('', '');
 
   /// The parameter name, decoded.
   final TextEditingController name;
@@ -29,9 +28,18 @@ class QueryRow {
   // A `%` not followed by two hex digits would make decoding throw.
   static final RegExp _badEscape = RegExp('%(?![0-9a-fA-F]{2})');
 
-  // Malformed escapes are shown as they are.
-  static String _decode(String s) =>
-      _badEscape.hasMatch(s) ? s : Uri.decodeQueryComponent(s);
+  /// [s] decoded; kept as it is when it holds a malformed escape or bytes
+  /// that are not UTF-8 (such as a Latin-1 `%E9`), never thrown.
+  static String _decode(String s) {
+    if (_badEscape.hasMatch(s)) return s;
+    try {
+      return Uri.decodeQueryComponent(s);
+    } on FormatException {
+      return s;
+    }
+  }
+
+  bool get _isEmpty => name.text.isEmpty && value.text.isEmpty;
 
   String get _encoded {
     final n = name.text == _decode(_rawName)
@@ -51,94 +59,198 @@ class QueryRow {
   }
 }
 
-/// The request a [RequestForm] edits: method, URL, query parameters,
-/// headers and body. The URL field holds the URL without its query, which
-/// is edited as [query] rows; an untouched request builds back to the
-/// same URL, byte for byte.
+/// The request a [RequestForm] edits: method, URL, headers and body.
+///
+/// The URL field is the source of truth: the [query] rows are parsed from
+/// it (leniently, see [QueryRow]) whenever it is edited, and editing a row
+/// rewrites only the query part of the field. An untouched request builds
+/// back to the very URL it was loaded with.
 class RequestDraft extends MessageDraft {
   /// Creates a draft whose JSON body opens in [scope] of [worker].
-  RequestDraft(super.worker, {super.scope}) : super(side: JsonBodySide.request);
+  RequestDraft(super.worker, {required super.scope})
+    : super(side: JsonBodySide.request) {
+    method.addListener(_clearMethodError);
+    url.addListener(_urlChanged);
+  }
 
   /// The method, as typed.
   final TextEditingController method = TextEditingController();
 
-  /// The URL without its query.
+  /// The whole URL, query included.
   final TextEditingController url = TextEditingController();
 
   final List<QueryRow> _query = [];
+  bool _writing = false;
+  String? _methodError;
+  String? _urlError;
+  bool _closed = false;
 
   /// The query parameters, in order.
   List<QueryRow> get query => List.unmodifiable(_query);
+
+  /// Why the method was refused by the last [validate], or null.
+  String? get methodError => _methodError;
+
+  /// Why the URL was refused by the last [validate], or null.
+  String? get urlError => _urlError;
 
   /// Starts over from [request] of call [callId], live: a JSON body opens
   /// as a tree of its bytes.
   void load(ProxieRequest request, {required String callId}) {
     method.text = request.method;
-    final u = request.url;
-    final s = u.toString();
-    final fragment = u.hasFragment ? '#${u.fragment}' : '';
-    var prefix = s.substring(0, s.length - fragment.length);
-    if (u.hasQuery) {
-      prefix = prefix.substring(0, prefix.length - u.query.length - 1);
+    url.text = request.url.toString();
+    _methodError = null;
+    _urlError = null;
+    loadMessage(request.headers, request.body, callId: callId, live: true);
+  }
+
+  /// The query part of [text]: between the first `?` and the `#` after
+  /// it; null when there is no `?`.
+  static (int, int)? _querySpan(String text) {
+    final q = text.indexOf('?');
+    if (q < 0) return null;
+    final hash = text.indexOf('#', q);
+    return (q + 1, hash < 0 ? text.length : hash);
+  }
+
+  void _urlChanged() {
+    if (_urlError != null) {
+      _urlError = null;
+      _notifyIfOpen();
     }
-    url.text = '$prefix$fragment';
-    for (final q in _query) {
-      q._dispose();
-    }
+    if (_writing) return;
+    final text = url.text;
+    final span = _querySpan(text);
+    final query = span == null ? '' : text.substring(span.$1, span.$2);
+    final parsed = [
+      for (final part in query.split('&'))
+        if (part.isNotEmpty) _split(part),
+    ];
+    final current = [
+      for (final q in _query)
+        if (!q._isEmpty) q._encoded,
+    ];
+    final next = [for (final (n, v) in parsed) _join(n, v)];
+    if (_sameList(current, next)) return;
+    _replaceRows([for (final (n, v) in parsed) QueryRow._(n, v)]);
+  }
+
+  // A query part as (name, value); value null when there is no `=`.
+  static (String, String?) _split(String part) {
+    final eq = part.indexOf('=');
+    return eq < 0
+        ? (part, null)
+        : (part.substring(0, eq), part.substring(eq + 1));
+  }
+
+  static String _join(String name, String? value) =>
+      value == null ? name : '$name=$value';
+
+  void _replaceRows(List<QueryRow> rows) {
+    final old = [..._query];
     _query
       ..clear()
-      ..addAll([
-        if (u.query.isNotEmpty)
-          for (final part in u.query.split('&'))
-            if (part.contains('='))
-              QueryRow._(
-                part.substring(0, part.indexOf('=')),
-                part.substring(part.indexOf('=') + 1),
-              )
-            else
-              QueryRow._(part, null),
-      ]);
-    loadMessage(request.headers, request.body, callId: callId, live: true);
+      ..addAll(rows);
+    rows.forEach(_listenRow);
+    // Their fields are still in this frame's tree.
+    if (old.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        for (final row in old) {
+          row._dispose();
+        }
+      });
+    }
+    _notifyIfOpen();
+  }
+
+  void _listenRow(QueryRow row) {
+    row.name.addListener(_writeQuery);
+    row.value.addListener(_writeQuery);
+  }
+
+  // Rewrites only the query part of the URL field from the rows.
+  void _writeQuery() {
+    final query = [
+      for (final q in _query)
+        if (!q._isEmpty) q._encoded,
+    ].join('&');
+    final text = url.text;
+    final span = _querySpan(text);
+    final String next;
+    if (span == null) {
+      if (query.isEmpty) return;
+      final hash = text.indexOf('#');
+      next = hash < 0
+          ? '$text?$query'
+          : '${text.substring(0, hash)}?$query${text.substring(hash)}';
+    } else {
+      final (start, end) = span;
+      if (text.substring(start, end) == query) return;
+      next = query.isEmpty
+          ? text.substring(0, start - 1) + text.substring(end)
+          : text.substring(0, start) + query + text.substring(end);
+    }
+    _writing = true;
+    try {
+      url.text = next;
+    } finally {
+      _writing = false;
+    }
   }
 
   /// Adds an empty query parameter.
   void addQuery() {
-    _query.add(QueryRow.empty());
-    notifyListeners();
+    final row = QueryRow._('', '');
+    _query.add(row);
+    _listenRow(row);
+    _notifyIfOpen();
   }
 
   /// Removes query parameter [row].
   void removeQuery(QueryRow row) {
     if (!_query.remove(row)) return;
+    row.name.removeListener(_writeQuery);
+    row.value.removeListener(_writeQuery);
+    _writeQuery();
     // The row's fields are still in this frame's tree.
     WidgetsBinding.instance.addPostFrameCallback((_) => row._dispose());
-    notifyListeners();
+    _notifyIfOpen();
   }
 
-  /// The URL as edited, or null when it is not an absolute URL.
+  void _clearMethodError() {
+    if (_methodError == null) return;
+    _methodError = null;
+    _notifyIfOpen();
+  }
+
+  /// The URL as typed, or null when it is not an absolute http(s) URL.
   Uri? get builtUrl {
-    final text = url.text.trim();
-    final hash = text.indexOf('#');
-    final path = hash < 0 ? text : text.substring(0, hash);
-    final fragment = hash < 0 ? '' : text.substring(hash);
-    final parts = [
-      for (final q in _query)
-        if (q.name.text.isNotEmpty || q.value.text.isNotEmpty) q._encoded,
-    ];
-    final query = parts.join('&');
-    final sep = path.contains('?') ? (query.isEmpty ? '' : '&') : '?';
-    final uri = Uri.tryParse(
-      '$path${query.isEmpty ? '' : '$sep$query'}$fragment',
-    );
-    if (uri == null || !uri.hasScheme || uri.host.isEmpty) return null;
+    final uri = Uri.tryParse(url.text.trim());
+    if (uri == null ||
+        (uri.scheme != 'http' && uri.scheme != 'https') ||
+        uri.host.isEmpty) {
+      return null;
+    }
     return uri;
   }
 
-  /// Why the request cannot be sent yet, or null.
+  /// Why the request cannot be sent yet, or null; refused fields show
+  /// [methodError], [urlError] and [HeaderRow.nameError] inline. The rules
+  /// are the ones `dart:io` applies.
   String? validate() {
-    if (method.text.trim().isEmpty) return 'Enter a method';
-    if (builtUrl == null) return 'Enter an absolute URL';
-    return validateBody();
+    final m = method.text.trim();
+    _methodError = m.isEmpty || !isHttpToken(m)
+        ? 'This is not a valid method'
+        : null;
+    _urlError = builtUrl == null
+        ? 'Must be an absolute http or https URL'
+        : null;
+    final headers = validateHeaders(received: false);
+    if (_methodError != null) return '"$m" is not a valid method';
+    if (_urlError != null) {
+      return 'The URL must be absolute and use http or https';
+    }
+    return headers ?? validateBody();
   }
 
   /// The request as edited; check [validate] first. Throws when the edited
@@ -150,8 +262,13 @@ class RequestDraft extends MessageDraft {
     body: await buildBody(),
   );
 
+  void _notifyIfOpen() {
+    if (!_closed) notifyListeners();
+  }
+
   @override
   void dispose() {
+    _closed = true;
     method.dispose();
     url.dispose();
     for (final q in _query) {
@@ -159,6 +276,14 @@ class RequestDraft extends MessageDraft {
     }
     super.dispose();
   }
+}
+
+bool _sameList(List<String> a, List<String> b) {
+  if (a.length != b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    if (a[i] != b[i]) return false;
+  }
+  return true;
 }
 
 /// Edits [draft]: method, URL, query parameters, headers and body.
@@ -190,6 +315,7 @@ class RequestForm extends StatelessWidget {
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
           child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               SizedBox(
                 width: 96,
@@ -197,7 +323,11 @@ class RequestForm extends StatelessWidget {
                   key: const ValueKey('request-method'),
                   controller: draft.method,
                   textCapitalization: TextCapitalization.characters,
-                  decoration: const InputDecoration(labelText: 'Method'),
+                  decoration: InputDecoration(
+                    labelText: 'Method',
+                    errorText: draft.methodError,
+                    errorMaxLines: 3,
+                  ),
                 ),
               ),
               const SizedBox(width: 8),
@@ -206,7 +336,10 @@ class RequestForm extends StatelessWidget {
                   key: const ValueKey('request-url'),
                   controller: draft.url,
                   keyboardType: TextInputType.url,
-                  decoration: const InputDecoration(labelText: 'URL'),
+                  decoration: InputDecoration(
+                    labelText: 'URL',
+                    errorText: draft.urlError,
+                  ),
                 ),
               ),
             ],
