@@ -431,8 +431,14 @@ abstract class MessageDraft extends ChangeNotifier {
               ? unreceivableHeaderChar(value)
               : unsendableHeaderChar(value)) >=
           0) {
-        h._valueError = 'Has a character that cannot be sent';
-        first ??= 'The value of "$name" has a character that cannot be sent';
+        // The mask is not US-ASCII, so a masked value cannot go out as is.
+        if (value.contains(kMask)) {
+          h._valueError = 'Masked at capture; retype the value';
+          first ??= 'The value of "$name" was masked at capture; retype it';
+        } else {
+          h._valueError = 'Has a character that cannot be sent';
+          first ??= 'The value of "$name" has a character that cannot be sent';
+        }
       }
     }
     _notify();

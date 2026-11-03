@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'package:proxie/src/config.dart' show defaultRawEditableLimit;
 import 'package:proxie/src/core/http_rules.dart';
+import 'package:proxie/src/core/masking.dart' show kMask;
 import 'package:proxie/src/json/json_commands.dart' show JsonBodySide;
 import 'package:proxie/src/model/request.dart';
 import 'package:proxie/src/ui/rules/message_draft.dart';
@@ -108,14 +109,16 @@ class RequestDraft extends MessageDraft {
   /// Why the URL was refused by the last [validate], or null.
   String? get urlError => _urlError;
 
-  /// Starts over from [request] of call [callId], live: a JSON body opens
-  /// as a tree of its bytes.
-  void load(ProxieRequest request, {required String callId}) {
+  /// Starts over from [request] of call [callId]. A [live] request (a
+  /// paused call) opens a JSON body as a tree of its bytes; otherwise the
+  /// request is the stored, masked copy: its JSON body opens from the store
+  /// and masked values are counted (see [MessageDraft.maskedCount]).
+  void load(ProxieRequest request, {required String callId, bool live = true}) {
     method.text = request.method;
     url.text = request.url.toString();
     _methodError = null;
     _urlError = null;
-    loadMessage(request.headers, request.body, callId: callId, live: true);
+    loadMessage(request.headers, request.body, callId: callId, live: live);
   }
 
   /// The query part of [text]: from the first `?` to the first `#` (a
@@ -370,7 +373,7 @@ class RequestForm extends StatelessWidget {
         MessageHeaders(
           key: ValueKey(('headers', draft.generation)),
           draft: draft,
-          expanded: false,
+          expanded: draft.headers.any((h) => h.value.text == kMask),
         ),
         const Divider(height: 1),
         Expanded(

@@ -347,10 +347,15 @@ class _Header extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(width: 10),
-                    Text(
-                      status,
-                      style: theme.textTheme.labelLarge?.copyWith(
-                        color: statusColor,
+                    // Narrow when every action button is shown.
+                    Flexible(
+                      child: Text(
+                        status,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.labelLarge?.copyWith(
+                          color: statusColor,
+                        ),
                       ),
                     ),
                   ],

@@ -144,6 +144,26 @@ class ProxieEngine {
     return Proceed(current);
   }
 
+  /// Records the start of call [callId] that Proxie sends itself (a replay
+  /// from the inspector), stamped with [tags]. No rules are consulted:
+  /// nothing pauses or answers it. Finish it with [recordResponse] or
+  /// [onError].
+  void recordRequest(
+    String callId,
+    String adapter,
+    ProxieRequest req, {
+    Set<CallTag> tags = const {},
+  }) {
+    if (_disposed) return;
+    if (_states.containsKey(callId)) {
+      breakpoints.resolve(callId, const ContinueUnchanged());
+    }
+    final state = _CallState(req, adapter, DateTime.now());
+    state.tags.addAll(tags);
+    _states[callId] = state;
+    _emit(callId, state);
+  }
+
   /// Records [res] for call [callId] and returns the response for the app.
   ///
   /// Pauses at a matching response breakpoint first, which may edit the

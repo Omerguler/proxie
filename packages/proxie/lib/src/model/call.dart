@@ -9,10 +9,12 @@ enum CallTag {
   /// The call was answered by a Map Local rule.
   mapLocal,
 
-  /// The request or response was changed at a breakpoint.
+  /// The request or response was changed at a breakpoint, or a replayed
+  /// request was changed before it was sent.
   edited,
 
-  /// The call was sent again from the inspector.
+  /// A new call made by sending an earlier call's request again from the
+  /// inspector's "Edit & resend"; no rules apply to it.
   replayed,
 
   /// A body was cut at the capture cap.

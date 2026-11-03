@@ -7,11 +7,14 @@ import 'package:proxie/src/adapters/capture_adapter.dart';
 import 'package:proxie/src/config.dart';
 import 'package:proxie/src/core/breakpoint_controller.dart';
 import 'package:proxie/src/core/engine.dart';
+import 'package:proxie/src/core/replay.dart';
 import 'package:proxie/src/navigation/navigation_adapter.dart';
 import 'package:proxie/src/navigation/overlay_navigation.dart';
 import 'package:proxie/src/ui/breakpoint/breakpoint_editor.dart';
 import 'package:proxie/src/ui/bubble.dart';
 import 'package:proxie/src/ui/detail/call_detail.dart';
+import 'package:proxie/src/ui/detail/copy_actions.dart';
+import 'package:proxie/src/ui/detail/resend_sheet.dart';
 import 'package:proxie/src/ui/inspector_shell.dart';
 import 'package:proxie/src/ui/list/call_list.dart';
 import 'package:proxie/src/ui/rules/rule_editor.dart';
@@ -170,13 +173,31 @@ class ProxieRuntime {
     );
   }
 
-  Widget _buildDetail(BuildContext context, String callId) => CallDetail(
-    worker: worker,
-    calls: engine.calls,
-    callId: callId,
-    renderCap: config.renderCap,
-    actions: ruleDetailActions(context),
-  );
+  Widget _buildDetail(BuildContext context, String callId) {
+    final rules = ruleDetailActions(context);
+    final inspector = ProxieInspectorController.of(context);
+    return CallDetail(
+      worker: worker,
+      calls: engine.calls,
+      callId: callId,
+      renderCap: config.renderCap,
+      actions: ProxieDetailActions(
+        onMapLocal: rules.onMapLocal,
+        onBreakpoint: rules.onBreakpoint,
+        onEditResend: (call) => unawaited(
+          openResendSheet(
+            context,
+            call: call,
+            worker: worker,
+            send: (original, edited) =>
+                replayCall(original, edited, adapters, engine: engine),
+            rawEditableLimit: config.rawEditableLimit,
+            onOpenCall: inspector.select,
+          ),
+        ),
+      ),
+    );
+  }
 
   void _onDismissed() {
     if (!_disposed) controller.close();
