@@ -8,6 +8,7 @@ import 'package:proxie/proxie.dart';
 import 'package:proxie/src/ui/detail/call_detail.dart';
 import 'package:proxie/src/ui/json/json_tree_controller.dart';
 import 'package:proxie/src/ui/json/json_tree_view.dart';
+import 'package:proxie/src/ui/rules/response_editor.dart';
 import 'package:proxie/src/ui/rules/rule_editor.dart';
 import 'package:proxie/src/ui/rules/rules_controller.dart';
 import 'package:proxie/src/ui/rules/rules_screen.dart';
@@ -467,6 +468,71 @@ void main() {
     expect(engine.rules.rules, hasLength(1));
   });
 
+  testWidgets('the masked-value warning follows edits and clears once every '
+      'masked value is replaced', (tester) async {
+    await openMapLocal(
+      tester,
+      _call(
+        headers: const {
+          'content-type': ['application/json'],
+          'set-cookie': [kMask],
+        },
+        body: _json('{"access_token":"$kMask","id":1}'),
+      ),
+    );
+    await showResponseTab(tester);
+    // The body is scanned in the worker.
+    expect(worker.sentOf<CountMasked>(), isNotEmpty);
+    expect(find.textContaining('2 values were masked'), findsOneWidget);
+
+    await tester.enterText(
+      find.byKey(const ValueKey('header-value-1')),
+      'sid=1',
+    );
+    await tester.pumpAndSettle();
+    expect(find.textContaining('1 value was masked'), findsOneWidget);
+    expect(find.byTooltip('Masked at capture'), findsNothing);
+
+    await tester.tap(find.byTooltip('Raw text'));
+    await tester.pumpAndSettle();
+    await tester.enterText(_rawEditor, '{"access_token":"real","id":1}');
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('masked at capture'), findsNothing);
+  });
+
+  testWidgets('Latin-1 bodies are scanned for their "******" form', (
+    tester,
+  ) async {
+    await openMapLocal(
+      tester,
+      _call(
+        headers: const {
+          'content-type': ['text/plain; charset=iso-8859-1'],
+        },
+        body: ProxieBody(
+          bytes: Uint8List.fromList(latin1.encode('{"token":"******"}')),
+          contentType: 'text/plain; charset=iso-8859-1',
+          kind: BodyKind.text,
+        ),
+      ),
+    );
+    await showResponseTab(tester);
+    expect(find.textContaining('1 value was masked'), findsOneWidget);
+  });
+
+  testWidgets('the captured-body preset brings the masked warning back', (
+    tester,
+  ) async {
+    await openMapLocal(tester, _call(body: _json('{"access_token":"$kMask"}')));
+    await showResponseTab(tester);
+    expect(find.textContaining('1 value was masked'), findsOneWidget);
+    await pickPreset(tester, '404 Not Found');
+    expect(find.textContaining('masked at capture'), findsNothing);
+    await pickPreset(tester, '200 OK (captured body)');
+    expect(find.textContaining('1 value was masked'), findsOneWidget);
+  });
+
   testWidgets('transport headers of a captured response are dropped', (
     tester,
   ) async {
@@ -485,6 +551,19 @@ void main() {
     expect(engine.rules.rules.single.mapLocal!.response!.headers, {
       'content-type': ['application/json'],
     });
+  });
+
+  test('flush gives up after its timeout and says so', () async {
+    final slow = _Worker(store)..gate = Completer<void>();
+    final controller = RulesController(worker: slow, engine: engine);
+    addTearDown(controller.dispose);
+    unawaited(controller.save(_rule('a')));
+    expect(
+      await controller.flush(timeout: const Duration(milliseconds: 20)),
+      isFalse,
+    );
+    slow.gate!.complete();
+    expect(await controller.flush(), isTrue);
   });
 
   test('flush waits for a pending save', () async {

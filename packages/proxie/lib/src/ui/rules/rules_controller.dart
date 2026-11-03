@@ -100,13 +100,36 @@ class RulesController extends ChangeNotifier {
     return _commit(next);
   }
 
-  /// Completes once every save started so far has finished (saves never
-  /// throw), so the worker can be disposed without losing the last change.
-  Future<void> flush() async {
-    Future<bool>? last;
-    while (_tail != null && !identical(_tail, last)) {
-      last = _tail;
-      await last;
+  /// How long [flush] waits by default: as long as a worker gets to
+  /// dispose (`IsolateWorker.defaultDisposeTimeout`, not imported here so
+  /// the web build never sees dart:isolate).
+  static const flushTimeout = Duration(seconds: 5);
+
+  /// Waits until every save started so far has finished (saves never
+  /// throw), so the worker can be disposed without losing the last change;
+  /// true when they did. After [timeout] it gives up (a stuck worker must
+  /// not hang shutdown), logs that, and returns false.
+  Future<bool> flush({Duration timeout = flushTimeout}) async {
+    Future<void> settle() async {
+      Future<bool>? last;
+      while (_tail != null && !identical(_tail, last)) {
+        last = _tail;
+        await last;
+      }
+    }
+
+    try {
+      await settle().timeout(timeout);
+      return true;
+    } on TimeoutException catch (e, st) {
+      developer.log(
+        'Proxie stopped waiting for a rule save after $timeout; the last '
+        'rule change may not be stored',
+        name: 'proxie',
+        error: e,
+        stackTrace: st,
+      );
+      return false;
     }
   }
 

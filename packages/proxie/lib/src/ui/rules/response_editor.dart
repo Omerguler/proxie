@@ -29,6 +29,37 @@ const Set<String> transportHeaders = {
   'transfer-encoding',
 };
 
+/// How many values [bytes] (or [text]) hold that masking replaced: JSON
+/// strings equal to the mask, `"******"` in a [latin1] body. Runs in the
+/// worker, so a large body is never scanned on the UI isolate.
+class CountMasked extends WorkerCommand<int> {
+  /// Counts in the body [bytes].
+  const CountMasked(Uint8List this.bytes, {this.latin1 = false}) : text = null;
+
+  /// Counts in an edited body's [text].
+  const CountMasked.text(String this.text, {this.latin1 = false})
+    : bytes = null;
+
+  /// The body as stored, or null when [text] is given.
+  final Uint8List? bytes;
+
+  /// The body as edited, or null when [bytes] are given.
+  final String? text;
+
+  /// Whether the body is ISO-8859-1, masked as `******`.
+  final bool latin1;
+
+  @override
+  Future<int> execute(WorkerContext ctx) async {
+    final t = text;
+    if (t != null) {
+      final pattern = latin1 ? '"******"' : '"$kMask"';
+      return pattern.allMatches(t).length;
+    }
+    return _count(bytes!, latin1 ? _maskedLatin1 : _maskedUtf8);
+  }
+}
+
 /// How often [pattern] occurs in [bytes].
 int _count(Uint8List bytes, List<int> pattern) {
   var n = 0;
@@ -90,7 +121,10 @@ class ResponseDraft extends ChangeNotifier {
   String? _contentType;
   bool _json = false;
   bool _truncated = false;
-  int _masked = 0;
+  int _maskedHeaders = 0;
+  int _maskedBody = 0;
+  int _countGeneration = 0;
+  Timer? _recount;
   int _keptBytes = 0;
   int _totalBytes = 0;
   String? _rawText;
@@ -114,7 +148,9 @@ class ResponseDraft extends ChangeNotifier {
 
   /// Values the stored copy had masked (P19): header values and JSON
   /// strings equal to the mask, which a mock would send as they are.
-  int get maskedCount => _masked;
+  /// Header values still equal to the mask count live; the body is
+  /// counted again in the worker shortly after it is edited.
+  int get maskedCount => _maskedHeaders + _maskedBody;
 
   /// Bytes kept of a [truncated] body.
   int get keptBytes => _keptBytes;
@@ -163,13 +199,17 @@ class ResponseDraft extends ChangeNotifier {
             for (final v in e.value) HeaderRow(e.key, v),
       ]);
     final body = response.body;
-    _masked = !captured
-        ? 0
-        : _headers.where((h) => h.value.text == kMask).length +
-              _count(
-                body.bytes,
-                isLatin1Text(body.contentType) ? _maskedLatin1 : _maskedUtf8,
-              );
+    for (final h in _headers) {
+      h.value.addListener(_headersChanged);
+    }
+    _maskedHeaders = _countMaskedHeaders();
+    _maskedBody = 0;
+    _recount?.cancel();
+    unawaited(
+      _countBody(
+        CountMasked(body.bytes, latin1: isLatin1Text(body.contentType)),
+      ),
+    );
     _bytes = body.bytes;
     _contentType = body.contentType;
     _json = body.kind == BodyKind.json;
@@ -188,6 +228,7 @@ class ResponseDraft extends ChangeNotifier {
         scope: ruleEditorScope,
       );
       _tree = tree;
+      tree.addListener(_treeChanged);
       // A document left edited by an editor that closed without saving is
       // still open in this scope; start from the captured body.
       void fresh() {
@@ -203,15 +244,80 @@ class ResponseDraft extends ChangeNotifier {
     _notify();
   }
 
+  int _countMaskedHeaders() =>
+      _headers.where((h) => h.value.text == kMask).length;
+
+  void _headersChanged() {
+    final n = _countMaskedHeaders();
+    if (n == _maskedHeaders) return;
+    _maskedHeaders = n;
+    _notify();
+  }
+
+  // The tree notifies for every fetch too; only edits are counted again.
+  void _treeChanged() {
+    if (_tree?.edited ?? false) _scheduleRecount();
+  }
+
+  void _scheduleRecount() {
+    _recount?.cancel();
+    _recount = Timer(const Duration(milliseconds: 300), () {
+      final raw = _rawText;
+      final latin = isLatin1Text(contentType);
+      if (raw != null) {
+        unawaited(_countBody(CountMasked.text(raw, latin1: latin)));
+        return;
+      }
+      final tree = _tree;
+      if (tree == null || !tree.edited) return;
+      final generation = _countGeneration;
+      unawaited(() async {
+        try {
+          final bytes = await tree.encode();
+          if (generation != _countGeneration) return;
+          await _countBody(CountMasked(bytes, latin1: latin));
+        } on Object catch (e, st) {
+          developer.log(
+            'Proxie could not encode the body to look for masked values',
+            name: 'proxie',
+            error: e,
+            stackTrace: st,
+          );
+        }
+      }());
+    });
+  }
+
+  // The latest count wins; a failed count keeps the last one shown.
+  Future<void> _countBody(CountMasked command) async {
+    final generation = ++_countGeneration;
+    try {
+      final n = await worker.run(command);
+      if (_disposed || generation != _countGeneration) return;
+      if (n == _maskedBody) return;
+      _maskedBody = n;
+      _notify();
+    } on Object catch (e, st) {
+      developer.log(
+        'Proxie could not look for masked values',
+        name: 'proxie',
+        error: e,
+        stackTrace: st,
+      );
+    }
+  }
+
   /// Adds an empty header line.
   void addHeader() {
-    _headers.add(HeaderRow('', ''));
+    _headers.add(HeaderRow('', '')..value.addListener(_headersChanged));
     _notify();
   }
 
   /// Removes header line [row].
   void removeHeader(HeaderRow row) {
     if (!_headers.remove(row)) return;
+    row.value.removeListener(_headersChanged);
+    _maskedHeaders = _countMaskedHeaders();
     // The row's fields are still in this frame's tree.
     WidgetsBinding.instance.addPostFrameCallback((_) => row._dispose());
     _notify();
@@ -251,6 +357,7 @@ class ResponseDraft extends ChangeNotifier {
     final first = _rawText == null || _truncated;
     _rawText = text;
     _truncated = false;
+    _scheduleRecount();
     if (first) _notify();
   }
 
@@ -306,6 +413,7 @@ class ResponseDraft extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _recount?.cancel();
     status.dispose();
     for (final h in _headers) {
       h._dispose();
