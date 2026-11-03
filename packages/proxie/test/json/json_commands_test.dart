@@ -53,6 +53,22 @@ void main() {
 
   Iterable<JsonDocument> openDocs() => ctx.resources.values.whereType();
 
+  test(
+    'a close from an earlier open leaves a document reopened since',
+    () async {
+      final bytes = Uint8List.fromList(utf8.encode('{"a":1}'));
+      OpenJson open() =>
+          OpenJson('c', JsonBodySide.request, scope: 'editor', bytes: bytes);
+      final first = await open().execute(ctx);
+      final second = await open().execute(ctx);
+      expect(second.docId, first.docId, reason: 'reused');
+      await CloseJson(first.docId, openToken: first.openToken).execute(ctx);
+      expect(openDocs(), hasLength(1));
+      await CloseJson(second.docId, openToken: second.openToken).execute(ctx);
+      expect(openDocs(), isEmpty);
+    },
+  );
+
   test('live bytes open in an editor scope without a stored call, never '
       'in the view scope', () async {
     final bytes = Uint8List.fromList(utf8.encode('{"a":1}'));

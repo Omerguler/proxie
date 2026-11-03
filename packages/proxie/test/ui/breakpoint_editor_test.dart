@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:proxie/proxie.dart';
 import 'package:proxie/src/ui/breakpoint/breakpoint_editor.dart';
 import 'package:proxie/src/ui/detail/call_detail.dart';
+import 'package:proxie/src/ui/json/json_tree_controller.dart';
 import 'package:proxie/src/ui/json/json_tree_view.dart';
 import 'package:proxie/src/ui/rules/rule_editor.dart';
 import 'package:proxie/src/ui/rules/rules_controller.dart';
@@ -225,6 +226,60 @@ void main() {
         expect(request.url.toString(), Uri.parse(url).toString());
       });
     }
+
+    testWidgets('focusing a query row without typing leaves the URL as it '
+        'is', (tester) async {
+      const url = 'https://api.test/s?a=1&&b';
+      final done = breakpoints.pause(_paused('a', _request(url)));
+      await pumpEditor(tester);
+      await tester.tap(find.text('Query parameters (2)'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('query-name-0')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('query-value-1')));
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const ValueKey('request-url')))
+            .controller!
+            .text,
+        url,
+      );
+      FocusManager.instance.primaryFocus?.unfocus();
+      await tester.pumpAndSettle();
+      await tester.tap(_execute);
+      await tester.pumpAndSettle();
+      final request = ((await done) as ExecuteRequest).request;
+      expect(request.url.toString(), url);
+    });
+
+    testWidgets('a ? in the fragment is not a query', (tester) async {
+      final done = breakpoints.pause(
+        _paused('a', _request('https://api.test/p#a?b')),
+      );
+      await pumpEditor(tester);
+      expect(find.text('Query parameters (0)'), findsOneWidget);
+      await tester.tap(find.text('Query parameters (0)'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Add parameter'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(const ValueKey('query-name-0')), 'n');
+      await tester.enterText(find.byKey(const ValueKey('query-value-0')), '1');
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const ValueKey('request-url')))
+            .controller!
+            .text,
+        'https://api.test/p?n=1#a?b',
+      );
+      FocusManager.instance.primaryFocus?.unfocus();
+      await tester.pumpAndSettle();
+      await tester.tap(_execute);
+      await tester.pumpAndSettle();
+      final request = ((await done) as ExecuteRequest).request;
+      expect(request.url.queryParameters, {'n': '1'});
+      expect(request.url.fragment, 'a?b');
+    });
 
     testWidgets('a query escape that is not UTF-8 shows raw in the table', (
       tester,
@@ -716,6 +771,34 @@ void main() {
       expect(find.textContaining('Status must be'), findsOneWidget);
       await release(tester);
     });
+  });
+
+  test('a disposed controller does not close the document a newer one '
+      'reopened in the same scope', () async {
+    final store = MemoryStore();
+    await store.startSession();
+    final worker = _Worker(store);
+    final bytes = Uint8List.fromList(utf8.encode('{"a":1}'));
+    JsonTreeController controller() => JsonTreeController(
+      worker,
+      'c',
+      'request',
+      editable: true,
+      scope: 'editor',
+      bytes: bytes,
+      closeOnDispose: true,
+    );
+    final old = controller();
+    await pumpEventQueue();
+    final fresh = controller();
+    await pumpEventQueue();
+    expect(fresh.status, JsonTreeStatus.ready);
+    old.dispose();
+    await pumpEventQueue();
+    expect(worker.openDocs, hasLength(1));
+    fresh.dispose();
+    await pumpEventQueue();
+    expect(worker.openDocs, isEmpty);
   });
 
   group('auto-open', () {

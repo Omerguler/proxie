@@ -41,6 +41,20 @@ class QueryRow {
 
   bool get _isEmpty => name.text.isEmpty && value.text.isEmpty;
 
+  late String _seenName = name.text;
+  late String _seenValue = value.text;
+  VoidCallback _onText = _noop;
+
+  static void _noop() {}
+
+  // Whether the text changed since last asked.
+  bool _textChanged() {
+    if (name.text == _seenName && value.text == _seenValue) return false;
+    _seenName = name.text;
+    _seenValue = value.text;
+    return true;
+  }
+
   String get _encoded {
     final n = name.text == _decode(_rawName)
         ? _rawName
@@ -104,13 +118,14 @@ class RequestDraft extends MessageDraft {
     loadMessage(request.headers, request.body, callId: callId, live: true);
   }
 
-  /// The query part of [text]: between the first `?` and the `#` after
-  /// it; null when there is no `?`.
+  /// The query part of [text]: from the first `?` to the first `#` (a
+  /// `?` inside the fragment belongs to it); null when there is none.
   static (int, int)? _querySpan(String text) {
-    final q = text.indexOf('?');
+    final hash = text.indexOf('#');
+    final end = hash < 0 ? text.length : hash;
+    final q = text.substring(0, end).indexOf('?');
     if (q < 0) return null;
-    final hash = text.indexOf('#', q);
-    return (q + 1, hash < 0 ? text.length : hash);
+    return (q + 1, end);
   }
 
   void _urlChanged() {
@@ -163,9 +178,14 @@ class RequestDraft extends MessageDraft {
     _notifyIfOpen();
   }
 
+  // Controllers also notify on focus and selection changes; only a text
+  // change rewrites the URL, so an untouched one is sent verbatim.
   void _listenRow(QueryRow row) {
-    row.name.addListener(_writeQuery);
-    row.value.addListener(_writeQuery);
+    row._onText = () {
+      if (row._textChanged()) _writeQuery();
+    };
+    row.name.addListener(row._onText);
+    row.value.addListener(row._onText);
   }
 
   // Rewrites only the query part of the URL field from the rows.
@@ -209,8 +229,8 @@ class RequestDraft extends MessageDraft {
   /// Removes query parameter [row].
   void removeQuery(QueryRow row) {
     if (!_query.remove(row)) return;
-    row.name.removeListener(_writeQuery);
-    row.value.removeListener(_writeQuery);
+    row.name.removeListener(row._onText);
+    row.value.removeListener(row._onText);
     _writeQuery();
     // The row's fields are still in this frame's tree.
     WidgetsBinding.instance.addPostFrameCallback((_) => row._dispose());

@@ -52,6 +52,7 @@ class JsonHandle {
     required this.truncated,
     this.parseError,
     this.dirty = false,
+    this.openToken = 0,
   });
 
   /// Names the document in later commands; valid until [CloseJson] or
@@ -70,6 +71,10 @@ class JsonHandle {
   /// Whether the document returned already holds edits (it was reopened
   /// in the same scope after edits; see [OpenJson.scope]).
   final bool dirty;
+
+  /// Names this open of the document: a [CloseJson] passing it closes the
+  /// document only if nobody opened it again since.
+  final int openToken;
 }
 
 /// Parses the [side] body of call [callId] into a document held by the
@@ -130,6 +135,7 @@ class OpenJson extends WorkerCommand<JsonHandle> {
           : (truncated ? truncatedError : doc.parseError),
       truncated: truncated,
       dirty: doc.dirty,
+      openToken: docs.touchOpen(docId),
     );
   }
 
@@ -336,15 +342,24 @@ class JsonRootRow extends WorkerCommand<JsonRow?> {
 
 /// Releases a document; unknown ids are ignored.
 class CloseJson extends WorkerCommand<void> {
-  /// Creates a command that closes document [docId].
-  const CloseJson(this.docId);
+  /// Creates a command that closes document [docId]; with [openToken]
+  /// (see [JsonHandle.openToken]) only if it was not opened again since.
+  const CloseJson(this.docId, {this.openToken});
 
   /// The document to release.
   final String docId;
 
+  /// The open this close belongs to; null closes unconditionally.
+  final int? openToken;
+
   @override
-  Future<void> execute(WorkerContext ctx) async =>
-      _JsonDocs.of(ctx).remove(docId);
+  Future<void> execute(WorkerContext ctx) async {
+    final docs = _JsonDocs.of(ctx);
+    final token = openToken;
+    // A later open (the same scope reused by a newer editor) owns it now.
+    if (token != null && docs.lastOpen(docId) != token) return;
+    docs.remove(docId);
+  }
 }
 
 class _Entry {
@@ -358,6 +373,9 @@ class _Entry {
 
   /// Nodes charged to the budget for this document.
   int nodes;
+
+  /// The token of the latest open; see [JsonHandle.openToken].
+  int lastOpen = 0;
 }
 
 /// Open documents, stored in [WorkerContext.resources] as `json:<docId>`,
@@ -379,6 +397,7 @@ class _JsonDocs {
   /// Doc id per `callId \0 side \0 scope`.
   final Map<String, String> _bySource = {};
   int _nextId = 0;
+  int _openCount = 0;
   int _nodes = 0;
 
   JsonDocument _doc(String docId) => _resources['json:$docId']! as JsonDocument;
@@ -411,6 +430,12 @@ class _JsonDocs {
     _nodes += nodes;
     return (id, doc);
   }
+
+  /// Records another open of [docId] and returns its token.
+  int touchOpen(String docId) => _open[docId]!.lastOpen = ++_openCount;
+
+  /// The token of the latest open of [docId]; null when it is not open.
+  int? lastOpen(String docId) => _open[docId]?.lastOpen;
 
   /// The body [docId] was opened from; null when it did not parse.
   Uint8List? bytes(String docId) => _open[docId]?.bytes;

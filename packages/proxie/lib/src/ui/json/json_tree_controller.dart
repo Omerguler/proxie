@@ -90,6 +90,7 @@ class JsonTreeController extends ChangeNotifier {
 
   JsonTreeStatus _status = JsonTreeStatus.loading;
   String? _docId;
+  int? _openToken;
   int _visibleCount = 0;
   String? _parseError;
   bool _truncated = false;
@@ -344,6 +345,7 @@ class JsonTreeController extends ChangeNotifier {
       );
       // Known even when disposed meanwhile, so dispose can close it.
       _docId = handle.docId;
+      _openToken = handle.openToken;
       if (_disposed) return;
       final root = handle.parseError == null
           ? await worker.run(JsonRootRow(handle.docId))
@@ -530,7 +532,9 @@ class JsonTreeController extends ChangeNotifier {
           final docId = _docId;
           if (docId == null) return;
           try {
-            await worker.run(CloseJson(docId));
+            // Only this controller's open: a newer controller may have
+            // reopened the same scope meanwhile.
+            await worker.run(CloseJson(docId, openToken: _openToken));
           } on Object catch (e, st) {
             developer.log(
               'Proxie could not close a JSON document',
