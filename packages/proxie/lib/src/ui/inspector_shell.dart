@@ -76,6 +76,7 @@ class ProxieInspector extends StatelessWidget {
     this.listBuilder,
     this.detailBuilder,
     this.rulesBuilder,
+    this.shellBuilder,
   });
 
   /// Holds whether the inspector is open and which call it shows.
@@ -97,6 +98,10 @@ class ProxieInspector extends StatelessWidget {
   /// is hidden when null.
   final WidgetBuilder? rulesBuilder;
 
+  /// Wraps the list/detail layout inside the inspector's navigator, e.g.
+  /// with a widget that opens pages there itself (see [navigatorOf]).
+  final Widget Function(BuildContext context, Widget shell)? shellBuilder;
+
   /// The navigator of the [ProxieInspector] around [context], or the
   /// nearest one when there is none: pages opened from the inspector go
   /// there, above the list/detail layout, so a layout change keeps them.
@@ -108,20 +113,25 @@ class ProxieInspector extends StatelessWidget {
       Navigator.of(context);
 
   @override
-  Widget build(BuildContext context) => ProxieThemed(
-    mode: themeMode,
-    child: ScaffoldMessenger(
-      child: _InspectorNavigator(
-        child: InspectorShell(
-          controller: controller,
-          splitWidth: splitWidth,
-          listBuilder: listBuilder,
-          detailBuilder: detailBuilder,
-          rulesBuilder: rulesBuilder,
+  Widget build(BuildContext context) {
+    final shell = InspectorShell(
+      controller: controller,
+      splitWidth: splitWidth,
+      listBuilder: listBuilder,
+      detailBuilder: detailBuilder,
+      rulesBuilder: rulesBuilder,
+    );
+    return ProxieThemed(
+      mode: themeMode,
+      child: ScaffoldMessenger(
+        child: _InspectorNavigator(
+          child: Builder(
+            builder: (context) => shellBuilder?.call(context, shell) ?? shell,
+          ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 class _InspectorNavigatorScope extends InheritedWidget {

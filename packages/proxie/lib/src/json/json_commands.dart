@@ -80,8 +80,8 @@ class JsonHandle {
 /// its own copy.
 class OpenJson extends WorkerCommand<JsonHandle> {
   /// Creates a command that opens the [side] body of call [callId] in
-  /// [scope].
-  const OpenJson(this.callId, this.side, {this.scope = viewScope});
+  /// [scope]; with [bytes], those instead of the stored body.
+  const OpenJson(this.callId, this.side, {this.scope = viewScope, this.bytes});
 
   /// The scope read-only views share.
   static const viewScope = 'view';
@@ -96,6 +96,10 @@ class OpenJson extends WorkerCommand<JsonHandle> {
   /// Which of the call's bodies is opened.
   final JsonBodySide side;
 
+  /// A whole body to open instead of the stored one, such as a paused
+  /// call's live body (not stored yet, and stored masked once it is).
+  final Uint8List? bytes;
+
   /// The parse error reported for a body that was cut at capture, since
   /// its tail, not the JSON, is what is missing.
   static const truncatedError =
@@ -103,6 +107,28 @@ class OpenJson extends WorkerCommand<JsonHandle> {
 
   @override
   Future<JsonHandle> execute(WorkerContext ctx) async {
+    final live = this.bytes;
+    final (bytes, truncated) = live != null
+        ? (live, false)
+        : await _stored(ctx);
+    final docs = _JsonDocs.of(ctx);
+    final source = '$callId\u0000${side.name}\u0000$scope';
+    final (docId, doc) =
+        docs.reuse(source, bytes) ??
+        docs.add(source, bytes, JsonDocument.tryParse(bytes));
+    return JsonHandle(
+      docId: docId,
+      visibleCount: doc.visibleCount,
+      parseError: doc.parseError == null
+          ? null
+          : (truncated ? truncatedError : doc.parseError),
+      truncated: truncated,
+      dirty: doc.dirty,
+    );
+  }
+
+  /// The stored body's bytes and whether it was cut at capture.
+  Future<(Uint8List, bool)> _stored(WorkerContext ctx) async {
     final call = await ctx.store.get(callId);
     if (call == null) throw StateError('No call $callId');
     final ProxieBody body;
@@ -114,20 +140,7 @@ class OpenJson extends WorkerCommand<JsonHandle> {
         if (response == null) throw StateError('Call $callId has no response');
         body = response.body;
     }
-    final docs = _JsonDocs.of(ctx);
-    final source = '$callId\u0000${side.name}\u0000$scope';
-    final (docId, doc) =
-        docs.reuse(source, body.bytes) ??
-        docs.add(source, body.bytes, JsonDocument.tryParse(body.bytes));
-    return JsonHandle(
-      docId: docId,
-      visibleCount: doc.visibleCount,
-      parseError: doc.parseError == null
-          ? null
-          : (body.truncated ? truncatedError : doc.parseError),
-      truncated: body.truncated,
-      dirty: doc.dirty,
-    );
+    return (body.bytes, body.truncated);
   }
 }
 

@@ -37,13 +37,16 @@ class JsonTreeController extends ChangeNotifier {
   /// Opens the [which] (`'request'` or `'response'`) body of call [callId]
   /// in [worker]. [editable] says whether the view offers edits; [scope]
   /// picks the copy of the document (see [OpenJson.scope]): read-only
-  /// views share [OpenJson.viewScope], each editor passes its own.
+  /// views share [OpenJson.viewScope], each editor passes its own. With
+  /// [bytes], the document opens (and reverts to) those instead of the
+  /// stored body; see [OpenJson.bytes].
   JsonTreeController(
     this.worker,
     this.callId,
     this.which, {
     required this.editable,
     this.scope = OpenJson.viewScope,
+    this.bytes,
   }) : side = JsonBodySide.values.byName(which) {
     unawaited(_serial(_open));
   }
@@ -74,6 +77,9 @@ class JsonTreeController extends ChangeNotifier {
 
   /// Which copy of the document is open; see [OpenJson.scope].
   final String scope;
+
+  /// The body opened instead of the stored one; see [OpenJson.bytes].
+  final Uint8List? bytes;
 
   JsonRow? _root;
 
@@ -328,7 +334,9 @@ class JsonTreeController extends ChangeNotifier {
     _reset();
     _notify();
     try {
-      final handle = await worker.run(OpenJson(callId, side, scope: scope));
+      final handle = await worker.run(
+        OpenJson(callId, side, scope: scope, bytes: bytes),
+      );
       if (_disposed) return;
       final root = handle.parseError == null
           ? await worker.run(JsonRootRow(handle.docId))

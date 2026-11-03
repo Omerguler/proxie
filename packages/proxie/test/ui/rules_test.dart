@@ -666,9 +666,8 @@ void main() {
       await tester.runAsync(Proxie.shutdown);
     });
 
-    testWidgets('the detail offers Map Local from this response', (
-      tester,
-    ) async {
+    testWidgets('the detail offers Map Local from this response and a '
+        'breakpoint on its URL', (tester) async {
       addTearDown(tester.view.reset);
       setViewSize(tester, tabletSize);
       await initProxie(tester);
@@ -689,7 +688,7 @@ void main() {
         await tester.pump();
       }
       expect(find.byTooltip('Map Local from this response'), findsOneWidget);
-      expect(find.byTooltip('Breakpoint on this URL'), findsNothing);
+      expect(find.byTooltip('Breakpoint on this URL'), findsOneWidget);
       await tester.tap(find.byTooltip('Map Local from this response'));
       await tester.pumpAndSettle();
       expect(find.byType(RuleEditor), findsOneWidget);

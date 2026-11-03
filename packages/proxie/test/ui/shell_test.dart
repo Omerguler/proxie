@@ -390,6 +390,12 @@ void main() {
           pausedAt: DateTime.now(),
         ),
       );
+      // The pause opens the inspector on its editor; back closes both.
+      await tester.pumpAndSettle();
+      expect(bubbleFinder, findsNothing);
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      await tester.binding.handlePopRoute();
       await tester.pump();
       // The first frame starts the ticker; the next one advances it.
       await tester.pump(const Duration(milliseconds: 100));

@@ -1,12 +1,15 @@
+import 'dart:async';
 import 'dart:developer' as developer;
 
 import 'package:flutter/widgets.dart';
 
 import 'package:proxie/src/adapters/capture_adapter.dart';
 import 'package:proxie/src/config.dart';
+import 'package:proxie/src/core/breakpoint_controller.dart';
 import 'package:proxie/src/core/engine.dart';
 import 'package:proxie/src/navigation/navigation_adapter.dart';
 import 'package:proxie/src/navigation/overlay_navigation.dart';
+import 'package:proxie/src/ui/breakpoint/breakpoint_editor.dart';
 import 'package:proxie/src/ui/bubble.dart';
 import 'package:proxie/src/ui/detail/call_detail.dart';
 import 'package:proxie/src/ui/inspector_shell.dart';
@@ -52,6 +55,7 @@ class ProxieRuntime {
          rawEditableLimit: config.rawEditableLimit,
        ) {
     controller.addListener(_sync);
+    _paused = engine.breakpoints.changes.listen(_onPaused);
   }
 
   /// Runs storage and heavy JSON work off the UI isolate.
@@ -78,6 +82,11 @@ class ProxieRuntime {
   /// Changes and stores [engine]'s rules for the rules screen and editors.
   final RulesController rules;
   bool _disposed = false;
+  late final StreamSubscription<List<PausedCall>> _paused;
+  bool _hadPaused = false;
+  // Whether the inspector was opened for a pause, so it closes again when
+  // the last paused call is resolved.
+  bool _openedForPause = false;
 
   /// Whether the inspector is drawn in Proxie's own overlay layer.
   bool get isOverlay => navigation is OverlayNavigationAdapter;
@@ -86,6 +95,7 @@ class ProxieRuntime {
   // the host dismissed closes the controller through onDismissed.
   void _sync() {
     if (_disposed) return;
+    if (!controller.isOpen) _openedForPause = false;
     if (controller.isOpen) {
       if (navigation.isShowing) return;
       try {
@@ -99,6 +109,12 @@ class ProxieRuntime {
               listBuilder: _buildList,
               detailBuilder: _buildDetail,
               rulesBuilder: (_) => const RulesScreen(),
+              shellBuilder: (_, shell) => BreakpointHost(
+                breakpoints: engine.breakpoints,
+                worker: worker,
+                rawEditableLimit: config.rawEditableLimit,
+                child: shell,
+              ),
             ),
           ),
           onDismissed: _onDismissed,
@@ -113,6 +129,21 @@ class ProxieRuntime {
       } on Object catch (e, st) {
         _report(e, st, 'while hiding the Proxie inspector');
       }
+    }
+  }
+
+  // The inspector opens when calls start pausing (its BreakpointHost shows
+  // the editor), and closes when they are all resolved, unless the user
+  // had it open.
+  void _onPaused(List<PausedCall> pending) {
+    if (_disposed) return;
+    final had = _hadPaused;
+    _hadPaused = pending.isNotEmpty;
+    if (!had && pending.isNotEmpty && !controller.isOpen) {
+      controller.open();
+      _openedForPause = controller.isOpen;
+    } else if (had && pending.isEmpty && _openedForPause) {
+      controller.close();
     }
   }
 
@@ -155,6 +186,7 @@ class ProxieRuntime {
   Future<void> dispose() async {
     _disposed = true;
     controller.removeListener(_sync);
+    unawaited(_paused.cancel());
     try {
       navigation.hide();
     } on Object catch (e, st) {

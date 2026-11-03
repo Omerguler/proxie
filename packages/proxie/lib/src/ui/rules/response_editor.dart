@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:proxie/src/config.dart' show defaultRawEditableLimit;
 import 'package:proxie/src/core/body_classifier.dart';
 import 'package:proxie/src/core/masking.dart' show kMask;
+import 'package:proxie/src/json/json_commands.dart' show JsonBodySide;
 import 'package:proxie/src/model/body.dart';
 import 'package:proxie/src/model/response.dart';
 import 'package:proxie/src/ui/common.dart';
@@ -97,30 +98,34 @@ class HeaderRow {
   }
 }
 
-/// The response a [ResponseEditor] edits: status, headers and body.
+/// The headers and body an editor changes: the part a request and a
+/// response share.
 ///
-/// A body captured from call [load]'s `callId` that is JSON opens as an
-/// editable tree in [ruleEditorScope]; any other body, or the tree's after
-/// a switch, is edited as raw text. [build] gives the response as edited;
-/// an untouched body comes back byte for byte.
-class ResponseDraft extends ChangeNotifier {
-  /// Creates an empty 200 response; [worker] holds the body's JSON
-  /// document.
-  ResponseDraft(this.worker);
+/// A body loaded with a `callId` that is JSON opens as an editable tree of
+/// that call's [side] body in [scope]: the stored body, or with `live` the
+/// loaded bytes themselves. Any other body, or the tree's after a switch,
+/// is edited as raw text. [buildBody] gives the body as edited; an
+/// untouched body comes back byte for byte.
+abstract class MessageDraft extends ChangeNotifier {
+  /// Creates an empty draft whose JSON body is [side] of its call, opened
+  /// in [scope] of [worker].
+  MessageDraft(this.worker, {required this.side, this.scope = ruleEditorScope});
 
   /// Opens JSON documents and splits text.
   final ProxieWorker worker;
 
-  /// The status code, as typed.
-  final TextEditingController status = TextEditingController(text: '200');
+  /// Which body of the call a JSON tree opens.
+  final JsonBodySide side;
+
+  /// The scope (see `OpenJson.scope`) the JSON tree opens in.
+  final String scope;
 
   final List<HeaderRow> _headers = [];
-  int? _loadedStatus;
-  String? _reason;
   Uint8List _bytes = Uint8List(0);
   String? _contentType;
   bool _json = false;
   bool _truncated = false;
+  bool _live = false;
   int _maskedHeaders = 0;
   int _maskedBody = 0;
   int _countGeneration = 0;
@@ -143,13 +148,14 @@ class ResponseDraft extends ChangeNotifier {
   bool get isJson => _json;
 
   /// Whether the body is the captured part of a body cut at capture, not
-  /// yet edited or replaced; [validate] refuses it.
+  /// yet edited or replaced; [validateBody] refuses it.
   bool get truncated => _truncated;
 
   /// Values the stored copy had masked (P19): header values and JSON
-  /// strings equal to the mask, which a mock would send as they are.
-  /// Header values still equal to the mask count live; the body is
-  /// counted again in the worker shortly after it is edited.
+  /// strings equal to the mask, which would be sent as they are. Header
+  /// values still equal to the mask count live; the body is counted again
+  /// in the worker shortly after it is edited. Always 0 for a live
+  /// message, which was never masked.
   int get maskedCount => _maskedHeaders + _maskedBody;
 
   /// Bytes kept of a [truncated] body.
@@ -158,8 +164,7 @@ class ResponseDraft extends ChangeNotifier {
   /// Length of the whole [truncated] body as it was received.
   int get totalBytes => _totalBytes;
 
-  /// The JSON tree of the captured body, or null when it is edited as text
-  /// only.
+  /// The JSON tree of the body, or null when it is edited as text only.
   JsonTreeController? get tree => _tree;
 
   /// Whether the raw text view is shown rather than the tree.
@@ -171,7 +176,7 @@ class ResponseDraft extends ChangeNotifier {
   /// Changes whenever the body is replaced, so the raw view starts again.
   int get generation => _generation;
 
-  /// The content type a saved body is classified with.
+  /// The content type a built body is classified with.
   String? get contentType {
     for (final h in _headers) {
       if (h.name.text.trim().toLowerCase() == 'content-type') {
@@ -181,35 +186,44 @@ class ResponseDraft extends ChangeNotifier {
     return _contentType;
   }
 
-  /// Starts over from [response]. With [callId], a JSON body opens as a
-  /// tree of that call's stored response. A [captured] response loses its
-  /// [transportHeaders]; its masked values are counted in [maskedCount].
-  void load(ProxieResponse response, {String? callId, bool captured = false}) {
-    status.text = '${response.statusCode}';
-    _loadedStatus = response.statusCode;
-    _reason = response.reasonPhrase;
+  /// Starts over from [headers] and [body]. With [callId], a JSON body
+  /// opens as a tree: of that call's stored body, or with [live] of
+  /// [body]'s bytes (a paused call, not stored yet and never masked). A
+  /// [captured] message loses its [transportHeaders]; masked values of a
+  /// message that is not [live] are counted in [maskedCount].
+  @protected
+  void loadMessage(
+    Map<String, List<String>> headers,
+    ProxieBody body, {
+    String? callId,
+    bool captured = false,
+    bool live = false,
+  }) {
     for (final h in _headers) {
       h._dispose();
     }
     _headers
       ..clear()
       ..addAll([
-        for (final e in response.headers.entries)
+        for (final e in headers.entries)
           if (!captured || !transportHeaders.contains(e.key))
             for (final v in e.value) HeaderRow(e.key, v),
       ]);
-    final body = response.body;
     for (final h in _headers) {
       h.value.addListener(_headersChanged);
     }
-    _maskedHeaders = _countMaskedHeaders();
+    _live = live;
+    _maskedHeaders = live ? 0 : _countMaskedHeaders();
     _maskedBody = 0;
     _recount?.cancel();
-    unawaited(
-      _countBody(
-        CountMasked(body.bytes, latin1: isLatin1Text(body.contentType)),
-      ),
-    );
+    _countGeneration++;
+    if (!live) {
+      unawaited(
+        _countBody(
+          CountMasked(body.bytes, latin1: isLatin1Text(body.contentType)),
+        ),
+      );
+    }
     _bytes = body.bytes;
     _contentType = body.contentType;
     _json = body.kind == BodyKind.json;
@@ -223,14 +237,15 @@ class ResponseDraft extends ChangeNotifier {
       final tree = JsonTreeController(
         worker,
         callId,
-        'response',
+        side.name,
         editable: true,
-        scope: ruleEditorScope,
+        scope: scope,
+        bytes: live ? body.bytes : null,
       );
       _tree = tree;
       tree.addListener(_treeChanged);
-      // A document left edited by an editor that closed without saving is
-      // still open in this scope; start from the captured body.
+      // A document left edited by an editor that closed without sending
+      // or saving is still open in this scope; start from the body loaded.
       void fresh() {
         if (tree.status == JsonTreeStatus.loading) return;
         tree.removeListener(fresh);
@@ -248,6 +263,7 @@ class ResponseDraft extends ChangeNotifier {
       _headers.where((h) => h.value.text == kMask).length;
 
   void _headersChanged() {
+    if (_live) return;
     final n = _countMaskedHeaders();
     if (n == _maskedHeaders) return;
     _maskedHeaders = n;
@@ -260,6 +276,7 @@ class ResponseDraft extends ChangeNotifier {
   }
 
   void _scheduleRecount() {
+    if (_live) return;
     _recount?.cancel();
     _recount = Timer(const Duration(milliseconds: 300), () {
       final raw = _rawText;
@@ -317,7 +334,7 @@ class ResponseDraft extends ChangeNotifier {
   void removeHeader(HeaderRow row) {
     if (!_headers.remove(row)) return;
     row.value.removeListener(_headersChanged);
-    _maskedHeaders = _countMaskedHeaders();
+    if (!_live) _maskedHeaders = _countMaskedHeaders();
     // The row's fields are still in this frame's tree.
     WidgetsBinding.instance.addPostFrameCallback((_) => row._dispose());
     _notify();
@@ -330,7 +347,7 @@ class ResponseDraft extends ChangeNotifier {
       try {
         _bytes = await tree.encode(pretty: true);
       } on Object catch (e, st) {
-        // The tree stays shown; its edits are still saved from it.
+        // The tree stays shown; its edits are still taken from it.
         developer.log(
           'Proxie could not encode the edited body',
           name: 'proxie',
@@ -361,28 +378,25 @@ class ResponseDraft extends ChangeNotifier {
     if (first) _notify();
   }
 
-  /// Why the response cannot be saved yet, or null.
-  String? validate() {
-    final code = int.tryParse(status.text.trim());
-    if (code == null || code < 100 || code > 599) {
-      return 'Status must be a number from 100 to 599';
-    }
-    if (_truncated) {
-      return 'The captured body was truncated; edit or replace it first';
-    }
-    return null;
-  }
+  /// Why the body cannot be used yet, or null.
+  String? validateBody() => _truncated
+      ? 'The captured body was truncated; edit or replace it first'
+      : null;
 
-  /// The response as edited; check [validate] first. Throws when the
-  /// edited tree cannot be encoded.
-  Future<ProxieResponse> build() async {
-    final code = int.parse(status.text.trim());
+  /// The header lines as a map; names lowercased, empty names skipped.
+  Map<String, List<String>> buildHeaders() {
     final headers = <String, List<String>>{};
     for (final h in _headers) {
       final name = h.name.text.trim();
       if (name.isEmpty) continue;
       (headers[name.toLowerCase()] ??= []).add(h.value.text);
     }
+    return headers;
+  }
+
+  /// The body as edited; check [validateBody] first. Throws when the
+  /// edited tree cannot be encoded.
+  Future<ProxieBody> buildBody() async {
     final type = contentType;
     final raw = _rawText;
     final tree = _tree;
@@ -396,14 +410,9 @@ class ResponseDraft extends ChangeNotifier {
     } else {
       bytes = _bytes;
     }
-    return ProxieResponse(
-      statusCode: code,
-      reasonPhrase: code == _loadedStatus ? _reason : null,
-      headers: headers,
-      body: bytes.isEmpty
-          ? ProxieBody.empty()
-          : ProxieBody.from(bytes, type, cap: bytes.length),
-    );
+    return bytes.isEmpty
+        ? ProxieBody.empty()
+        : ProxieBody.from(bytes, type, cap: bytes.length);
   }
 
   void _notify() {
@@ -414,11 +423,72 @@ class ResponseDraft extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _recount?.cancel();
-    status.dispose();
     for (final h in _headers) {
       h._dispose();
     }
     _tree?.dispose();
+    super.dispose();
+  }
+}
+
+/// The response a [ResponseEditor] edits: status, headers and body (see
+/// [MessageDraft]). [build] gives the response as edited.
+class ResponseDraft extends MessageDraft {
+  /// Creates an empty 200 response; [worker] holds the body's JSON
+  /// document, opened in [scope].
+  ResponseDraft(super.worker, {super.scope})
+    : super(side: JsonBodySide.response);
+
+  /// The status code, as typed.
+  final TextEditingController status = TextEditingController(text: '200');
+
+  int? _loadedStatus;
+  String? _reason;
+
+  /// Starts over from [response]; see [MessageDraft.loadMessage] for
+  /// [callId], [captured] and [live].
+  void load(
+    ProxieResponse response, {
+    String? callId,
+    bool captured = false,
+    bool live = false,
+  }) {
+    status.text = '${response.statusCode}';
+    _loadedStatus = response.statusCode;
+    _reason = response.reasonPhrase;
+    loadMessage(
+      response.headers,
+      response.body,
+      callId: callId,
+      captured: captured,
+      live: live,
+    );
+  }
+
+  /// Why the response cannot be used yet, or null.
+  String? validate() {
+    final code = int.tryParse(status.text.trim());
+    if (code == null || code < 100 || code > 599) {
+      return 'Status must be a number from 100 to 599';
+    }
+    return validateBody();
+  }
+
+  /// The response as edited; check [validate] first. Throws when the
+  /// edited tree cannot be encoded.
+  Future<ProxieResponse> build() async {
+    final code = int.parse(status.text.trim());
+    return ProxieResponse(
+      statusCode: code,
+      reasonPhrase: code == _loadedStatus ? _reason : null,
+      headers: buildHeaders(),
+      body: await buildBody(),
+    );
+  }
+
+  @override
+  void dispose() {
+    status.dispose();
     super.dispose();
   }
 }
@@ -434,6 +504,7 @@ class ResponseEditor extends StatelessWidget {
     this.rawEditableLimit = defaultRawEditableLimit,
     this.onPresets,
     this.onSaveAsPreset,
+    this.useVerb = 'saving',
   });
 
   /// The response edited.
@@ -452,98 +523,155 @@ class ResponseEditor extends StatelessWidget {
   /// Saves the response as a custom preset; hidden when null.
   final VoidCallback? onSaveAsPreset;
 
+  /// What the notices ask to fix things before, e.g. "saving".
+  final String useVerb;
+
   @override
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: draft,
-    builder: (context, _) {
-      final theme = Theme.of(context);
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 8, 0),
-            child: Wrap(
-              spacing: 8,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                SizedBox(
-                  width: 96,
-                  child: TextField(
-                    key: const ValueKey('response-status'),
-                    controller: draft.status,
-                    keyboardType: TextInputType.number,
-                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                    decoration: const InputDecoration(labelText: 'Status'),
-                  ),
+    builder: (context, _) => Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 8, 0),
+          child: Wrap(
+            spacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              SizedBox(
+                width: 96,
+                child: TextField(
+                  key: const ValueKey('response-status'),
+                  controller: draft.status,
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  decoration: const InputDecoration(labelText: 'Status'),
                 ),
-                if (onPresets != null)
-                  TextButton.icon(
-                    onPressed: onPresets,
-                    icon: const Icon(Icons.library_books_outlined),
-                    label: const Text('Presets'),
-                  ),
-                if (onSaveAsPreset != null)
-                  TextButton.icon(
-                    onPressed: onSaveAsPreset,
-                    icon: const Icon(Icons.bookmark_add_outlined),
-                    label: const Text('Save as preset'),
-                  ),
-              ],
-            ),
+              ),
+              if (onPresets != null)
+                TextButton.icon(
+                  onPressed: onPresets,
+                  icon: const Icon(Icons.library_books_outlined),
+                  label: const Text('Presets'),
+                ),
+              if (onSaveAsPreset != null)
+                TextButton.icon(
+                  onPressed: onSaveAsPreset,
+                  icon: const Icon(Icons.bookmark_add_outlined),
+                  label: const Text('Save as preset'),
+                ),
+            ],
           ),
-          if (draft.truncated)
-            ColoredBox(
-              color: theme.colorScheme.tertiaryContainer,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 6,
-                ),
-                child: Text(
-                  'The captured body was truncated '
-                  '(${formatBytes(draft.keptBytes)} of '
-                  '${formatBytes(draft.totalBytes)}). Edit or replace it '
-                  'before saving.',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onTertiaryContainer,
-                  ),
-                ),
-              ),
-            ),
-          if (draft.maskedCount > 0)
-            ColoredBox(
-              color: theme.colorScheme.errorContainer,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 6,
-                ),
-                child: Text(
-                  draft.maskedCount == 1
-                      ? '1 value was masked at capture and will be sent as '
-                            '$kMask. Replace it before saving.'
-                      : '${draft.maskedCount} values were masked at capture '
-                            'and will be sent as $kMask. Replace them before '
-                            'saving.',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onErrorContainer,
-                  ),
-                ),
-              ),
-            ),
-          _Headers(
-            key: ValueKey(draft.generation),
+        ),
+        MessageNotices(draft: draft, useVerb: useVerb),
+        MessageHeaders(
+          key: ValueKey(draft.generation),
+          draft: draft,
+          expanded: draft.headers.any((h) => h.value.text == kMask),
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: MessageBody(
             draft: draft,
-            expanded: draft.headers.any((h) => h.value.text == kMask),
+            worker: worker,
+            rawEditableLimit: rawEditableLimit,
+            binaryHint: onPresets == null
+                ? null
+                : 'Pick a preset to replace it.',
           ),
-          const Divider(height: 1),
-          Expanded(child: _body(context)),
-        ],
-      );
-    },
+        ),
+      ],
+    ),
   );
+}
 
-  Widget _body(BuildContext context) {
+/// The notices above a [MessageDraft]: a truncated body, masked values.
+/// Shows nothing when there is nothing to say.
+class MessageNotices extends StatelessWidget {
+  /// Creates the notices of [draft], asking to fix things before
+  /// [useVerb] (e.g. "saving").
+  const MessageNotices({
+    required this.draft,
+    super.key,
+    this.useVerb = 'saving',
+  });
+
+  /// The draft described.
+  final MessageDraft draft;
+
+  /// What the notices ask to fix things before.
+  final String useVerb;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    Widget notice(Color background, Color foreground, String text) =>
+        ColoredBox(
+          color: background,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            child: Text(
+              text,
+              style: theme.textTheme.bodySmall?.copyWith(color: foreground),
+            ),
+          ),
+        );
+    final scheme = theme.colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (draft.truncated)
+          notice(
+            scheme.tertiaryContainer,
+            scheme.onTertiaryContainer,
+            'The captured body was truncated '
+            '(${formatBytes(draft.keptBytes)} of '
+            '${formatBytes(draft.totalBytes)}). Edit or replace it '
+            'before $useVerb.',
+          ),
+        if (draft.maskedCount > 0)
+          notice(
+            scheme.errorContainer,
+            scheme.onErrorContainer,
+            draft.maskedCount == 1
+                ? '1 value was masked at capture and will be sent as '
+                      '$kMask. Replace it before $useVerb.'
+                : '${draft.maskedCount} values were masked at capture '
+                      'and will be sent as $kMask. Replace them before '
+                      '$useVerb.',
+          ),
+      ],
+    );
+  }
+}
+
+/// [draft]'s body: its JSON tree, or its raw text, with a switch between
+/// them while the raw text is untouched.
+class MessageBody extends StatelessWidget {
+  /// Creates the body editor of [draft].
+  const MessageBody({
+    required this.draft,
+    required this.worker,
+    super.key,
+    this.rawEditableLimit = defaultRawEditableLimit,
+    this.binaryHint,
+  });
+
+  /// The draft whose body is edited.
+  final MessageDraft draft;
+
+  /// Splits the body into lines.
+  final ProxieWorker worker;
+
+  /// Bodies of at least this many bytes open read-only until "Edit
+  /// anyway".
+  final int rawEditableLimit;
+
+  /// Added to the notice for a body that is not text.
+  final String? binaryHint;
+
+  @override
+  Widget build(BuildContext context) {
     final tree = draft.tree;
     if (tree != null && !draft.showsRaw) {
       return ListenableBuilder(
@@ -583,32 +711,43 @@ class ResponseEditor extends StatelessWidget {
     );
   }
 
-  Widget _raw(BuildContext context) => RawTextView(
-    key: ValueKey(draft.generation),
-    worker: worker,
-    bytes: draft.bytes,
-    prettyJson: draft.isJson,
-    latin1: isLatin1Text(draft.contentType),
-    editable: true,
-    rawEditableLimit: rawEditableLimit,
-    onChanged: draft.rawChanged,
-    undecodable: (_) => Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Text(
-          'Binary body (${formatBytes(draft.bytes.length)}), kept as '
-          'captured. Pick a preset to replace it.',
-          textAlign: TextAlign.center,
+  Widget _raw(BuildContext context) {
+    final hint = binaryHint;
+    return RawTextView(
+      key: ValueKey(draft.generation),
+      worker: worker,
+      bytes: draft.bytes,
+      prettyJson: draft.isJson,
+      latin1: isLatin1Text(draft.contentType),
+      editable: true,
+      rawEditableLimit: rawEditableLimit,
+      onChanged: draft.rawChanged,
+      undecodable: (_) => Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(
+            'Binary body (${formatBytes(draft.bytes.length)}), kept as '
+            'captured.${hint == null ? '' : ' $hint'}',
+            textAlign: TextAlign.center,
+          ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }
 
-class _Headers extends StatelessWidget {
-  const _Headers({required this.draft, required this.expanded, super.key});
+/// [draft]'s header lines in a tile: add, edit and remove them. Masked
+/// values are marked.
+class MessageHeaders extends StatelessWidget {
+  /// Creates the header editor of [draft]; [expanded] opens the tile.
+  const MessageHeaders({
+    required this.draft,
+    required this.expanded,
+    super.key,
+  });
 
-  final ResponseDraft draft;
+  /// The draft whose headers are edited.
+  final MessageDraft draft;
 
   /// Whether the tile starts open, as when a value is masked.
   final bool expanded;

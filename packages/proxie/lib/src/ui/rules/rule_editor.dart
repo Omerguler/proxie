@@ -43,13 +43,15 @@ Future<void> openRuleEditor(
 }
 
 /// The detail screen's rule actions, opening editors from [context]:
-/// "Map Local from this response". Breakpoints are not offered yet.
-ProxieDetailActions ruleDetailActions(BuildContext context) =>
-    ProxieDetailActions(
-      onMapLocal: (call) => unawaited(
-        openRuleEditor(context, from: call, kind: RuleKind.mapLocal),
-      ),
-    );
+/// "Map Local from this response" and "Breakpoint on this URL".
+ProxieDetailActions ruleDetailActions(
+  BuildContext context,
+) => ProxieDetailActions(
+  onMapLocal: (call) =>
+      unawaited(openRuleEditor(context, from: call, kind: RuleKind.mapLocal)),
+  onBreakpoint: (call) =>
+      unawaited(openRuleEditor(context, from: call, kind: RuleKind.breakpoint)),
+);
 
 /// The URL of [url] without query or fragment, followed by `*`.
 String wildcardFor(Uri url) {
@@ -140,7 +142,10 @@ class _RuleEditorState extends State<RuleEditor> {
       text: '${action?.delay.inMilliseconds ?? 0}',
     );
     _draft = ResponseDraft(widget.rules.worker);
-    final captured = existing != null ? action?.response : from?.response;
+    // A breakpoint rule has no answer: nothing is opened for it.
+    final captured = existing != null
+        ? action?.response
+        : (_kind == RuleKind.mapLocal ? from?.response : null);
     _captured = captured;
     if (captured != null) {
       _draft.load(
