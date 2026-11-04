@@ -13,7 +13,8 @@ library;
 import 'package:proxie/adapter.dart'
     show ProxieCaptureAdapter, ProxieEngine, RequestDecision, runMarkedCaptured;
 
-export 'src/adapters/capture_adapter.dart' show ProxieCaptureAdapter;
+export 'src/adapters/capture_adapter.dart'
+    show ProxieCaptureAdapter, defaultReplayError;
 export 'src/adapters/capture_marker.dart'
     show isProxieCaptured, kProxieCapturedZoneKey, runMarkedCaptured;
 export 'src/config.dart' show ProxieConfig;

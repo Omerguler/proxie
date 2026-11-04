@@ -107,6 +107,12 @@ class ProxieHttpClient extends http.BaseClient implements ProxieCaptureAdapter {
     );
   }
 
+  /// `package:http` wraps a connection failure, a `dart:io` connect timeout
+  /// included, in a [http.ClientException] that does not say which it was,
+  /// so only a [TimeoutException] is recorded as `timeout`.
+  @override
+  ProxieError classifyReplayError(Object error) => defaultReplayError(error);
+
   Future<http.StreamedResponse> _mock(
     ProxieEngine engine,
     String callId,

@@ -1,17 +1,27 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 
 import 'package:http/http.dart' as http;
 
 import 'package:proxie/src/adapters/capture_adapter.dart';
-import 'package:proxie/src/adapters/capture_marker.dart';
 import 'package:proxie/src/adapters/http_client_adapter.dart';
 import 'package:proxie/src/core/engine.dart';
+import 'package:proxie/src/core/message_compare.dart';
 import 'package:proxie/src/model/call.dart';
 import 'package:proxie/src/model/request.dart';
 import 'package:proxie/src/model/response.dart';
 
 /// The adapter name a replay sent by Proxie's own client is recorded with.
 const String kReplayFallbackAdapter = 'built-in';
+
+/// Thrown by [replayCall] when its `cancel` completes first.
+class ReplayCancelled implements Exception {
+  /// Creates the exception.
+  const ReplayCancelled();
+
+  @override
+  String toString() => 'Send cancelled';
+}
 
 /// The outcome of [replayCall].
 class ReplayResult {
@@ -53,14 +63,20 @@ class ReplayResult {
 /// adapter does not record it a second time.
 ///
 /// Throws a [StateError], recording nothing, when the body is truncated: a
-/// partial payload is never sent. A failed send is recorded with its error
-/// and rethrown.
+/// partial payload is never sent. A failed send is recorded as the adapter
+/// classifies it and rethrown.
+///
+/// When [cancel] completes first the call is recorded as `cancelled`, a
+/// late response or failure is ignored and [ReplayCancelled] is thrown. Only
+/// the fallback client's request is really stopped: an adapter's goes on,
+/// unseen.
 Future<ReplayResult> replayCall(
   ProxieCall original,
   ProxieRequest edited,
   List<ProxieCaptureAdapter> adapters, {
   required ProxieEngine engine,
   http.Client Function()? fallbackClient,
+  Future<void>? cancel,
 }) async {
   if (edited.body.truncated) {
     throw StateError('Cannot replay: request body was truncated');
@@ -81,76 +97,62 @@ Future<ReplayResult> replayCall(
     edited,
     tags: {
       CallTag.replayed,
-      if (!sameReplayedRequest(original.request, edited)) CallTag.edited,
+      if (!sameRequest(original.request, edited)) CallTag.edited,
     },
   );
-  final ProxieResponse response;
+  // Created here, used once: its request is marked captured by its replay.
+  final fallback = adapter == null
+      ? (ProxieHttpClient(inner: (fallbackClient ?? http.Client.new)())
+          ..attach(engine))
+      : null;
+  final sender = adapter ?? fallback!;
   try {
-    response = adapter != null
-        ? await adapter.replay(edited)
-        : await _sendFallback(engine, edited, fallbackClient);
-  } on Object catch (e) {
-    engine.onError(
-      callId,
-      ProxieError(
-        type: e is TimeoutException ? 'timeout' : 'network',
-        message: '$e',
-      ),
+    final sending = sender.replay(edited);
+    final response = cancel == null
+        ? await sending
+        // Future.any also takes care of what the loser does later.
+        : await Future.any<ProxieResponse?>([
+            sending,
+            cancel.then((_) => null),
+          ]);
+    if (response == null) {
+      engine.onError(
+        callId,
+        const ProxieError(
+          type: 'cancelled',
+          message: 'Cancelled from the inspector',
+        ),
+      );
+      throw const ReplayCancelled();
+    }
+    engine.recordResponse(callId, response);
+    return ReplayResult(
+      callId: callId,
+      response: response,
+      adapterName: name,
+      viaFallback: viaFallback,
     );
+  } on ReplayCancelled {
     rethrow;
-  }
-  engine.recordResponse(callId, response);
-  return ReplayResult(
-    callId: callId,
-    response: response,
-    adapterName: name,
-    viaFallback: viaFallback,
-  );
-}
-
-Future<ProxieResponse> _sendFallback(
-  ProxieEngine engine,
-  ProxieRequest request,
-  http.Client Function()? create,
-) => runMarkedCaptured(() async {
-  // Unrecorded: ProxieHttpClient.replay sends inside the captured zone too.
-  final client = ProxieHttpClient(inner: (create ?? http.Client.new)())
-    ..attach(engine);
-  try {
-    return await client.replay(request);
+  } on Object catch (e) {
+    engine.onError(callId, _classified(sender, e));
+    rethrow;
   } finally {
-    client.close();
+    fallback?.close();
   }
-});
-
-/// Whether [b] sends the same as [a]: method, URL, header values (names
-/// compared case-insensitively, as HTTP does) and body bytes.
-bool sameReplayedRequest(ProxieRequest a, ProxieRequest b) {
-  if (a.method.toUpperCase() != b.method.toUpperCase() || a.url != b.url) {
-    return false;
-  }
-  final ha = _lowered(a.headers);
-  final hb = _lowered(b.headers);
-  if (ha.length != hb.length) return false;
-  for (final e in ha.entries) {
-    final o = hb[e.key];
-    if (o == null || !_sameList(o, e.value)) return false;
-  }
-  return _sameList(a.body.bytes, b.body.bytes);
 }
 
-Map<String, List<String>> _lowered(Map<String, List<String>> headers) {
-  final out = <String, List<String>>{};
-  for (final e in headers.entries) {
-    (out[e.key.toLowerCase()] ??= []).addAll(e.value);
+// An adapter's classification must not hide the failure it describes.
+ProxieError _classified(ProxieCaptureAdapter adapter, Object error) {
+  try {
+    return adapter.classifyReplayError(error);
+  } on Object catch (e, st) {
+    developer.log(
+      'Proxie adapter ${adapter.name} failed to classify an error',
+      name: 'proxie',
+      error: e,
+      stackTrace: st,
+    );
+    return defaultReplayError(error);
   }
-  return out;
-}
-
-bool _sameList<T>(List<T> a, List<T> b) {
-  if (a.length != b.length) return false;
-  for (var i = 0; i < a.length; i++) {
-    if (a[i] != b[i]) return false;
-  }
-  return true;
 }

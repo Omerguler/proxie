@@ -211,6 +211,56 @@ void main() {
     expect(find.byType(CallRow), findsOneWidget);
   });
 
+  group('optional adapter chips', () {
+    final builtIn = find.widgetWithText(FilterChip, 'built-in');
+
+    Future<void> pumpChips(WidgetTester tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ProxieTheme.dark(),
+          home: Scaffold(
+            body: CallList(
+              worker: worker,
+              calls: calls.stream,
+              renderCap: 5 * 1024 * 1024,
+              adapterNames: const ['http'],
+              optionalAdapterNames: const ['built-in'],
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('hidden while no call is recorded under the name', (
+      tester,
+    ) async {
+      await store.upsert(call('a', at: clock));
+      await pumpChips(tester);
+      expect(builtIn, findsNothing);
+      expect(find.widgetWithText(FilterChip, 'http'), findsNothing);
+    });
+
+    testWidgets('shown for a call already stored, and filters', (tester) async {
+      await store.upsert(call('a', at: clock).copyWith(adapter: 'built-in'));
+      await pumpChips(tester);
+      expect(builtIn, findsOneWidget);
+      expect(find.widgetWithText(FilterChip, 'http'), findsOneWidget);
+      await tester.ensureVisible(builtIn);
+      await tester.tap(builtIn);
+      await tester.pumpAndSettle();
+      expect(worker.queried.last.adapters, {'built-in'});
+    });
+
+    testWidgets('appears when such a call arrives', (tester) async {
+      await pumpChips(tester);
+      expect(builtIn, findsNothing);
+      calls.add(call('a', at: clock).copyWith(adapter: 'built-in'));
+      await tester.pumpAndSettle();
+      expect(builtIn, findsOneWidget);
+    });
+  });
+
   testWidgets('other chips set their filters', (tester) async {
     await pumpList(tester);
     Future<CallQuery> tapChip(String label) async {

@@ -6,6 +6,9 @@ import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:proxie/proxie.dart';
+// The inspector's replay entry point is internal to proxie; this pins that
+// it works with the Dio adapter (P34).
+import 'package:proxie/src/core/replay.dart';
 import 'package:proxie_dio/proxie_dio.dart';
 
 import 'support/test_server.dart';
@@ -25,6 +28,23 @@ class _Sink implements CallSink {
   }
 
   ProxieCall get last => calls.last;
+}
+
+/// An adapter failing every fetch.
+class _FailingAdapter implements HttpClientAdapter {
+  _FailingAdapter(this.error);
+
+  final DioException Function(RequestOptions options) error;
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async => throw error(options);
+
+  @override
+  void close({bool force = false}) {}
 }
 
 /// An adapter recording whether each fetch ran marked captured.
@@ -985,6 +1005,81 @@ void main() {
         }
       },
     );
+  });
+
+  group('replayCall (P34)', () {
+    ProxieCall original() => ProxieCall(
+      id: 'orig',
+      sessionId: 0,
+      adapter: 'dio',
+      request: ProxieRequest(
+        method: 'POST',
+        url: server.url('/echo'),
+        headers: const {
+          'content-type': ['text/plain'],
+        },
+        body: ProxieBody.from(
+          Uint8List.fromList(utf8.encode('again')),
+          'text/plain',
+        ),
+      ),
+      startedAt: DateTime(2026, 11, 3),
+    );
+
+    test('sends through the Dio adapter and records exactly once', () async {
+      final saved = _globalOverrides();
+      HttpOverrides.global = null;
+      final io = ProxieHttpOverridesAdapter()..attach(engine);
+      try {
+        final call = original();
+        final result = await replayCall(call, call.request, [
+          io,
+          interceptor,
+        ], engine: engine);
+        expect(result.viaFallback, isFalse);
+        expect(result.sentVia, 'Sent via dio');
+        expect(result.response.statusCode, 200);
+        expect(server.hitsFor('/echo'), 1);
+        final ids = {for (final c in sink.calls) c.id};
+        expect(ids, {result.callId});
+        expect(sink.calls.last.adapter, 'dio');
+        expect(sink.calls.last.tags, {CallTag.replayed});
+        expect(sink.calls.last.response!.statusCode, 200);
+      } finally {
+        io.detach();
+        HttpOverrides.global = saved;
+      }
+    });
+
+    test('a Dio timeout is recorded as a timeout', () async {
+      dio.httpClientAdapter = _FailingAdapter(
+        (options) => DioException.receiveTimeout(
+          timeout: const Duration(seconds: 1),
+          requestOptions: options,
+        ),
+      );
+      final call = original();
+      await expectLater(
+        replayCall(call, call.request, [interceptor], engine: engine),
+        throwsA(isA<DioException>()),
+      );
+      expect(sink.calls.last.error!.type, 'timeout');
+    });
+
+    test('a Dio connection error is recorded as network', () async {
+      dio.httpClientAdapter = _FailingAdapter(
+        (options) => DioException.connectionError(
+          requestOptions: options,
+          reason: 'refused',
+        ),
+      );
+      final call = original();
+      await expectLater(
+        replayCall(call, call.request, [interceptor], engine: engine),
+        throwsA(isA<DioException>()),
+      );
+      expect(sink.calls.last.error!.type, 'network');
+    });
   });
 
   group('replay', () {

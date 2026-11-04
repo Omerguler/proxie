@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:developer' as developer;
 
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -75,6 +76,10 @@ int _count(Uint8List bytes, List<int> pattern) {
 final List<int> _maskedUtf8 = utf8.encode('"$kMask"');
 final List<int> _maskedLatin1 = latin1.encode('"******"');
 
+/// Whether header [value] holds the mask: masking replaced all or part of
+/// it. The one test for counting, marking and refusing masked values.
+bool isMaskedHeaderValue(String value) => value.contains(kMask);
+
 /// One editable header line.
 class HeaderRow {
   /// Creates a row holding [name] and [value].
@@ -96,8 +101,19 @@ class HeaderRow {
   String? get valueError => _valueError;
   String? _valueError;
   VoidCallback _onEdit = _noop;
+  late String _seenName = name.text;
+  late String _seenValue = value.text;
 
   static void _noop() {}
+
+  // Whether the text changed since last asked; controllers also notify on
+  // focus and selection changes.
+  bool _textChanged() {
+    if (name.text == _seenName && value.text == _seenValue) return false;
+    _seenName = name.text;
+    _seenValue = value.text;
+    return true;
+  }
 
   void _dispose() {
     name.dispose();
@@ -143,6 +159,8 @@ abstract class MessageDraft extends ChangeNotifier {
   JsonTreeController? _tree;
   bool _showRaw = true;
   int _generation = 0;
+  int _seenTreeEdits = 0;
+  final ValueNotifier<int> _edited = ValueNotifier(0);
   bool _disposed = false;
 
   /// The header lines, in order.
@@ -158,12 +176,29 @@ abstract class MessageDraft extends ChangeNotifier {
   /// yet edited or replaced; [validateBody] refuses it.
   bool get truncated => _truncated;
 
+  /// Increases whenever the user changes the message: its text, a header
+  /// line, the body. Unlike this draft's own notifications, it does not
+  /// fire for validation, recounts or fetches.
+  ValueListenable<int> get edited => _edited;
+
+  /// Tells [edited] the user changed the message.
+  @protected
+  void markEdited() {
+    if (!_disposed) _edited.value++;
+  }
+
   /// Values the stored copy had masked (P19): header values and JSON
   /// strings equal to the mask, which would be sent as they are. Header
   /// values still equal to the mask count live; the body is counted again
   /// in the worker shortly after it is edited. Always 0 for a live
   /// message, which was never masked.
   int get maskedCount => _maskedHeaders + _maskedBody;
+
+  /// The part of [maskedCount] in header values.
+  int get maskedHeaderCount => _maskedHeaders;
+
+  /// The part of [maskedCount] in the body.
+  int get maskedBodyCount => _maskedBody;
 
   /// Bytes kept of a [truncated] body.
   int get keptBytes => _keptBytes;
@@ -265,6 +300,7 @@ abstract class MessageDraft extends ChangeNotifier {
         bytes: live ? body.bytes : null,
       );
       _tree = tree;
+      _seenTreeEdits = 0;
       tree.addListener(_treeChanged);
       // A document left edited by an editor that closed without sending
       // or saving is still open in this scope; start from the body loaded.
@@ -282,14 +318,19 @@ abstract class MessageDraft extends ChangeNotifier {
   }
 
   void _listen(HeaderRow row) {
-    row._onEdit = () => _clearRowError(row);
+    // Read now: the first change must compare with the text loaded.
+    row._textChanged();
+    row._onEdit = () {
+      _clearRowError(row);
+      if (row._textChanged()) markEdited();
+    };
     row.value.addListener(_headersChanged);
     row.name.addListener(row._onEdit);
     row.value.addListener(row._onEdit);
   }
 
   int _countMaskedHeaders() =>
-      _headers.where((h) => h.value.text == kMask).length;
+      _headers.where((h) => isMaskedHeaderValue(h.value.text)).length;
 
   void _headersChanged() {
     if (_live) return;
@@ -301,7 +342,13 @@ abstract class MessageDraft extends ChangeNotifier {
 
   // The tree notifies for every fetch too; only edits are counted again.
   void _treeChanged() {
-    if (_tree?.edited ?? false) _scheduleRecount();
+    final tree = _tree;
+    if (tree == null) return;
+    if (tree.edited) _scheduleRecount();
+    if (tree.editCount != _seenTreeEdits) {
+      _seenTreeEdits = tree.editCount;
+      markEdited();
+    }
   }
 
   void _scheduleRecount() {
@@ -357,6 +404,7 @@ abstract class MessageDraft extends ChangeNotifier {
   void addHeader() {
     _headers.add(HeaderRow('', ''));
     _listen(_headers.last);
+    markEdited();
     _notify();
   }
 
@@ -369,6 +417,7 @@ abstract class MessageDraft extends ChangeNotifier {
     if (!_live) _maskedHeaders = _countMaskedHeaders();
     // The row's fields are still in this frame's tree.
     WidgetsBinding.instance.addPostFrameCallback((_) => row._dispose());
+    markEdited();
     _notify();
   }
 
@@ -406,6 +455,7 @@ abstract class MessageDraft extends ChangeNotifier {
     final first = _rawText == null || _truncated;
     _rawText = text;
     _truncated = false;
+    markEdited();
     _scheduleRecount();
     if (first) _notify();
   }
@@ -432,7 +482,7 @@ abstract class MessageDraft extends ChangeNotifier {
               : unsendableHeaderChar(value)) >=
           0) {
         // The mask is not US-ASCII, so a masked value cannot go out as is.
-        if (value.contains(kMask)) {
+        if (isMaskedHeaderValue(value)) {
           h._valueError = 'Masked at capture; retype the value';
           first ??= 'The value of "$name" was masked at capture; retype it';
         } else {
@@ -502,6 +552,7 @@ abstract class MessageDraft extends ChangeNotifier {
       h._dispose();
     }
     _tree?.dispose();
+    _edited.dispose();
     super.dispose();
   }
 }
@@ -515,6 +566,7 @@ class MessageNotices extends StatelessWidget {
     required this.draft,
     super.key,
     this.useVerb = 'saving',
+    this.refusesMaskedHeaders = false,
   });
 
   /// The draft described.
@@ -522,6 +574,11 @@ class MessageNotices extends StatelessWidget {
 
   /// What the notices ask to fix things before.
   final String useVerb;
+
+  /// Whether a masked header value is refused rather than sent as it is:
+  /// the mask is not a sendable request header value. A response handed
+  /// to the app can hold it.
+  final bool refusesMaskedHeaders;
 
   @override
   Widget build(BuildContext context) {
@@ -538,6 +595,11 @@ class MessageNotices extends StatelessWidget {
           ),
         );
     final scheme = theme.colorScheme;
+    final headers = draft.maskedHeaderCount;
+    final sentAsMask = refusesMaskedHeaders
+        ? draft.maskedBodyCount
+        : draft.maskedCount;
+    final what = refusesMaskedHeaders ? 'body value' : 'value';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -550,14 +612,24 @@ class MessageNotices extends StatelessWidget {
             '${formatBytes(draft.totalBytes)}). Edit or replace it '
             'before $useVerb.',
           ),
-        if (draft.maskedCount > 0)
+        if (refusesMaskedHeaders && headers > 0)
           notice(
             scheme.errorContainer,
             scheme.onErrorContainer,
-            draft.maskedCount == 1
-                ? '1 value was masked at capture and will be sent as '
+            headers == 1
+                ? '1 header value was masked at capture and must be retyped '
+                      'before $useVerb.'
+                : '$headers header values were masked at capture and must '
+                      'be retyped before $useVerb.',
+          ),
+        if (sentAsMask > 0)
+          notice(
+            scheme.errorContainer,
+            scheme.onErrorContainer,
+            sentAsMask == 1
+                ? '1 $what was masked at capture and will be sent as '
                       '$kMask. Replace it before $useVerb.'
-                : '${draft.maskedCount} values were masked at capture '
+                : '$sentAsMask ${what}s were masked at capture '
                       'and will be sent as $kMask. Replace them before '
                       '$useVerb.',
           ),
@@ -708,7 +780,7 @@ class MessageHeaders extends StatelessWidget {
                       child: ValueListenableBuilder<TextEditingValue>(
                         valueListenable: rows[i].value,
                         builder: (context, value, _) {
-                          final masked = value.text == kMask;
+                          final masked = isMaskedHeaderValue(value.text);
                           final error = Theme.of(context).colorScheme.error;
                           return TextField(
                             key: ValueKey('header-value-$i'),

@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:proxie/src/config.dart';
 import 'package:proxie/src/core/breakpoint_controller.dart';
 import 'package:proxie/src/core/decision.dart';
+import 'package:proxie/src/core/message_compare.dart';
 import 'package:proxie/src/core/rule.dart';
 import 'package:proxie/src/model/body.dart';
 import 'package:proxie/src/model/call.dart';
@@ -117,7 +118,7 @@ class ProxieEngine {
       switch (r) {
         case ExecuteRequest(:final request):
           current = request;
-          if (!_sameRequest(req, request)) state.tags.add(CallTag.edited);
+          if (!sameRequest(req, request)) state.tags.add(CallTag.edited);
         case Abort():
           const error = ProxieError(
             type: 'aborted',
@@ -200,7 +201,7 @@ class ProxieEngine {
       );
       if (r is ExecuteResponse) {
         current = r.response;
-        if (!_sameResponse(res, r.response)) state.tags.add(CallTag.edited);
+        if (!sameResponse(res, r.response)) state.tags.add(CallTag.edited);
       }
     }
     _states.remove(callId);
@@ -303,35 +304,3 @@ class ProxieEngine {
     }
   }
 }
-
-bool _sameHeaders(Map<String, List<String>> a, Map<String, List<String>> b) {
-  if (a.length != b.length) return false;
-  for (final e in a.entries) {
-    final o = b[e.key];
-    if (o == null || o.length != e.value.length) return false;
-    for (var i = 0; i < o.length; i++) {
-      if (o[i] != e.value[i]) return false;
-    }
-  }
-  return true;
-}
-
-bool _sameBytes(List<int> a, List<int> b) {
-  if (a.length != b.length) return false;
-  for (var i = 0; i < a.length; i++) {
-    if (a[i] != b[i]) return false;
-  }
-  return true;
-}
-
-bool _sameRequest(ProxieRequest a, ProxieRequest b) =>
-    a.method == b.method &&
-    a.url == b.url &&
-    _sameHeaders(a.headers, b.headers) &&
-    _sameBytes(a.body.bytes, b.body.bytes);
-
-bool _sameResponse(ProxieResponse a, ProxieResponse b) =>
-    a.statusCode == b.statusCode &&
-    a.reasonPhrase == b.reasonPhrase &&
-    _sameHeaders(a.headers, b.headers) &&
-    _sameBytes(a.body.bytes, b.body.bytes);

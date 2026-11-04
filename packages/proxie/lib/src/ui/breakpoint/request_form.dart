@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import 'package:proxie/src/config.dart' show defaultRawEditableLimit;
 import 'package:proxie/src/core/http_rules.dart';
-import 'package:proxie/src/core/masking.dart' show kMask;
 import 'package:proxie/src/json/json_commands.dart' show JsonBodySide;
 import 'package:proxie/src/model/request.dart';
 import 'package:proxie/src/ui/rules/message_draft.dart';
@@ -85,7 +84,9 @@ class RequestDraft extends MessageDraft {
   RequestDraft(super.worker, {required super.scope})
     : super(side: JsonBodySide.request) {
     method.addListener(_clearMethodError);
+    method.addListener(_noteEdit);
     url.addListener(_urlChanged);
+    url.addListener(_noteEdit);
   }
 
   /// The method, as typed.
@@ -95,6 +96,8 @@ class RequestDraft extends MessageDraft {
   final TextEditingController url = TextEditingController();
 
   final List<QueryRow> _query = [];
+  String _seenMethod = '';
+  String _seenUrl = '';
   bool _writing = false;
   String? _methodError;
   String? _urlError;
@@ -129,6 +132,15 @@ class RequestDraft extends MessageDraft {
     final q = text.substring(0, end).indexOf('?');
     if (q < 0) return null;
     return (q + 1, end);
+  }
+
+  // Controllers also notify on focus and selection changes. A query row's
+  // edit reaches the URL, so it is seen here too.
+  void _noteEdit() {
+    if (method.text == _seenMethod && url.text == _seenUrl) return;
+    _seenMethod = method.text;
+    _seenUrl = url.text;
+    markEdited();
   }
 
   void _urlChanged() {
@@ -368,12 +380,16 @@ class RequestForm extends StatelessWidget {
             ],
           ),
         ),
-        MessageNotices(draft: draft, useVerb: 'sending'),
+        MessageNotices(
+          draft: draft,
+          useVerb: 'sending',
+          refusesMaskedHeaders: true,
+        ),
         _QueryTile(key: ValueKey(draft.generation), draft: draft),
         MessageHeaders(
           key: ValueKey(('headers', draft.generation)),
           draft: draft,
-          expanded: draft.headers.any((h) => h.value.text == kMask),
+          expanded: draft.headers.any((h) => isMaskedHeaderValue(h.value.text)),
         ),
         const Divider(height: 1),
         Expanded(

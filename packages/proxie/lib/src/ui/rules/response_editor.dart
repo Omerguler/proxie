@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'package:proxie/src/config.dart' show defaultRawEditableLimit;
-import 'package:proxie/src/core/masking.dart' show kMask;
 import 'package:proxie/src/json/json_commands.dart' show JsonBodySide;
 import 'package:proxie/src/model/response.dart';
 import 'package:proxie/src/ui/rules/message_draft.dart';
@@ -149,7 +148,7 @@ class ResponseEditor extends StatelessWidget {
         MessageHeaders(
           key: ValueKey(draft.generation),
           draft: draft,
-          expanded: draft.headers.any((h) => h.value.text == kMask),
+          expanded: draft.headers.any((h) => isMaskedHeaderValue(h.value.text)),
         ),
         const Divider(height: 1),
         Expanded(

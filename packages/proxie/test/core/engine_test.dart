@@ -116,6 +116,15 @@ void main() {
     },
   );
 
+  test('a form that only uppercases the method is not an edit', () async {
+    engine.rules = RuleSet([_bp(BreakpointPhase.request)]);
+    final f = engine.onRequest('c1', 'http', _req(method: 'get'));
+    await Future<void>.delayed(Duration.zero);
+    bps.resolve('c1', ExecuteRequest(_req()));
+    await f;
+    expect(sink.last.tags, isNot(contains(CallTag.edited)));
+  });
+
   test('ExecuteRequest identical to original is not tagged edited', () async {
     engine.rules = RuleSet([_bp(BreakpointPhase.request)]);
     final f = engine.onRequest('c1', 'http', _req());

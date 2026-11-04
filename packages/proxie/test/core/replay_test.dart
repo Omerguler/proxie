@@ -13,7 +13,12 @@ import '../support/io_harness.dart';
 
 /// A replaying adapter that records what it was asked to send.
 class _FakeAdapter implements ProxieCaptureAdapter {
-  _FakeAdapter(this.name, {this.supportsReplay = true, this.fail});
+  _FakeAdapter(
+    this.name, {
+    this.supportsReplay = true,
+    this.fail,
+    this.classified,
+  });
 
   @override
   final String name;
@@ -22,7 +27,12 @@ class _FakeAdapter implements ProxieCaptureAdapter {
   final bool supportsReplay;
 
   final Exception? fail;
+  final ProxieError? classified;
   final sent = <ProxieRequest>[];
+
+  @override
+  ProxieError classifyReplayError(Object error) =>
+      classified ?? defaultReplayError(error);
 
   @override
   void attach(ProxieEngine engine) {}
@@ -192,50 +202,46 @@ void main() {
     expect(sink.latest.single.request.url, edited.url);
   });
 
-  test('changed headers or body are edits; header name case is not', () async {
-    final original = _original('http');
-    final adapter = _FakeAdapter('http');
-    Future<Set<CallTag>> tagsFor(ProxieRequest r) async {
-      final result = await replayCall(original, r, [adapter], engine: engine);
-      return sink.latest.firstWhere((c) => c.id == result.callId).tags;
-    }
+  test(
+    'changed headers, body or method are edits; method case is not',
+    () async {
+      final original = _original('http');
+      final adapter = _FakeAdapter('http');
+      Future<Set<CallTag>> tagsFor(ProxieRequest r) async {
+        final result = await replayCall(original, r, [adapter], engine: engine);
+        return sink.latest.firstWhere((c) => c.id == result.callId).tags;
+      }
 
-    expect(
-      await tagsFor(
-        original.request.copyWith(
-          headers: {
-            'x-trace': ['1'],
-          },
-        ),
-      ),
-      {CallTag.replayed},
-    );
-    expect(
-      await tagsFor(
-        original.request.copyWith(
-          headers: {
-            'x-trace': ['2'],
-          },
-        ),
-      ),
-      {CallTag.replayed, CallTag.edited},
-    );
-    expect(
-      await tagsFor(
-        original.request.copyWith(
-          body: ProxieBody.from(
-            Uint8List.fromList(utf8.encode('{"a":2}')),
-            'application/json',
+      expect(await tagsFor(original.request.copyWith(method: 'post')), {
+        CallTag.replayed,
+      });
+      expect(
+        await tagsFor(
+          original.request.copyWith(
+            headers: {
+              'x-trace': ['2'],
+            },
           ),
         ),
-      ),
-      {CallTag.replayed, CallTag.edited},
-    );
-    expect(await tagsFor(original.request.copyWith(method: 'PUT')), {
-      CallTag.replayed,
-      CallTag.edited,
-    });
-  });
+        {CallTag.replayed, CallTag.edited},
+      );
+      expect(
+        await tagsFor(
+          original.request.copyWith(
+            body: ProxieBody.from(
+              Uint8List.fromList(utf8.encode('{"a":2}')),
+              'application/json',
+            ),
+          ),
+        ),
+        {CallTag.replayed, CallTag.edited},
+      );
+      expect(await tagsFor(original.request.copyWith(method: 'PUT')), {
+        CallTag.replayed,
+        CallTag.edited,
+      });
+    },
+  );
 
   test('a truncated body throws a StateError and records nothing', () async {
     final adapter = _FakeAdapter('http');
@@ -293,6 +299,123 @@ void main() {
       throwsA(isA<TimeoutException>()),
     );
     expect(sink.latest.last.error!.type, 'timeout');
+  });
+
+  test('the adapter classifies its own failure', () async {
+    final adapter = _FakeAdapter(
+      'http',
+      fail: Exception('library specific'),
+      classified: const ProxieError(type: 'bad_certificate', message: 'bad'),
+    );
+    await expectLater(
+      replayCall(_original('http'), _request(), [adapter], engine: engine),
+      throwsA(isA<Exception>()),
+    );
+    expect(sink.latest.single.error!.type, 'bad_certificate');
+    expect(sink.latest.single.error!.message, 'bad');
+  });
+
+  test('the fallback classifies timeouts and client errors', () async {
+    Future<String> typeFor(Exception e) async {
+      await expectLater(
+        replayCall(
+          _original('gone'),
+          _request(),
+          const [],
+          engine: engine,
+          fallbackClient: () => MockClient((_) async => throw e),
+        ),
+        throwsA(isA<Exception>()),
+      );
+      return sink.latest.last.error!.type;
+    }
+
+    expect(await typeFor(TimeoutException('slow')), 'timeout');
+    expect(await typeFor(http.ClientException('refused')), 'network');
+  });
+
+  group('cancel', () {
+    test('records the call as cancelled and throws', () async {
+      final cancel = Completer<void>();
+      final gate = Completer<void>();
+      final sending = replayCall(
+        _original('gated'),
+        _request(),
+        [_GatedAdapter(gate.future)],
+        engine: engine,
+        cancel: cancel.future,
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(sink.latest.single.error, isNull);
+
+      cancel.complete();
+      await expectLater(sending, throwsA(isA<ReplayCancelled>()));
+      final recorded = sink.latest.single;
+      expect(recorded.error!.type, 'cancelled');
+      expect(recorded.response, isNull);
+      expect(recorded.duration, isNotNull);
+      expect(recorded.tags, {CallTag.replayed});
+
+      // The late response changes nothing.
+      final snapshots = sink.calls.length;
+      gate.complete();
+      await Future<void>.delayed(Duration.zero);
+      expect(sink.calls, hasLength(snapshots));
+      expect(sink.latest.single.error!.type, 'cancelled');
+    });
+
+    test('a late failure changes nothing and is not unhandled', () async {
+      final cancel = Completer<void>();
+      final gate = Completer<void>();
+      final adapter = _GatedAdapter(
+        gate.future,
+        fail: const SocketException('late'),
+      );
+      final sending = replayCall(
+        _original('gated'),
+        _request(),
+        [adapter],
+        engine: engine,
+        cancel: cancel.future,
+      );
+      await Future<void>.delayed(Duration.zero);
+      cancel.complete();
+      await expectLater(sending, throwsA(isA<ReplayCancelled>()));
+      gate.complete();
+      await Future<void>.delayed(Duration.zero);
+      expect(sink.latest.single.error!.type, 'cancelled');
+    });
+
+    test('closes the fallback client, ending its request', () async {
+      final cancel = Completer<void>();
+      final client = _HangingClient();
+      final sending = replayCall(
+        _original('gone'),
+        _request(),
+        const [],
+        engine: engine,
+        cancel: cancel.future,
+        fallbackClient: () => client,
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(client.closed, isFalse);
+      cancel.complete();
+      await expectLater(sending, throwsA(isA<ReplayCancelled>()));
+      expect(client.closed, isTrue);
+      expect(sink.latest.single.error!.type, 'cancelled');
+    });
+
+    test('never completing it does not affect the send', () async {
+      final result = await replayCall(
+        _original('http'),
+        _request(),
+        [_FakeAdapter('http')],
+        engine: engine,
+        cancel: Completer<void>().future,
+      );
+      expect(result.response.statusCode, 201);
+      expect(sink.latest.single.error, isNull);
+    });
   });
 
   test('rules are not consulted for a replay', () async {
@@ -355,7 +478,7 @@ void main() {
 }
 
 class _GatedAdapter extends _FakeAdapter {
-  _GatedAdapter(this.gate) : super('gated');
+  _GatedAdapter(this.gate, {super.fail}) : super('gated');
 
   final Future<void> gate;
 
@@ -364,4 +487,19 @@ class _GatedAdapter extends _FakeAdapter {
     await gate;
     return await super.replay(request);
   }
+}
+
+/// A client whose requests never answer until it is closed.
+class _HangingClient extends http.BaseClient {
+  final _closed = Completer<http.StreamedResponse>();
+
+  bool get closed => _closed.isCompleted;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) =>
+      _closed.future;
+
+  @override
+  void close() =>
+      _closed.completeError(http.ClientException('closed'), StackTrace.empty);
 }

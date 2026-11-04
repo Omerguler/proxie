@@ -58,6 +58,9 @@ class _Adapter implements ProxieCaptureAdapter {
   final sent = <ProxieRequest>[];
 
   @override
+  ProxieError classifyReplayError(Object error) => defaultReplayError(error);
+
+  @override
   void attach(ProxieEngine engine) {}
 
   @override
@@ -101,6 +104,27 @@ ProxieCall _call({
   startedAt: DateTime(2026, 11, 3),
   duration: const Duration(milliseconds: 4),
 );
+
+class _ListSink implements CallSink {
+  _ListSink(this.calls);
+
+  final List<ProxieCall> calls;
+
+  @override
+  void upsert(ProxieCall call) => calls.add(call);
+}
+
+class _GatedAdapter extends _Adapter {
+  _GatedAdapter(super.name, this.gate);
+
+  final Future<void> gate;
+
+  @override
+  Future<ProxieResponse> replay(ProxieRequest request) async {
+    await gate;
+    return await super.replay(request);
+  }
+}
 
 final Finder _send = find.widgetWithText(FilledButton, 'Send');
 
@@ -164,8 +188,13 @@ void main() {
     await pumpSheet(
       tester,
       _call(),
-      send: (original, edited) =>
-          replayCall(original, edited, [adapter], engine: engine),
+      send: (original, edited, cancel) => replayCall(
+        original,
+        edited,
+        [adapter],
+        engine: engine,
+        cancel: cancel,
+      ),
       onOpenCall: opened.add,
     );
     expect(find.byType(ResendSheet), findsOneWidget);
@@ -204,7 +233,7 @@ void main() {
     await pumpSheet(
       tester,
       _call(),
-      send: (original, edited) async => ReplayResult(
+      send: (original, edited, _) async => ReplayResult(
         callId: 'new',
         response: ProxieResponse(
           statusCode: 200,
@@ -236,18 +265,19 @@ void main() {
           'x-a': ['1'],
         },
       ),
-      send: (original, edited) async {
+      send: (original, edited, _) async {
         sent.add(edited);
         throw const SocketException('offline');
       },
     );
     expect(
       find.text(
-        '1 value was masked at capture and will be sent as $kMask. '
-        'Replace it before sending.',
+        '1 header value was masked at capture and must be retyped before '
+        'sending.',
       ),
       findsOneWidget,
     );
+    expect(find.textContaining('will be sent as'), findsNothing);
     // The headers tile opens on its own, with the masked row marked.
     expect(find.byKey(const ValueKey('header-value-0')), findsOneWidget);
     expect(find.byTooltip('Masked at capture'), findsOneWidget);
@@ -272,8 +302,10 @@ void main() {
       'Bearer real',
     );
     await tester.pumpAndSettle();
-    expect(find.textContaining('will be sent as'), findsNothing);
+    expect(find.textContaining('must be retyped'), findsNothing);
     expect(find.text('Masked at capture; retype the value'), findsNothing);
+    // The refusal was about the value just fixed.
+    expect(find.byKey(const ValueKey('resend-error')), findsNothing);
     await tester.tap(_send);
     await tester.pumpAndSettle();
     expect(sent.single.headers['authorization'], ['Bearer real']);
@@ -289,14 +321,14 @@ void main() {
     await pumpSheet(
       tester,
       _call(body: _text('{"token":"$kMask","id":1}')),
-      send: (_, edited) async {
+      send: (_, edited, _) async {
         sent.add(edited);
         throw StateError('stop');
       },
     );
     expect(
       find.text(
-        '1 value was masked at capture and will be sent as $kMask. '
+        '1 body value was masked at capture and will be sent as $kMask. '
         'Replace it before sending.',
       ),
       findsOneWidget,
@@ -304,6 +336,250 @@ void main() {
     await tester.tap(_send);
     await tester.pumpAndSettle();
     expect(sent.single.body.text, '{"token":"$kMask","id":1}');
+  });
+
+  testWidgets('masked headers and body values get a notice each', (
+    tester,
+  ) async {
+    await pumpSheet(
+      tester,
+      _call(
+        headers: {
+          'authorization': [kMask],
+          'cookie': [kMask],
+        },
+        body: _text('{"token":"$kMask","secret":"$kMask"}'),
+      ),
+      send: (_, _, _) async => throw StateError('unused'),
+    );
+    expect(
+      find.text(
+        '2 header values were masked at capture and must be retyped before '
+        'sending.',
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.text(
+        '2 body values were masked at capture and will be sent as $kMask. '
+        'Replace them before sending.',
+      ),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('a partly masked header value is counted, marked and refused '
+      'alike', (tester) async {
+    var sends = 0;
+    await pumpSheet(
+      tester,
+      _call(
+        headers: {
+          'authorization': ['Bearer $kMask'],
+        },
+      ),
+      send: (_, _, _) async {
+        sends++;
+        throw StateError('unused');
+      },
+    );
+    expect(find.textContaining('1 header value was masked'), findsOneWidget);
+    expect(find.byKey(const ValueKey('header-value-0')), findsOneWidget);
+    expect(find.byTooltip('Masked at capture'), findsOneWidget);
+    await tester.tap(_send);
+    await tester.pumpAndSettle();
+    expect(sends, 0);
+    expect(find.text('Masked at capture; retype the value'), findsOneWidget);
+  });
+
+  testWidgets('a send failure stays until the request is edited', (
+    tester,
+  ) async {
+    await pumpSheet(
+      tester,
+      _call(),
+      send: (_, _, _) async => throw const SocketException('offline'),
+    );
+    final error = find.byKey(const ValueKey('resend-error'));
+    await tester.tap(_send);
+    await tester.pumpAndSettle();
+    expect(error, findsOneWidget);
+
+    // Moving the caret is not an edit.
+    final url = tester.widget<TextField>(
+      find.byKey(const ValueKey('request-url')),
+    );
+    url.controller!.selection = const TextSelection.collapsed(offset: 3);
+    await tester.pumpAndSettle();
+    expect(error, findsOneWidget);
+
+    await tester.enterText(
+      find.byKey(const ValueKey('request-url')),
+      'https://api.test/other',
+    );
+    await tester.pumpAndSettle();
+    expect(error, findsNothing);
+  });
+
+  testWidgets('editing the raw body clears a send failure', (tester) async {
+    await pumpSheet(
+      tester,
+      _call(body: _text('plain', type: 'text/plain')),
+      send: (_, _, _) async => throw const SocketException('offline'),
+    );
+    final error = find.byKey(const ValueKey('resend-error'));
+    await tester.tap(_send);
+    await tester.pumpAndSettle();
+    expect(error, findsOneWidget);
+    await tester.enterText(
+      find.byKey(const ValueKey('proxie-raw-editor')),
+      'other',
+    );
+    await tester.pumpAndSettle();
+    expect(error, findsNothing);
+  });
+
+  testWidgets('a double tap on Send sends once', (tester) async {
+    final gate = Completer<ReplayResult>();
+    var sends = 0;
+    await pumpSheet(
+      tester,
+      _call(),
+      send: (_, _, _) {
+        sends++;
+        return gate.future;
+      },
+    );
+    await tester.tap(_send);
+    await tester.tap(_send);
+    await tester.pump();
+    expect(sends, 1);
+    expect(_sendEnabled(tester), isFalse);
+    gate.complete(
+      ReplayResult(
+        callId: 'n',
+        response: ProxieResponse(
+          statusCode: 200,
+          headers: const {},
+          body: ProxieBody.empty(),
+        ),
+        adapterName: 'http',
+        viaFallback: false,
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(sends, 1);
+    expect(_sendEnabled(tester), isTrue);
+  });
+
+  testWidgets('closing the sheet mid-send is safe and the call is recorded', (
+    tester,
+  ) async {
+    final sink = <ProxieCall>[];
+    final engine = ProxieEngine(
+      config: const ProxieConfig(),
+      sink: _ListSink(sink),
+    );
+    addTearDown(engine.dispose);
+    final gate = Completer<void>();
+    final adapter = _GatedAdapter('http', gate.future);
+    await pumpSheet(
+      tester,
+      _call(),
+      send: (original, edited, cancel) => replayCall(
+        original,
+        edited,
+        [adapter],
+        engine: engine,
+        cancel: cancel,
+      ),
+    );
+    await tester.tap(_send);
+    await tester.pump();
+    await tester.pump();
+    expect(sink.last.response, isNull);
+
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(find.byType(ResendSheet), findsNothing);
+
+    gate.complete();
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    expect(sink.last.response!.statusCode, 201);
+    expect(sink.last.tags, {CallTag.replayed});
+  });
+
+  testWidgets('Cancel records the call as cancelled and ignores the late '
+      'response', (tester) async {
+    final sink = <ProxieCall>[];
+    final engine = ProxieEngine(
+      config: const ProxieConfig(),
+      sink: _ListSink(sink),
+    );
+    addTearDown(engine.dispose);
+    final gate = Completer<void>();
+    final adapter = _GatedAdapter('http', gate.future);
+    final cancelButton = find.widgetWithText(OutlinedButton, 'Cancel');
+    await pumpSheet(
+      tester,
+      _call(),
+      send: (original, edited, cancel) => replayCall(
+        original,
+        edited,
+        [adapter],
+        engine: engine,
+        cancel: cancel,
+      ),
+    );
+    expect(cancelButton, findsNothing);
+
+    await tester.tap(_send);
+    await tester.pump();
+    await tester.pump();
+    expect(cancelButton, findsOneWidget);
+    expect(_sendEnabled(tester), isFalse);
+
+    await tester.tap(cancelButton);
+    await tester.pumpAndSettle();
+    expect(find.text('Send cancelled'), findsOneWidget);
+    expect(cancelButton, findsNothing);
+    expect(_sendEnabled(tester), isTrue);
+    expect(sink.last.error!.type, 'cancelled');
+
+    gate.complete();
+    await tester.pumpAndSettle();
+    expect(sink.last.error!.type, 'cancelled');
+    expect(sink.last.response, isNull);
+    expect(find.byKey(const ValueKey('resend-result')), findsNothing);
+    expect(find.text('Send cancelled'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a sender that ignores Cancel cannot show a late result', (
+    tester,
+  ) async {
+    final gate = Completer<ReplayResult>();
+    await pumpSheet(tester, _call(), send: (_, _, _) => gate.future);
+    await tester.tap(_send);
+    await tester.pump();
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Cancel'));
+    await tester.pumpAndSettle();
+    gate.complete(
+      ReplayResult(
+        callId: 'n',
+        response: ProxieResponse(
+          statusCode: 200,
+          headers: const {},
+          body: ProxieBody.empty(),
+        ),
+        adapterName: 'http',
+        viaFallback: false,
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('resend-result')), findsNothing);
+    expect(find.text('Send cancelled'), findsOneWidget);
   });
 
   testWidgets('a truncated body disables Send until it is replaced', (
@@ -321,7 +597,7 @@ void main() {
           originalLength: 9000,
         ),
       ),
-      send: (original, edited) async {
+      send: (original, edited, _) async {
         sent.add(edited);
         return ReplayResult(
           callId: 'n',
@@ -354,7 +630,7 @@ void main() {
     await pumpSheet(
       tester,
       _call(),
-      send: (_, _) async =>
+      send: (_, _, _) async =>
           throw StateError('Cannot replay: request body was truncated'),
     );
     await tester.tap(_send);
@@ -373,7 +649,7 @@ void main() {
     await pumpSheet(
       tester,
       _call(),
-      send: (_, _) async {
+      send: (_, _, _) async {
         sends++;
         throw StateError('unused');
       },
@@ -397,7 +673,7 @@ void main() {
     await pumpSheet(
       tester,
       _call(body: _text('{"id":1}')),
-      send: (_, _) async => throw StateError('unused'),
+      send: (_, _, _) async => throw StateError('unused'),
     );
     final opens = worker.sent.whereType<OpenJson>().toList();
     expect(opens.single.scope, resendScope('c1'));

@@ -335,6 +335,12 @@ class ProxieDioInterceptor extends Interceptor implements ProxieCaptureAdapter {
     );
   }
 
+  /// A [DioException] is recorded with the same type as a live call's.
+  @override
+  ProxieError classifyReplayError(Object error) => error is DioException
+      ? ProxieError(type: _errorType(error.type), message: '$error')
+      : defaultReplayError(error);
+
   /// Answers [options] per [action] without the network.
   Future<void> _mock(
     ProxieEngine engine,

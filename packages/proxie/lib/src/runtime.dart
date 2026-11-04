@@ -168,6 +168,7 @@ class ProxieRuntime {
       calls: engine.calls,
       renderCap: config.renderCap,
       adapterNames: [for (final a in adapters) a.name],
+      optionalAdapterNames: const [kReplayFallbackAdapter],
       selectedCallId: inspector.selectedCallId,
       onSelected: inspector.select,
     );
@@ -189,8 +190,13 @@ class ProxieRuntime {
             context,
             call: call,
             worker: worker,
-            send: (original, edited) =>
-                replayCall(original, edited, adapters, engine: engine),
+            send: (original, edited, cancel) => replayCall(
+              original,
+              edited,
+              adapters,
+              engine: engine,
+              cancel: cancel,
+            ),
             rawEditableLimit: config.rawEditableLimit,
             onOpenCall: inspector.select,
           ),

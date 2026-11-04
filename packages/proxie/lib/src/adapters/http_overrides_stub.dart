@@ -1,5 +1,6 @@
 import 'package:proxie/src/adapters/capture_adapter.dart';
 import 'package:proxie/src/core/engine.dart';
+import 'package:proxie/src/model/call.dart';
 import 'package:proxie/src/model/request.dart';
 import 'package:proxie/src/model/response.dart';
 
@@ -24,4 +25,7 @@ class ProxieHttpOverridesAdapter implements ProxieCaptureAdapter {
   @override
   Future<ProxieResponse> replay(ProxieRequest request) =>
       throw UnsupportedError('dart:io is not available on this platform');
+
+  @override
+  ProxieError classifyReplayError(Object error) => defaultReplayError(error);
 }

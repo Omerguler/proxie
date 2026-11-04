@@ -97,6 +97,7 @@ class JsonTreeController extends ChangeNotifier {
   Object? _error;
   String? _editError;
   bool _edited = false;
+  int _editCount = 0;
 
   // Row windows by index, least recently used first.
   final LinkedHashMap<int, List<JsonRow>> _windows = LinkedHashMap();
@@ -142,6 +143,9 @@ class JsonTreeController extends ChangeNotifier {
 
   /// Whether an edit was applied since the document was opened.
   bool get edited => _edited;
+
+  /// Increases with every edit and revert; fetches leave it alone.
+  int get editCount => _editCount;
 
   /// The last search text.
   String get query => _query;
@@ -314,6 +318,7 @@ class JsonTreeController extends ChangeNotifier {
 
   /// Drops every edit: closes the document and opens the stored body.
   Future<void> revert() => _serial(() async {
+    _editCount++;
     final docId = _docId;
     if (docId != null) {
       try {
@@ -436,6 +441,7 @@ class JsonTreeController extends ChangeNotifier {
       if (_disposed) return;
       if (edit) {
         _edited = true;
+        _editCount++;
         _editError = null;
         _schemas.clear();
         _matches = const [];

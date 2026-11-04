@@ -20,6 +20,9 @@ class _Adapter implements ProxieCaptureAdapter {
   @override
   Future<ProxieResponse> replay(ProxieRequest request) =>
       throw UnimplementedError();
+
+  @override
+  ProxieError classifyReplayError(Object error) => defaultReplayError(error);
 }
 
 void main() {
