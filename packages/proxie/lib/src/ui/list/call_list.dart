@@ -49,7 +49,8 @@ class CallList extends StatefulWidget {
   final List<String> adapterNames;
 
   /// Names calls can be recorded under without an adapter attached (Proxie's
-  /// own replay client); each gets a chip once such a call exists.
+  /// own replay client); each gets a chip once such a call exists. It stays
+  /// until the list is rebuilt, even if retention removes those calls.
   final List<String> optionalAdapterNames;
 
   /// The call to highlight, or null for none.

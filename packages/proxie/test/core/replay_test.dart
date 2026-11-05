@@ -334,7 +334,51 @@ void main() {
     expect(await typeFor(http.ClientException('refused')), 'network');
   });
 
+  test('a throwing client factory records the failure', () async {
+    await expectLater(
+      replayCall(
+        _original('gone'),
+        _request(),
+        const [],
+        engine: engine,
+        fallbackClient: () => throw StateError('no client'),
+      ),
+      throwsA(isA<StateError>()),
+    );
+    final recorded = sink.latest.single;
+    expect(recorded.error!.type, 'network');
+    expect(recorded.error!.message, contains('no client'));
+    expect(recorded.duration, isNotNull);
+  });
+
+  test('a throwing classifier falls back to the default', () async {
+    final adapter = _BadClassifier(fail: TimeoutException('slow'));
+    await expectLater(
+      replayCall(_original('bad'), _request(), [adapter], engine: engine),
+      throwsA(isA<TimeoutException>()),
+    );
+    expect(sink.latest.single.error!.type, 'timeout');
+  });
+
   group('cancel', () {
+    test('after the response changes nothing', () async {
+      final cancel = Completer<void>();
+      final result = await replayCall(
+        _original('http'),
+        _request(),
+        [_FakeAdapter('http')],
+        engine: engine,
+        cancel: cancel.future,
+      );
+      expect(result.response.statusCode, 201);
+      final snapshots = sink.calls.length;
+      cancel.complete();
+      await Future<void>.delayed(Duration.zero);
+      expect(sink.calls, hasLength(snapshots));
+      expect(sink.latest.single.response!.statusCode, 201);
+      expect(sink.latest.single.error, isNull);
+    });
+
     test('records the call as cancelled and throws', () async {
       final cancel = Completer<void>();
       final gate = Completer<void>();
@@ -352,6 +396,7 @@ void main() {
       await expectLater(sending, throwsA(isA<ReplayCancelled>()));
       final recorded = sink.latest.single;
       expect(recorded.error!.type, 'cancelled');
+      expect(recorded.error!.message, kReplayCancelledMessage);
       expect(recorded.response, isNull);
       expect(recorded.duration, isNotNull);
       expect(recorded.tags, {CallTag.replayed});
@@ -475,6 +520,14 @@ void main() {
       expect(io.sink.latest.single.tags, {CallTag.replayed, CallTag.edited});
     });
   });
+}
+
+class _BadClassifier extends _FakeAdapter {
+  _BadClassifier({super.fail}) : super('bad');
+
+  @override
+  ProxieError classifyReplayError(Object error) =>
+      throw StateError('classifier failed');
 }
 
 class _GatedAdapter extends _FakeAdapter {

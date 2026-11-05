@@ -1080,6 +1080,25 @@ void main() {
       );
       expect(sink.calls.last.error!.type, 'network');
     });
+
+    test('a failure is recorded with the message a live call gets', () async {
+      DioException failure(RequestOptions options) => DioException(
+        requestOptions: options,
+        type: DioExceptionType.connectionError,
+        message: 'short reason',
+      );
+      dio.httpClientAdapter = _FailingAdapter(failure);
+      final call = original();
+      await expectLater(
+        replayCall(call, call.request, [interceptor], engine: engine),
+        throwsA(isA<DioException>()),
+      );
+      final replayed = sink.calls.last.error!;
+      await expectLater(dio.getUri<void>(server.url('/x')), throwsA(anything));
+      final live = sink.calls.last.error!;
+      expect(replayed.message, 'short reason');
+      expect(live.message, replayed.message);
+    });
   });
 
   group('replay', () {

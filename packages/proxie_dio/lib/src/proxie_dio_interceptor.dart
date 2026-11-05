@@ -273,10 +273,7 @@ class ProxieDioInterceptor extends Interceptor implements ProxieCaptureAdapter {
     _finish(options);
     engine.onError(
       callId,
-      ProxieError(
-        type: _errorType(err.type),
-        message: err.message ?? err.error?.toString() ?? err.type.name,
-      ),
+      _recordedError(err),
       response: response == null ? null : _snapshot(engine, response),
     );
     handler.next(err);
@@ -335,11 +332,10 @@ class ProxieDioInterceptor extends Interceptor implements ProxieCaptureAdapter {
     );
   }
 
-  /// A [DioException] is recorded with the same type as a live call's.
+  /// A [DioException] is recorded the same way as a live call's.
   @override
-  ProxieError classifyReplayError(Object error) => error is DioException
-      ? ProxieError(type: _errorType(error.type), message: '$error')
-      : defaultReplayError(error);
+  ProxieError classifyReplayError(Object error) =>
+      error is DioException ? _recordedError(error) : defaultReplayError(error);
 
   /// Answers [options] per [action] without the network.
   Future<void> _mock(
@@ -619,6 +615,12 @@ Headers _dioHeaders(RequestOptions options, Map<String, List<String>> h) =>
     Headers.fromMap({
       for (final e in h.entries) e.key: List.of(e.value),
     }, preserveHeaderCase: options.preserveHeaderCase);
+
+/// What [err] is recorded as, for live calls and replays alike.
+ProxieError _recordedError(DioException err) => ProxieError(
+  type: _errorType(err.type),
+  message: err.message ?? err.error?.toString() ?? err.type.name,
+);
 
 String _errorType(DioExceptionType type) => switch (type) {
   DioExceptionType.connectionTimeout ||

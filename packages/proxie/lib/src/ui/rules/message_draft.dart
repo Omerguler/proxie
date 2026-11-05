@@ -187,11 +187,12 @@ abstract class MessageDraft extends ChangeNotifier {
     if (!_disposed) _edited.value++;
   }
 
-  /// Values the stored copy had masked (P19): header values and JSON
-  /// strings equal to the mask, which would be sent as they are. Header
-  /// values still equal to the mask count live; the body is counted again
-  /// in the worker shortly after it is edited. Always 0 for a live
-  /// message, which was never masked.
+  /// Values the stored copy had masked (P19): header values holding the
+  /// mask (see [isMaskedHeaderValue]) and JSON strings equal to it. A body
+  /// value goes out as it is; a header value is refused in a request and
+  /// kept as it is in a response. Header values count live; the body is
+  /// counted again in the worker shortly after it is edited. Always 0 for a
+  /// live message, which was never masked.
   int get maskedCount => _maskedHeaders + _maskedBody;
 
   /// The part of [maskedCount] in header values.

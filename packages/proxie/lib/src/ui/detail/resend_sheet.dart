@@ -48,10 +48,12 @@ Future<void> openResendSheet(
 /// Edits the stored request of [call] (method, URL, query parameters,
 /// headers, body) and sends it again with [send].
 ///
-/// The stored request is the masked copy: masked values are pointed out,
-/// and sent as they are unless retyped. A truncated body cannot be sent
-/// until it is replaced. While it is sent, Cancel gives up on it. After a
-/// send it says how the request went out and offers to open the new call.
+/// The stored request is the masked copy: masked values are pointed out.
+/// A masked header value is refused until it is retyped; a masked body value
+/// is sent as it is. A truncated body cannot be sent until it is replaced.
+/// While it is sent, Cancel stops waiting for the result; the request may
+/// still reach the server. After a send it says how the request went out
+/// and offers to open the new call.
 class ResendSheet extends StatefulWidget {
   /// Creates the sheet of [call].
   const ResendSheet({
@@ -159,7 +161,7 @@ class _ResendSheetState extends State<ResendSheet> {
     cancel.complete();
     setState(() {
       _busy = false;
-      _error = 'Send cancelled';
+      _error = kReplayCancelledMessage;
     });
   }
 

@@ -8,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:proxie/proxie.dart';
 import 'package:proxie/src/core/replay.dart';
 import 'package:proxie/src/ui/detail/resend_sheet.dart';
+import 'package:proxie/src/ui/json/json_tree_view.dart';
 
 import '../support/ui_harness.dart';
 
@@ -439,6 +440,40 @@ void main() {
     expect(error, findsNothing);
   });
 
+  testWidgets('a JSON tree edit or revert clears a send failure', (
+    tester,
+  ) async {
+    await pumpSheet(
+      tester,
+      _call(body: _text('{"a":1}')),
+      send: (_, _, _) async => throw const SocketException('offline'),
+    );
+    final error = find.byKey(const ValueKey('resend-error'));
+    await tester.tap(_send);
+    await tester.pumpAndSettle();
+    expect(error, findsOneWidget);
+
+    await tester.tap(find.byTooltip('Edit a'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Edit value'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('proxie-value-field')),
+      '2',
+    );
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+    expect(error, findsNothing);
+
+    await tester.tap(_send);
+    await tester.pumpAndSettle();
+    expect(error, findsOneWidget);
+    final tree = tester.widget<JsonTreeView>(find.byType(JsonTreeView));
+    await tree.controller.revert();
+    await tester.pumpAndSettle();
+    expect(error, findsNothing);
+  });
+
   testWidgets('a double tap on Send sends once', (tester) async {
     final gate = Completer<ReplayResult>();
     var sends = 0;
@@ -542,7 +577,7 @@ void main() {
 
     await tester.tap(cancelButton);
     await tester.pumpAndSettle();
-    expect(find.text('Send cancelled'), findsOneWidget);
+    expect(find.text(kReplayCancelledMessage), findsOneWidget);
     expect(cancelButton, findsNothing);
     expect(_sendEnabled(tester), isTrue);
     expect(sink.last.error!.type, 'cancelled');
@@ -552,7 +587,7 @@ void main() {
     expect(sink.last.error!.type, 'cancelled');
     expect(sink.last.response, isNull);
     expect(find.byKey(const ValueKey('resend-result')), findsNothing);
-    expect(find.text('Send cancelled'), findsOneWidget);
+    expect(find.text(kReplayCancelledMessage), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -579,7 +614,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('resend-result')), findsNothing);
-    expect(find.text('Send cancelled'), findsOneWidget);
+    expect(find.text(kReplayCancelledMessage), findsOneWidget);
   });
 
   testWidgets('a truncated body disables Send until it is replaced', (

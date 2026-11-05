@@ -14,13 +14,19 @@ import 'package:proxie/src/model/response.dart';
 /// The adapter name a replay sent by Proxie's own client is recorded with.
 const String kReplayFallbackAdapter = 'built-in';
 
+/// What is said and recorded when a replay is cancelled. The request may
+/// already be out, and an adapter's goes on, so only the wait is certain to
+/// have stopped.
+const String kReplayCancelledMessage =
+    'Stopped waiting. The request may still reach the server.';
+
 /// Thrown by [replayCall] when its `cancel` completes first.
 class ReplayCancelled implements Exception {
   /// Creates the exception.
   const ReplayCancelled();
 
   @override
-  String toString() => 'Send cancelled';
+  String toString() => kReplayCancelledMessage;
 }
 
 /// The outcome of [replayCall].
@@ -68,8 +74,8 @@ class ReplayResult {
 ///
 /// When [cancel] completes first the call is recorded as `cancelled`, a
 /// late response or failure is ignored and [ReplayCancelled] is thrown. Only
-/// the fallback client's request is really stopped: an adapter's goes on,
-/// unseen.
+/// the fallback client's connection is closed: an adapter's request goes on,
+/// unseen, and either may already have reached the server.
 Future<ReplayResult> replayCall(
   ProxieCall original,
   ProxieRequest edited,
@@ -100,13 +106,15 @@ Future<ReplayResult> replayCall(
       if (!sameRequest(original.request, edited)) CallTag.edited,
     },
   );
-  // Created here, used once: its request is marked captured by its replay.
-  final fallback = adapter == null
-      ? (ProxieHttpClient(inner: (fallbackClient ?? http.Client.new)())
-          ..attach(engine))
-      : null;
-  final sender = adapter ?? fallback!;
+  ProxieHttpClient? fallback;
   try {
+    // Inside the try: a factory that throws must still finish the call. Its
+    // request is marked captured by its replay.
+    final sender =
+        adapter ??
+        (fallback = ProxieHttpClient(
+          inner: (fallbackClient ?? http.Client.new)(),
+        )..attach(engine));
     final sending = sender.replay(edited);
     final response = cancel == null
         ? await sending
@@ -118,10 +126,7 @@ Future<ReplayResult> replayCall(
     if (response == null) {
       engine.onError(
         callId,
-        const ProxieError(
-          type: 'cancelled',
-          message: 'Cancelled from the inspector',
-        ),
+        const ProxieError(type: 'cancelled', message: kReplayCancelledMessage),
       );
       throw const ReplayCancelled();
     }
@@ -135,15 +140,17 @@ Future<ReplayResult> replayCall(
   } on ReplayCancelled {
     rethrow;
   } on Object catch (e) {
-    engine.onError(callId, _classified(sender, e));
+    engine.onError(callId, _classified(adapter, e));
     rethrow;
   } finally {
     fallback?.close();
   }
 }
 
-// An adapter's classification must not hide the failure it describes.
-ProxieError _classified(ProxieCaptureAdapter adapter, Object error) {
+// An adapter's classification must not hide the failure it describes. The
+// fallback client (null [adapter]) classifies with the default too.
+ProxieError _classified(ProxieCaptureAdapter? adapter, Object error) {
+  if (adapter == null) return defaultReplayError(error);
   try {
     return adapter.classifyReplayError(error);
   } on Object catch (e, st) {
