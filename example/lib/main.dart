@@ -1,122 +1,130 @@
+import 'package:dio/dio.dart';
+import 'package:example/demo_requests.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
+import 'package:proxie/proxie.dart';
 
 void main() {
-  runApp(const MyApp());
-}
-
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
-
-  // This widget is the root of your application.
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Flutter Demo',
-      theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
-        colorScheme: .fromSeed(seedColor: Colors.deepPurple),
+  WidgetsFlutterBinding.ensureInitialized();
+  // Flutter web only builds its accessibility tree on request; the Playwright
+  // tests find the buttons through it.
+  if (kIsWeb) SemanticsBinding.instance.ensureSemantics();
+  final dio = Dio();
+  // Before runApp, so overlay back-button handling registers ahead of the
+  // app's navigator.
+  final ready = startProxie(dio);
+  runApp(
+    DemoApp(
+      requests: demoRequests(
+        client: Proxie.httpClient(),
+        dio: dio,
+        ready: ready,
       ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
-    );
-  }
+    ),
+  );
 }
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({required this.title, super.key});
+class DemoApp extends StatelessWidget {
+  const DemoApp({required this.requests, super.key});
 
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
-  final String title;
+  final List<DemoRequest> requests;
 
   @override
-  State<MyHomePage> createState() => _MyHomePageState();
+  Widget build(BuildContext context) => MaterialApp(
+    title: 'Proxie example',
+    theme: ThemeData(colorSchemeSeed: Colors.indigo),
+    builder: Proxie.wrap,
+    home: DemoHome(requests: requests),
+  );
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
+class DemoHome extends StatefulWidget {
+  const DemoHome({required this.requests, super.key});
 
-  void _incrementCounter() {
-    setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
-    });
+  final List<DemoRequest> requests;
+
+  @override
+  State<DemoHome> createState() => _DemoHomeState();
+}
+
+class _DemoHomeState extends State<DemoHome> {
+  final Map<String, String> _results = {};
+
+  Future<void> _run(DemoRequest request) async {
+    setState(() => _results[request.label] = 'Running...');
+    String result;
+    try {
+      result = await request.run();
+    } on Object catch (e) {
+      // No network, for example: the demo shows it and carries on.
+      result = 'Failed: $e';
+    }
+    if (!mounted) return;
+    setState(() => _results[request.label] = result);
   }
 
   @override
-  Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
-    return Scaffold(
-      appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
-      ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
-        child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: .center,
-          children: [
-            const Text('You have pushed the button this many times:'),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text('Proxie example')),
+    body: SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (final request in widget.requests)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: _DemoRow(
+                request: request,
+                result: _results[request.label],
+                onPressed: () => _run(request),
+              ),
             ),
-          ],
+        ],
+      ),
+    ),
+  );
+}
+
+class _DemoRow extends StatelessWidget {
+  const _DemoRow({
+    required this.request,
+    required this.result,
+    required this.onPressed,
+  });
+
+  final DemoRequest request;
+  final String? result;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final result = this.result;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        ElevatedButton(
+          onPressed: onPressed,
+          // Inside the button, so the label merges into the button's own
+          // semantics node, once, and the tap action stays.
+          child: Semantics(
+            label: request.label,
+            excludeSemantics: true,
+            child: Text(request.label),
+          ),
         ),
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
-      ),
+        if (result != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(
+              result,
+              key: ValueKey('result-${request.label}'),
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+      ],
     );
   }
 }
