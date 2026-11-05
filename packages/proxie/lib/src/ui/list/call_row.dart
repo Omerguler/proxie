@@ -6,7 +6,7 @@ import 'package:proxie/src/ui/sections.dart';
 import 'package:proxie/src/ui/theme.dart';
 
 /// One call in the list: method badge, path over host, status, duration,
-/// size and tag chips (`BREAK`, `MAP`, `EDITED`, then registered
+/// size and tag chips (`BREAK`, `MAP`, `REPLAY`, `EDITED`, then registered
 /// [ProxieListBadge]s).
 class CallRow extends StatelessWidget {
   /// Creates the row for [call]; tapping it calls [onTap].
@@ -42,74 +42,88 @@ class CallRow extends StatelessWidget {
       color: theme.colorScheme.onSurfaceVariant,
     );
     final chips = _chips(colors);
-    return Material(
-      color: selected
-          ? theme.colorScheme.primary.withValues(alpha: 0.14)
-          : Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        child: SizedBox(
-          height: height,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: Row(
-              children: [
-                _MethodBadge(call.method, colors.methodColor(call.method)),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        path,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.bodyMedium,
-                      ),
-                      const SizedBox(height: 2),
-                      Row(
-                        children: [
-                          Flexible(
-                            child: Text(
-                              uri?.host ?? '',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: muted,
-                            ),
-                          ),
-                          if (chips.isNotEmpty)
-                            // Chips that do not fit are clipped.
+    // Its own node: a session header above it must not merge into it.
+    return Semantics(
+      container: true,
+      button: onTap != null,
+      child: Material(
+        color: selected
+            ? theme.colorScheme.primary.withValues(alpha: 0.14)
+            : Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          child: SizedBox(
+            height: height,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Row(
+                children: [
+                  _MethodBadge(call.method, colors.methodColor(call.method)),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          path,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.bodyMedium,
+                        ),
+                        const SizedBox(height: 2),
+                        Row(
+                          children: [
                             Flexible(
-                              child: SingleChildScrollView(
-                                scrollDirection: Axis.horizontal,
-                                physics: const NeverScrollableScrollPhysics(),
-                                child: Row(
-                                  children: [
-                                    for (final chip in chips) ...[
-                                      const SizedBox(width: 4),
-                                      chip,
-                                    ],
-                                  ],
-                                ),
+                              child: Text(
+                                uri?.host ?? '',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: muted,
                               ),
                             ),
-                        ],
-                      ),
+                            if (chips.isNotEmpty)
+                              // Chips that do not fit are clipped. Read as part
+                              // of the row: a scrollable in the semantics tree
+                              // would split the row and take its tap action.
+                              Flexible(
+                                child: Semantics(
+                                  label: [
+                                    for (final c in chips) c.label,
+                                  ].join(' '),
+                                  excludeSemantics: true,
+                                  child: SingleChildScrollView(
+                                    scrollDirection: Axis.horizontal,
+                                    physics:
+                                        const NeverScrollableScrollPhysics(),
+                                    child: Row(
+                                      children: [
+                                        for (final chip in chips) ...[
+                                          const SizedBox(width: 4),
+                                          chip,
+                                        ],
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      _status(theme, colors),
+                      const SizedBox(height: 2),
+                      Text(_meta(), style: muted),
                     ],
                   ),
-                ),
-                const SizedBox(width: 8),
-                Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    _status(theme, colors),
-                    const SizedBox(height: 2),
-                    Text(_meta(), style: muted),
-                  ],
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
@@ -145,10 +159,12 @@ class CallRow extends StatelessWidget {
     return parts.join(' · ');
   }
 
-  List<Widget> _chips(ProxieColors colors) => [
+  List<_TagChip> _chips(ProxieColors colors) => [
     if (call.tags.contains(CallTag.breakpoint))
       _TagChip('BREAK', colors.clientError),
     if (call.tags.contains(CallTag.mapLocal)) _TagChip('MAP', colors.redirect),
+    if (call.tags.contains(CallTag.replayed))
+      _TagChip('REPLAY', colors.pending),
     if (call.tags.contains(CallTag.edited))
       _TagChip('EDITED', colors.accentStart),
     for (final badge in ProxieSections.listBadges)

@@ -8,8 +8,11 @@ import 'package:http/http.dart' as http;
 import 'package:proxie/proxie.dart';
 import 'package:proxie_dio/proxie_dio.dart';
 
-const _jsonApi = 'https://jsonplaceholder.typicode.com';
-const _httpbin = 'https://httpbin.org';
+/// Where the JSON buttons send their requests by default.
+const defaultJsonApi = 'https://jsonplaceholder.typicode.com';
+
+/// Where the status, image and `HttpClient` buttons send theirs by default.
+const defaultHttpbin = 'https://httpbin.org';
 
 /// Answered by the Big JSON Map Local rule; `.invalid` never resolves, so the
 /// demo cannot depend on the network.
@@ -40,11 +43,14 @@ class DemoRequest {
 }
 
 /// The demo buttons, top to bottom. Every request waits for [ready] so that
-/// an early tap is still recorded.
+/// an early tap is still recorded. [jsonApi] and [httpbin] say where they go;
+/// the integration test points them at a local server.
 List<DemoRequest> demoRequests({
   required http.Client client,
   required Dio dio,
   required Future<void> ready,
+  String jsonApi = defaultJsonApi,
+  String httpbin = defaultHttpbin,
 }) {
   DemoRequest demo(String label, Future<String> Function() run) =>
       DemoRequest(label, () async {
@@ -58,33 +64,33 @@ List<DemoRequest> demoRequests({
   }
 
   return [
-    demo('GET JSON', () => get('$_jsonApi/todos/1')),
+    demo('GET JSON', () => get('$jsonApi/todos/1')),
     demo('POST JSON', () async {
       final response = await client.post(
-        Uri.parse('$_jsonApi/posts'),
+        Uri.parse('$jsonApi/posts'),
         headers: {'content-type': 'application/json'},
         body: jsonEncode({'title': 'Proxie', 'body': 'demo', 'userId': 1}),
       );
       return _summary(response.statusCode, response.bodyBytes.length);
     }),
-    demo('404', () => get('$_httpbin/status/404')),
-    demo('500', () => get('$_httpbin/status/500')),
+    demo('404', () => get('$httpbin/status/404')),
+    demo('500', () => get('$httpbin/status/500')),
     demo('Big JSON (5 MB)', () async {
       final engine = Proxie.engine;
       if (engine == null) return bigJsonProxieOff;
       await ensureBigJsonRule(engine);
       return await get(bigJsonUrl);
     }),
-    demo('Image', () => get('$_httpbin/image/png')),
+    demo('Image', () => get('$httpbin/image/png')),
     demo('Dio GET', () async {
       final response = await dio.get<List<int>>(
-        '$_jsonApi/users/1',
+        '$jsonApi/users/1',
         options: Options(responseType: ResponseType.bytes),
       );
       return _summary(response.statusCode, response.data?.length ?? 0);
     }),
     if (!kIsWeb)
-      demo('HttpClient GET', () => httpClientGet(Uri.parse('$_httpbin/get'))),
+      demo('HttpClient GET', () => httpClientGet(Uri.parse('$httpbin/get'))),
   ];
 }
 

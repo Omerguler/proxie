@@ -163,7 +163,10 @@ class _RuleTile extends StatelessWidget {
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Switch(value: rule.enabled, onChanged: onEnabled),
+          Semantics(
+            label: 'Enable rule ${rule.name}',
+            child: Switch(value: rule.enabled, onChanged: onEnabled),
+          ),
           IconButton(
             tooltip: 'Delete rule',
             icon: const Icon(Icons.delete_outline),

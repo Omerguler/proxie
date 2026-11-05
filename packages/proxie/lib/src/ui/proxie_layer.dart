@@ -143,17 +143,64 @@ class ProxieLayer extends StatelessWidget {
                       onTap: runtime.controller.open,
                     ),
                   ),
-                  if (overlay != null && page != null)
-                    HeroControllerScope.none(
-                      child: Navigator(
-                        key: overlay.navigatorKey,
-                        onGenerateRoute: (_) =>
-                            MaterialPageRoute<void>(builder: (_) => page),
-                      ),
+                  if (overlay != null)
+                    _OverlayNavigator(
+                      navigatorKey: overlay.navigatorKey,
+                      page: page,
                     ),
                 ],
               );
             },
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The navigator around the overlay inspector's [page].
+///
+/// When [page] goes away the navigator first stops taking focus, hidden, and
+/// is removed one frame later. Removing it at once fails on the web: when the
+/// focused element leaves the semantics tree, the browser reports a view focus
+/// change in the middle of that frame, and focus traversal then measures
+/// focus nodes whose render objects were already detached.
+class _OverlayNavigator extends StatefulWidget {
+  const _OverlayNavigator({required this.navigatorKey, required this.page});
+
+  final GlobalKey<NavigatorState> navigatorKey;
+  final Widget? page;
+
+  @override
+  State<_OverlayNavigator> createState() => _OverlayNavigatorState();
+}
+
+class _OverlayNavigatorState extends State<_OverlayNavigator> {
+  // The page the navigator was built with, kept while it is being removed.
+  Widget? _shown;
+
+  @override
+  Widget build(BuildContext context) {
+    final page = widget.page;
+    final removing = page == null;
+    if (page != null) {
+      _shown = page;
+    } else if (_shown != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && widget.page == null) setState(() => _shown = null);
+      });
+    }
+    final shown = _shown;
+    if (shown == null) return const SizedBox.shrink();
+    return ExcludeFocus(
+      excluding: removing,
+      child: Offstage(
+        offstage: removing,
+        child: HeroControllerScope.none(
+          child: Navigator(
+            key: widget.navigatorKey,
+            onGenerateRoute: (_) =>
+                MaterialPageRoute<void>(builder: (_) => shown),
           ),
         ),
       ),

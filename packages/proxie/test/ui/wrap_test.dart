@@ -1,6 +1,9 @@
+import 'dart:ui' show ViewFocusDirection, ViewFocusEvent, ViewFocusState;
+
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:proxie/proxie.dart';
@@ -97,6 +100,66 @@ Brightness _bubbleBrightness(WidgetTester tester) =>
 void main() {
   tearDown(() async {
     await Proxie.shutdown();
+  });
+
+  testWidgets('the bubble is its own semantics node, the app stays outside', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
+    try {
+      await initProxie(tester);
+      await tester.pumpWidget(hostApp());
+      await tester.pump();
+
+      final bubble = find.bySemanticsLabel('Open Proxie inspector');
+      expect(bubble, findsOneWidget);
+      expect(tester.getSize(bubble), const Size.square(ProxieBubble.size));
+      // Its tap belongs to it alone, and the app is not a child of it.
+      final node = tester.getSemantics(bubble);
+      expect(node, isSemantics(isButton: true, hasTapAction: true));
+      expect(node.childrenCount, 0);
+      expect(find.bySemanticsLabel('host home'), findsOneWidget);
+    } finally {
+      semantics.dispose();
+      await tester.runAsync(Proxie.shutdown);
+    }
+  });
+
+  testWidgets('a view focus change while the inspector closes does not throw', (
+    tester,
+  ) async {
+    // On the web, removing the focused element from the semantics tree makes
+    // the browser report a view focus change in the middle of the frame:
+    // after the inspector's render objects were detached, before its focus
+    // nodes are disposed.
+    final semantics = tester.ensureSemantics();
+    void reportFocus() => tester.binding.handleViewFocusChanged(
+      ViewFocusEvent(
+        viewId: tester.view.viewId,
+        state: ViewFocusState.focused,
+        direction: ViewFocusDirection.forward,
+      ),
+    );
+    SemanticsOwner? listened;
+    try {
+      await initProxie(tester);
+      await tester.pumpWidget(hostApp());
+      listened = tester.renderObject(bubbleFinder).owner!.semanticsOwner;
+      Proxie.open();
+      await tester.pumpAndSettle();
+
+      controllerIn(tester).close();
+      listened!.addListener(reportFocus);
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      expect(shellFinder, findsNothing);
+      expect(bubbleFinder, findsOneWidget);
+    } finally {
+      listened?.removeListener(reportFocus);
+      semantics.dispose();
+      await tester.runAsync(Proxie.shutdown);
+    }
   });
 
   group('theme mode', () {

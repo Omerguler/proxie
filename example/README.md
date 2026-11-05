@@ -43,3 +43,21 @@ but `Big JSON (5 MB)` reports that Proxie is not running.
 
 On Windows, building with plugins needs Developer Mode, for symlink support:
 run `start ms-settings:developers` to open the setting.
+
+## End-to-end tests
+
+Neither suite needs network access: the requests go to fixed answers in the
+browser, or to a local server.
+
+```sh
+# Web, in Chromium. Build first; the tests run against example/build/web.
+flutter build web --profile --dart-define=PROXIE=true
+cd ../e2e
+npm ci
+npx playwright install chromium
+npx playwright test
+
+# Desktop or a device. Overwrites the clipboard.
+cd ../example
+flutter test integration_test -d windows
+```

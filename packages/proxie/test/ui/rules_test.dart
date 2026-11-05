@@ -407,6 +407,26 @@ void main() {
     expect([for (final r in await store.rules()) r.enabled], [false, true]);
   });
 
+  testWidgets('a rule tile names its switch after the rule', (tester) async {
+    final semantics = tester.ensureSemantics();
+    try {
+      engine.rules = RuleSet([_rule('a')]);
+      await tester.pumpWidget(app(const RulesScreen()));
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.getSemantics(find.byType(Switch)),
+        isSemantics(
+          label: 'Enable rule rule a',
+          hasToggledState: true,
+          isToggled: true,
+        ),
+      );
+    } finally {
+      semantics.dispose();
+    }
+  });
+
   testWidgets('reorder persists order', (tester) async {
     engine.rules = RuleSet([_rule('a'), _rule('b'), _rule('c')]);
     await tester.pumpWidget(app(const RulesScreen()));

@@ -204,6 +204,7 @@ class _ProxieBubbleState extends State<ProxieBubble>
     return ValueListenableBuilder<int>(
       valueListenable: widget.callCount,
       builder: (context, count, _) => Semantics(
+        container: true,
         button: true,
         label: 'Open Proxie inspector',
         value: count == 1 ? '1 call' : '$count calls',

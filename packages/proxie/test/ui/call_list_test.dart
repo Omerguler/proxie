@@ -878,6 +878,77 @@ void main() {
     expect(find.text('/items/999'), findsOneWidget);
   });
 
+  testWidgets('a tagged row stays one tappable node naming its tags', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
+    try {
+      await store.upsert(
+        call(
+          'tagged',
+          session: 2,
+          path: '/tagged',
+          at: clock,
+          tags: const {
+            CallTag.breakpoint,
+            CallTag.mapLocal,
+            CallTag.edited,
+            CallTag.replayed,
+          },
+        ),
+      );
+      await pumpList(tester, onSelected: (_) {});
+
+      final row = find.bySemanticsLabel(RegExp('/tagged'));
+      expect(row, findsOneWidget);
+      final label = tester.getSemantics(row).label;
+      for (final tag in ['BREAK', 'MAP', 'EDITED', 'REPLAY']) {
+        expect(label, contains(tag));
+      }
+      expect(tester.getSemantics(row), isSemantics(hasTapAction: true));
+    } finally {
+      semantics.dispose();
+    }
+  });
+
+  testWidgets('a replayed row shows REPLAY; an edited one EDITED too', (
+    tester,
+  ) async {
+    await store.upsert(
+      call(
+        'replayed',
+        session: 2,
+        path: '/replayed',
+        at: clock,
+        tags: const {CallTag.replayed},
+      ),
+    );
+    await pumpList(tester);
+    expect(find.text('REPLAY'), findsOneWidget);
+    expect(find.text('EDITED'), findsNothing);
+  });
+
+  testWidgets('a session header is not part of the row under it', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
+    try {
+      await store.upsert(call('n', session: 2, path: '/now', at: clock));
+      await pumpList(tester, onSelected: (_) {});
+
+      final row = tester.getSemantics(find.bySemanticsLabel(RegExp('/now')));
+      expect(row.label, isNot(contains('Today')));
+      expect(row, isSemantics(isButton: true, hasTapAction: true));
+      expect(row.childrenCount, 0);
+      expect(
+        find.bySemanticsLabel(RegExp(r'^Today \d\d:\d\d — 1 call$')),
+        findsOneWidget,
+      );
+    } finally {
+      semantics.dispose();
+    }
+  });
+
   testWidgets('the inspector shows the call list', (tester) async {
     addTearDown(Proxie.shutdown);
     addTearDown(tester.view.reset);

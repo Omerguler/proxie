@@ -70,6 +70,38 @@ void main() {
     });
   });
 
+  test('the buttons go to the default hosts unless told otherwise', () async {
+    final asked = <Uri>[];
+    final client = MockClient((request) async {
+      asked.add(request.url);
+      return http.Response('{}', 200);
+    });
+    Future<void> tapFirstAndFourth(List<DemoRequest> requests) async {
+      await requests.first.run();
+      await requests[3].run();
+    }
+
+    await tapFirstAndFourth(
+      demoRequests(client: client, dio: Dio(), ready: Future<void>.value()),
+    );
+    await tapFirstAndFourth(
+      demoRequests(
+        client: client,
+        dio: Dio(),
+        ready: Future<void>.value(),
+        jsonApi: 'http://127.0.0.1:1',
+        httpbin: 'http://127.0.0.1:2',
+      ),
+    );
+
+    expect(asked.map((u) => u.toString()), [
+      'https://jsonplaceholder.typicode.com/todos/1',
+      'https://httpbin.org/status/500',
+      'http://127.0.0.1:1/todos/1',
+      'http://127.0.0.1:2/status/500',
+    ]);
+  });
+
   testWidgets('a request waits for ready, so an early tap is recorded', (
     tester,
   ) async {
