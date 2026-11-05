@@ -12,7 +12,7 @@ void main() {
   if (kIsWeb) SemanticsBinding.instance.ensureSemantics();
   final dio = Dio();
   // Before runApp, so overlay back-button handling registers ahead of the
-  // app's navigator.
+  // app's navigator. Non-debug builds need --dart-define=PROXIE=true (README).
   final ready = startProxie(dio);
   runApp(
     DemoApp(

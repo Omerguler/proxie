@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:developer' as developer;
 
 import 'package:dio/dio.dart';
 import 'package:example/http_client_request_stub.dart'
@@ -22,6 +21,12 @@ const bigJsonRuleId = 'example-big-json';
 /// Size of the generated Big JSON body. Below Proxie's 5 MiB capture cap, so
 /// the body is served whole.
 const bigJsonBytes = 5000000;
+
+/// Shown by the Big JSON button when Proxie is not running: only Proxie can
+/// answer that URL.
+const bigJsonProxieOff =
+    'Proxie is not running, so nothing can answer this request. '
+    'Non-debug builds need --dart-define=PROXIE=true: see example/README.md.';
 
 /// One demo button: its stable [label] and the request behind it.
 class DemoRequest {
@@ -64,7 +69,12 @@ List<DemoRequest> demoRequests({
     }),
     demo('404', () => get('$_httpbin/status/404')),
     demo('500', () => get('$_httpbin/status/500')),
-    demo('Big JSON (5 MB)', () => get(bigJsonUrl)),
+    demo('Big JSON (5 MB)', () async {
+      final engine = Proxie.engine;
+      if (engine == null) return bigJsonProxieOff;
+      await ensureBigJsonRule(engine);
+      return await get(bigJsonUrl);
+    }),
     demo('Image', () => get('$_httpbin/image/png')),
     demo('Dio GET', () async {
       final response = await dio.get<List<int>>(
@@ -80,27 +90,16 @@ List<DemoRequest> demoRequests({
 
 String _summary(int? status, int length) => '$status ($length bytes)';
 
-/// Starts Proxie with all three adapters, then adds the Big JSON rule. Never
-/// throws: Proxie reports its own failures, and without the rule the Big JSON
-/// button shows a failed request.
-Future<void> startProxie(Dio dio) async {
+/// Starts Proxie with all three adapters. Never throws: Proxie reports its own
+/// failures, and requests then go out unrecorded.
+Future<void> startProxie(Dio dio) {
   final interceptor = ProxieDio.install(dio);
-  await Proxie.init(adapters: [ProxieHttpOverridesAdapter(), interceptor]);
-  final engine = Proxie.engine;
-  if (engine == null) return;
-  try {
-    await ensureBigJsonRule(engine);
-  } on Object catch (e, st) {
-    developer.log(
-      'Could not create the Big JSON rule',
-      name: 'example',
-      error: e,
-      stackTrace: st,
-    );
-  }
+  return Proxie.init(adapters: [ProxieHttpOverridesAdapter(), interceptor]);
 }
 
 /// Adds the Big JSON Map Local rule to [engine] unless it already has it.
+/// Called on each tap of the button, so an app that never taps it does not
+/// hold the 5 MB, and a rule the user deleted returns only with the next tap.
 ///
 /// The rule is live but not stored: the public API has no call that stores a
 /// rule. It reaches the store when the inspector next saves any rule, and

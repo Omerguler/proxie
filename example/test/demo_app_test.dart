@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
@@ -26,22 +27,32 @@ void main() {
     );
 
     testWidgets('each has its exact semantics label', (tester) async {
+      // Not addTearDown: the test checks for open handles before tear-downs.
       final semantics = tester.ensureSemantics();
-      await tester.pumpWidget(DemoApp(requests: requests()));
+      try {
+        await tester.pumpWidget(DemoApp(requests: requests()));
 
-      for (final label in [
-        'GET JSON',
-        'POST JSON',
-        '404',
-        '500',
-        'Big JSON (5 MB)',
-        'Image',
-        'Dio GET',
-        'HttpClient GET',
-      ]) {
-        expect(find.bySemanticsLabel(label), findsOneWidget, reason: label);
+        for (final label in [
+          'GET JSON',
+          'POST JSON',
+          '404',
+          '500',
+          'Big JSON (5 MB)',
+          'Image',
+          'Dio GET',
+          'HttpClient GET',
+        ]) {
+          final finder = find.bySemanticsLabel(label);
+          expect(finder, findsOneWidget, reason: label);
+          expect(
+            tester.getSemantics(finder),
+            isSemantics(label: label, isButton: true, hasTapAction: true),
+            reason: label,
+          );
+        }
+      } finally {
+        semantics.dispose();
       }
-      semantics.dispose();
     });
 
     testWidgets('a failed request shows inline', (tester) async {
@@ -57,6 +68,59 @@ void main() {
       expect(result.data, contains('offline'));
       expect(tester.takeException(), isNull);
     });
+  });
+
+  testWidgets('a request waits for ready, so an early tap is recorded', (
+    tester,
+  ) async {
+    final ready = Completer<void>();
+    var sent = 0;
+    await tester.pumpWidget(
+      DemoApp(
+        requests: demoRequests(
+          client: MockClient((_) async {
+            sent++;
+            return http.Response('{}', 200);
+          }),
+          dio: Dio(),
+          ready: ready.future,
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('GET JSON'));
+    await tester.pumpAndSettle();
+    expect(sent, 0);
+    expect(find.text('Running...'), findsOneWidget);
+
+    ready.complete();
+    await tester.pumpAndSettle();
+    expect(sent, 1);
+    expect(find.text('200 (2 bytes)'), findsOneWidget);
+  });
+
+  testWidgets('Big JSON explains itself when Proxie is not running', (
+    tester,
+  ) async {
+    var sent = 0;
+    await tester.pumpWidget(
+      DemoApp(
+        requests: demoRequests(
+          client: MockClient((_) async {
+            sent++;
+            return http.Response('', 200);
+          }),
+          dio: Dio(),
+          ready: Future<void>.value(),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('Big JSON (5 MB)'));
+    await tester.pumpAndSettle();
+
+    expect(find.text(bigJsonProxieOff), findsOneWidget);
+    expect(sent, 0);
   });
 
   group('Big JSON', () {
@@ -86,7 +150,7 @@ void main() {
       expect(response.bodyBytes.length, greaterThan(bigJsonBytes - 300));
     });
 
-    test('a rule restored from storage is kept as the user left it', () async {
+    test('an existing rule with that id is left untouched', () async {
       final engine = ProxieEngine(
         config: const ProxieConfig(),
         sink: _NullSink(),
