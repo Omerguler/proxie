@@ -31,7 +31,10 @@ test.describe('list and detail', () => {
     await app.tap('Big JSON (5 MB)', /^200 \(\d{7} bytes\)$/);
     await app.tap('Image', `200 (${png.length} bytes)`);
     await app.tap('Dio GET', `200 (${user.length} bytes)`);
-    expect(net.hits('https://big-json.invalid/data.json')).toBe(0);
+    // Big JSON was answered by its rule: nothing asked for its URL.
+    expect(net.unexpected).toEqual([]);
+    const post = net.received.find((r) => r.method() === 'POST');
+    expect(post?.postDataJSON()).toEqual({ title: 'Proxie', body: 'demo', userId: 1 });
 
     await app.openInspector();
     await expect(app.row('GET', '/todos/1', '200')).toBeVisible();
@@ -42,9 +45,47 @@ test.describe('list and detail', () => {
     await expect(app.row('GET', '/image/png', '200')).toBeVisible();
     await expect(app.row('GET', '/users/1', '200')).toBeVisible();
 
+    // Adapter chips: the web has no dart:io, and http needs no attaching.
+    await expect(page.getByRole('checkbox', { name: 'io', exact: true })).toBeHidden();
+    await page.getByRole('checkbox', { name: 'http', exact: true }).click();
+    await expect(app.row('/todos/1')).toBeVisible();
+    await expect(app.row('/users/1')).toBeHidden();
+    await page.getByRole('checkbox', { name: 'http', exact: true }).click();
+    await page.getByRole('checkbox', { name: 'dio', exact: true }).click();
+    await expect(app.row('/users/1')).toBeVisible();
+    await expect(app.row('/todos/1')).toBeHidden();
+    await page.getByRole('checkbox', { name: 'dio', exact: true }).click();
+    await expect(app.row('/todos/1')).toBeVisible();
+
     // The 5 MB body opens as a tree.
     await app.row('/data.json').click();
     await expect(app.text(/generated: true/)).toBeVisible({ timeout: 30_000 });
+  });
+
+  test('switching from Big JSON to a small body shows its rows', async ({ app, page }, testInfo) => {
+    await app.tap('GET JSON', todoResult);
+    await app.tap('Big JSON (5 MB)', /^200 \(\d{7} bytes\)$/);
+    await app.openInspector();
+
+    // Three times: the first open parses the body, later ones reuse it.
+    for (const round of [1, 2, 3]) {
+      await app.row('/data.json').click();
+      await expect(app.text(/generated: true/)).toBeVisible({ timeout: 30_000 });
+
+      const clicked = Date.now();
+      await app.row('/todos/1').click();
+      await expect(app.text('delectus aut autem')).toBeVisible();
+      testInfo.annotations.push({ type: 'rows-visible-ms', description: `round ${round}: ${Date.now() - clicked}` });
+      await expect(app.text(/generated: true/)).toBeHidden();
+    }
+
+    // Without waiting for the big tree first.
+    await app.row('/data.json').click();
+    const clicked = Date.now();
+    await app.row('/todos/1').click();
+    await expect(app.text('delectus aut autem')).toBeVisible();
+    testInfo.annotations.push({ type: 'rows-visible-ms', description: `immediate: ${Date.now() - clicked}` });
+    await expect(page.getByRole('tab', { name: 'Response' })).toBeVisible();
   });
 
   test('Errors shows only 4xx and 5xx', async ({ app, page }) => {
@@ -79,6 +120,16 @@ test.describe('layout', () => {
     // The list is still there.
     await expect(app.row('/todos/1')).toBeVisible();
     await expect(app.field('Search URL or body')).toBeVisible();
+
+    // Side by side: the panes share a band of the screen and do not overlap.
+    const list = await app.row('/todos/1').boundingBox();
+    const detail = await page.getByRole('tabpanel').boundingBox();
+    if (list === null || detail === null) throw new Error('A pane has no box');
+    expect(list.x + list.width).toBeLessThanOrEqual(detail.x);
+    expect(list.x).toBeGreaterThanOrEqual(0);
+    expect(detail.x + detail.width).toBeLessThanOrEqual(1280);
+    expect(list.y).toBeLessThan(detail.y + detail.height);
+    expect(detail.y).toBeLessThan(list.y + list.height);
   });
 
   test('390x844 shows the list, then the detail alone', async ({ app, page }) => {

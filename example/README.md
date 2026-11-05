@@ -50,14 +50,13 @@ Neither suite needs network access: the requests go to fixed answers in the
 browser, or to a local server.
 
 ```sh
-# Web, in Chromium. Build first; the tests run against example/build/web.
-flutter build web --profile --dart-define=PROXIE=true
+# Web, in Chromium. Builds the example first, on every run.
 cd ../e2e
 npm ci
 npx playwright install chromium
 npx playwright test
 
-# Desktop or a device. Overwrites the clipboard.
+# Windows, the only desktop run so far. Overwrites the clipboard.
 cd ../example
 flutter test integration_test -d windows
 ```

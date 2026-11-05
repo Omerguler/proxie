@@ -2,7 +2,10 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:proxie/proxie.dart';
+import 'package:proxie/src/adapters/http_overrides_stub.dart' as web_stub;
 import 'package:proxie/src/ui/list/call_list.dart';
 import 'package:proxie/src/ui/list/call_row.dart';
 import 'package:proxie/src/ui/list/list_controller.dart';
@@ -109,6 +112,29 @@ ProxieCall call(
   tags: tags,
 );
 
+class _NamedAdapter implements ProxieCaptureAdapter {
+  _NamedAdapter(this.name);
+
+  @override
+  final String name;
+
+  @override
+  bool get supportsReplay => false;
+
+  @override
+  void attach(ProxieEngine engine) {}
+
+  @override
+  void detach() {}
+
+  @override
+  Future<ProxieResponse> replay(ProxieRequest request) =>
+      throw UnsupportedError('no replay');
+
+  @override
+  ProxieError classifyReplayError(Object error) => defaultReplayError(error);
+}
+
 const _minute = Duration(minutes: 1);
 
 void main() {
@@ -134,6 +160,7 @@ void main() {
     WidgetTester tester, {
     Stream<ProxieCall>? stream,
     ValueChanged<String>? onSelected,
+    String? selectedCallId,
   }) async {
     addTearDown(tester.view.reset);
     setViewSize(tester, phoneSize);
@@ -146,6 +173,7 @@ void main() {
             calls: stream ?? calls.stream,
             renderCap: 5 * 1024 * 1024,
             onSelected: onSelected,
+            selectedCallId: selectedCallId,
           ),
         ),
       ),
@@ -923,9 +951,121 @@ void main() {
         tags: const {CallTag.replayed},
       ),
     );
+    await store.upsert(
+      call(
+        'edited',
+        session: 2,
+        path: '/edited',
+        at: clock.add(const Duration(seconds: 1)),
+        tags: const {CallTag.replayed, CallTag.edited},
+      ),
+    );
     await pumpList(tester);
-    expect(find.text('REPLAY'), findsOneWidget);
-    expect(find.text('EDITED'), findsNothing);
+    expect(find.text('REPLAY'), findsNWidgets(2));
+    expect(find.text('EDITED'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.ancestor(
+          of: find.text('/replayed'),
+          matching: find.byType(CallRow),
+        ),
+        matching: find.text('EDITED'),
+      ),
+      findsNothing,
+    );
+  });
+
+  testWidgets('the open call is the selected row for screen readers', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
+    try {
+      await store.upsert(call('a', session: 2, path: '/open', at: clock));
+      await store.upsert(
+        call(
+          'b',
+          session: 2,
+          path: '/other',
+          at: clock.add(const Duration(seconds: 1)),
+        ),
+      );
+      await pumpList(tester, onSelected: (_) {}, selectedCallId: 'a');
+
+      expect(
+        tester.getSemantics(find.bySemanticsLabel(RegExp('/open'))),
+        isSemantics(isButton: true, hasSelectedState: true, isSelected: true),
+      );
+      expect(
+        tester.getSemantics(find.bySemanticsLabel(RegExp('/other'))),
+        isSemantics(isButton: true, hasSelectedState: true, isSelected: false),
+      );
+    } finally {
+      semantics.dispose();
+    }
+  });
+
+  testWidgets('Proxie.httpClient() calls get a chip; the web stub gets none', (
+    tester,
+  ) async {
+    addTearDown(() => tester.runAsync(Proxie.shutdown));
+    addTearDown(tester.view.reset);
+    setViewSize(tester, tabletSize);
+    await tester.runAsync(
+      () => Proxie.init(
+        adapters: [
+          _NamedAdapter('other'),
+          web_stub.ProxieHttpOverridesAdapter(),
+        ],
+        config: memoryConfig,
+      ),
+    );
+    final client = Proxie.httpClient(
+      inner: MockClient((_) async => http.Response('{}', 200)),
+    );
+    await tester.pumpWidget(hostApp());
+    Proxie.open();
+    await tester.pumpAndSettle();
+
+    final httpChip = find.widgetWithText(FilterChip, 'http');
+    final otherChip = find.widgetWithText(FilterChip, 'other');
+    final row = find.text('/via-http');
+    Future<void> until(Finder finder, Matcher matcher) async {
+      for (var i = 0; i < 200 && !matcher.matches(finder, {}); i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 10)),
+        );
+        await tester.pump();
+      }
+      expect(finder, matcher);
+    }
+
+    // No such call yet, and one attached adapter is nothing to choose from.
+    expect(httpChip, findsNothing);
+    expect(otherChip, findsNothing);
+
+    await tester.runAsync(
+      () => client.get(Uri.parse('https://api.test/via-http')),
+    );
+    await until(httpChip, findsOneWidget);
+    await until(row, findsOneWidget);
+    expect(otherChip, findsOneWidget);
+    expect(find.widgetWithText(FilterChip, 'io'), findsNothing);
+
+    await tester.ensureVisible(otherChip);
+    await tester.pumpAndSettle();
+    await tester.tap(otherChip);
+    await until(row, findsNothing);
+    await tester.tap(otherChip);
+    await until(row, findsOneWidget);
+    await tester.ensureVisible(httpChip);
+    await tester.pumpAndSettle();
+    await tester.tap(httpChip);
+    await tester.pump();
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 50)),
+    );
+    await tester.pump();
+    await until(row, findsOneWidget);
   });
 
   testWidgets('a session header is not part of the row under it', (

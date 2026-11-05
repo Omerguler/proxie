@@ -102,6 +102,56 @@ void main() {
     await Proxie.shutdown();
   });
 
+  testWidgets('reopening during the removal frame keeps the open pages', (
+    tester,
+  ) async {
+    addTearDown(tester.view.reset);
+    setViewSize(tester, tabletSize);
+    try {
+      await initProxie(tester);
+      await tester.pumpWidget(hostApp());
+      Proxie.open();
+      await tester.pumpAndSettle();
+      final controller = controllerIn(tester);
+      await tester.tap(find.byTooltip('Rules'));
+      await tester.pumpAndSettle();
+      expect(find.text('No rules yet'), findsOneWidget);
+
+      // One frame: hidden and out of focus, about to be removed.
+      controller.close();
+      await tester.pump();
+      expect(find.text('No rules yet'), findsNothing);
+
+      // The same inspector comes back, on the page it was on, and works.
+      controller.open();
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(find.text('No rules yet'), findsOneWidget);
+      await tester.tap(find.byTooltip('Back'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Close'));
+      await tester.pumpAndSettle();
+      expect(controller.isOpen, isFalse);
+      expect(shellFinder, findsNothing);
+      expect(bubbleFinder, findsOneWidget);
+
+      // Past that frame the navigator is gone: the next open starts fresh.
+      controller.open();
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Rules'));
+      await tester.pumpAndSettle();
+      controller.close();
+      await tester.pump();
+      await tester.pump();
+      controller.open();
+      await tester.pumpAndSettle();
+      expect(find.text('No rules yet'), findsNothing);
+      expect(shellFinder, findsOneWidget);
+    } finally {
+      await tester.runAsync(Proxie.shutdown);
+    }
+  });
+
   testWidgets('the bubble is its own semantics node, the app stays outside', (
     tester,
   ) async {

@@ -142,10 +142,16 @@ export class App {
     await expect(this.bubble).toBeVisible();
   }
 
-  /** The list row of a call, by what its accessible name holds, in order. */
-  row(...parts: (string | RegExp)[]): Locator {
+  /**
+   * The list row of a call, by what its accessible name holds, in order. A
+   * status part (`404`, `ERR`) must be the status itself, which comes right
+   * before the duration, so `200` does not match `200 ms` or `200 B`.
+   */
+  row(...parts: string[]): Locator {
     const source = parts
-      .map((p) => (typeof p === 'string' ? p.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&') : p.source))
+      .map((p) =>
+        /^(\d{3}|ERR)$/.test(p) ? `\\b${p} \\d[\\d.]* m?s\\b` : p.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&'),
+      )
       .join('.*');
     return this.page.getByRole('button', { name: new RegExp(source) });
   }
@@ -162,7 +168,7 @@ export class App {
   /** Replaces what `field` holds, typing like a user. */
   async type(field: Locator, text: string): Promise<void> {
     await field.click();
-    await field.press('Control+a');
+    await field.press('ControlOrMeta+a');
     await this.page.keyboard.type(text);
     await expect(field).toHaveValue(text);
   }

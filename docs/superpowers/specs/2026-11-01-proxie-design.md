@@ -204,7 +204,8 @@ queries/indexes), Isar (unmaintained), Drift (codegen, no speed gain).
 - Filter chips: All, JSON, Errors (≥400 or failed), Hide > N MB, Hide binary,
   per-method, per-adapter.
 - Row: method badge, path (host on second line or tooltip), status color,
-  duration, size, tags (`BREAK`, `MAP`, `EDITED`).
+  duration, size, tags (`BREAK`, `MAP`, `REPLAY`, `EDITED`). `REPLAY` was added
+  during implementation, so a resent call can be told apart in the list.
 - Grouped by session ("Today 14:02 — 312 calls"); previous sessions available
   after restart.
 

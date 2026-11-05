@@ -46,6 +46,7 @@ class CallRow extends StatelessWidget {
     return Semantics(
       container: true,
       button: onTap != null,
+      selected: selected,
       child: Material(
         color: selected
             ? theme.colorScheme.primary.withValues(alpha: 0.14)

@@ -34,8 +34,11 @@ class ProxieHttpClient extends http.BaseClient implements ProxieCaptureAdapter {
   final http.Client _inner;
   ProxieEngine? _engine;
 
+  /// The [name] calls of this client are recorded under.
+  static const String adapterName = 'http';
+
   @override
-  String get name => 'http';
+  String get name => adapterName;
 
   @override
   bool get supportsReplay => true;

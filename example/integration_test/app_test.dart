@@ -1,7 +1,7 @@
-// End-to-end flows of the example app on a real device: the real worker
-// isolate with SQLite, real sockets through all three capture adapters, and
-// the real clipboard (a run overwrites it). All requests go to a server on
-// loopback, so it needs no network:
+// End-to-end flows of the example app on a desktop: the real worker isolate
+// with SQLite, real sockets through all three capture adapters, and the real
+// clipboard (a run overwrites it). All requests go to a server on loopback, so
+// it needs no network. Only Windows has been run so far:
 //
 //   cd example && flutter test integration_test -d windows
 
@@ -137,9 +137,20 @@ class _App {
 
   Finder get bubble => find.bySemanticsLabel('Open Proxie inspector');
 
-  /// The list row whose accessible name holds [parts], in order.
+  /// The list row whose accessible name holds [parts], in order. A status
+  /// part ('404', 'ERR') must be the status itself, which comes right before
+  /// the duration, so '200' does not match '200 ms' or '200 B'.
   Finder row(List<String> parts) => find.bySemanticsLabel(
-    RegExp(parts.map(RegExp.escape).join('.*'), dotAll: true),
+    RegExp(
+      parts
+          .map(
+            (p) => RegExp(r'^(\d{3}|ERR)$').hasMatch(p)
+                ? '\\b$p\\s+\\d[\\d.]* m?s\\b'
+                : RegExp.escape(p),
+          )
+          .join('.*'),
+      dotAll: true,
+    ),
   );
 
   Finder result(String label) => find.byKey(ValueKey('result-$label'));
@@ -261,7 +272,10 @@ void main() {
     }
   });
 
-  /// Runs the example app against the local server, wired like `main()`.
+  /// Runs the example app against the local server, with the adapters of
+  /// `startProxie`. Unlike `main()` it calls `Proxie.init` itself, for
+  /// `supportDir`, and creates the client before starting Proxie, which then
+  /// attaches it.
   Future<_App> launch(WidgetTester tester) async {
     final dio = Dio();
     final client = Proxie.httpClient();
@@ -348,12 +362,18 @@ void main() {
     expect(app.row(['/users/1', '200']), findsOneWidget);
     expect(app.row(['/get', '200']), findsOneWidget);
 
-    // The adapter chips: http and HttpClient go through dart:io.
-    await app.tap(find.widgetWithText(FilterChip, 'dio'));
-    await app.shows(app.row(['/users/1']));
-    await app.gone(app.row(['/todos/1']));
-    await app.tap(find.widgetWithText(FilterChip, 'dio'));
-    await app.shows(app.row(['/todos/1']));
+    // The adapter chips: each client's calls are under its own name.
+    Future<void> only(String adapter, String kept, String hidden) async {
+      await app.tap(find.widgetWithText(FilterChip, adapter));
+      await app.gone(app.row([hidden]));
+      await app.shows(app.row([kept]));
+      await app.tap(find.widgetWithText(FilterChip, adapter));
+      await app.shows(app.row([hidden]));
+    }
+
+    await only('dio', '/users/1', '/todos/1');
+    await only('http', '/todos/1', '/users/1');
+    await only('io', '/get', '/todos/1');
 
     // The real worker opens the 5 MB body as a tree.
     await app.openRow('/data.json');
@@ -383,9 +403,11 @@ void main() {
 
     await app.tap(find.widgetWithText(FilterChip, 'Errors'));
     await app.gone(app.row(['/todos/1']));
-    await app.gone(app.row(['/posts']));
-    expect(app.row(['/status/404', '404']), findsOneWidget);
-    expect(app.row(['/status/500', '500']), findsOneWidget);
+    // A new filter shows a new list, empty until its rows load.
+    await app.shows(app.row(['/status/404', '404']));
+    await app.shows(app.row(['/status/500', '500']));
+    expect(app.row(['/todos/1']), findsNothing);
+    expect(app.row(['/posts']), findsNothing);
 
     await app.tap(find.widgetWithText(FilterChip, 'Errors'));
     await app.shows(app.row(['/todos/1']));

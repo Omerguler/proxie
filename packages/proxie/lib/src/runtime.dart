@@ -4,6 +4,8 @@ import 'dart:developer' as developer;
 import 'package:flutter/widgets.dart';
 
 import 'package:proxie/src/adapters/capture_adapter.dart';
+import 'package:proxie/src/adapters/http_client_adapter.dart';
+import 'package:proxie/src/adapters/http_overrides_stub.dart' as web_stub;
 import 'package:proxie/src/config.dart';
 import 'package:proxie/src/core/breakpoint_controller.dart';
 import 'package:proxie/src/core/engine.dart';
@@ -167,8 +169,17 @@ class ProxieRuntime {
       worker: worker,
       calls: engine.calls,
       renderCap: config.renderCap,
-      adapterNames: [for (final a in adapters) a.name],
-      optionalAdapterNames: const [kReplayFallbackAdapter],
+      // The web stand-in for dart:io can never capture a call.
+      adapterNames: [
+        for (final a in adapters)
+          if (a is! web_stub.ProxieHttpOverridesAdapter) a.name,
+      ],
+      // Neither is an attached adapter: Proxie.httpClient() clients attach
+      // themselves, and replays can fall back to a client of Proxie's own.
+      optionalAdapterNames: const [
+        ProxieHttpClient.adapterName,
+        kReplayFallbackAdapter,
+      ],
       selectedCallId: inspector.selectedCallId,
       onSelected: inspector.select,
     );

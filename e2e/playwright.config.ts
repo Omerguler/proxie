@@ -3,8 +3,9 @@ import { defineConfig, devices } from '@playwright/test';
 const port = 8931;
 
 /**
- * Tests `example/build/web`. Build it first:
- *   cd example && flutter build web --profile --dart-define=PROXIE=true
+ * Tests a fresh build of the example: starting the web server builds it, on
+ * every run, however the suite is started, and never reuses a server. A publish
+ * gate must not pass on what an older build happened to do.
  */
 export default defineConfig({
   testDir: './tests',
@@ -13,8 +14,8 @@ export default defineConfig({
   workers: 1,
   fullyParallel: false,
   // A failure here is a bug or a flake to fix; neither is hidden by a retry.
-  // All network is local (see tests/support.ts), so P9's reason for a retry
-  // no longer applies.
+  // All network is local (see tests/support.ts), so there is no public network
+  // to retry for.
   retries: 0,
   forbidOnly: !!process.env.CI,
   timeout: 90_000,
@@ -29,8 +30,12 @@ export default defineConfig({
     trace: 'retain-on-failure',
   },
   webServer: {
-    command: `npx http-server ../example/build/web -p ${port} -c-1 --silent`,
+    command:
+      'cd ../example && flutter build web --profile --dart-define=PROXIE=true && ' +
+      `cd ../e2e && npx http-server ../example/build/web -p ${port} -c-1 --silent`,
     url: `http://localhost:${port}`,
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer: false,
+    // The build, then the server.
+    timeout: 300_000,
   },
 });
