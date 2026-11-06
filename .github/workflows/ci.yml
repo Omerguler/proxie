@@ -78,6 +78,14 @@ jobs:
           channel: stable
           flutter-version: 3.38.1
           cache: true
+      # The lint package needs a newer SDK than the floor. It is a dev
+      # dependency, so apps installing Proxie never resolve it.
+      - name: Drop the lint package
+        run: >-
+          sed -i '/very_good_analysis/d'
+          packages/proxie/pubspec.yaml
+          packages/proxie_dio/pubspec.yaml
+          example/pubspec.yaml
       - run: flutter pub get
       - name: Test proxie
         run: flutter test
