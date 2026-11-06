@@ -7,8 +7,10 @@ import 'package:proxie/src/config.dart' show defaultRawEditableLimit;
 import 'package:proxie/src/core/breakpoint_controller.dart';
 import 'package:proxie/src/core/rule.dart';
 import 'package:proxie/src/ui/breakpoint/request_form.dart';
+import 'package:proxie/src/ui/common.dart';
 import 'package:proxie/src/ui/inspector_shell.dart';
 import 'package:proxie/src/ui/rules/response_editor.dart';
+import 'package:proxie/src/ui/theme.dart';
 import 'package:proxie/src/worker/worker.dart';
 
 /// The scope (see `OpenJson.scope`) the editor opens the body of [call]
@@ -247,7 +249,7 @@ class _BreakpointEditorState extends State<BreakpointEditor> {
                     '${call.request.method} ${call.request.url}',
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.bodyMedium,
+                    style: proxieMono(theme.textTheme.bodySmall),
                   ),
                   const SizedBox(height: 4),
                   Wrap(
@@ -256,13 +258,15 @@ class _BreakpointEditorState extends State<BreakpointEditor> {
                     children: [
                       Text(
                         '${index + 1} of ${_pending.length} paused',
-                        style: theme.textTheme.labelMedium,
+                        style: proxieMono(
+                          theme.textTheme.labelMedium,
+                        )?.copyWith(color: theme.colorScheme.primary),
                       ),
                       Text(
                         'Continues unchanged in $seconds s',
-                        style: theme.textTheme.labelMedium?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
-                        ),
+                        style: proxieMono(
+                          theme.textTheme.bodySmall,
+                        )?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                       ),
                     ],
                   ),
@@ -270,7 +274,7 @@ class _BreakpointEditorState extends State<BreakpointEditor> {
               ),
             ),
           ),
-          if (_busy) const LinearProgressIndicator(minHeight: 2),
+          if (_busy) const BusyLine(),
           Expanded(
             child: KeyedSubtree(
               key: ObjectKey(call),
@@ -442,18 +446,18 @@ class _BreakpointHostState extends State<BreakpointHost> {
             child: SafeArea(
               top: false,
               child: Padding(
-                padding: const EdgeInsets.only(left: 16, right: 8),
+                padding: const EdgeInsets.only(left: 12, right: 4),
                 child: Row(
                   children: [
                     Icon(
                       Icons.pause_circle_outline,
                       color: theme.colorScheme.onTertiaryContainer,
                     ),
-                    const SizedBox(width: 12),
+                    const SizedBox(width: 8),
                     Expanded(
                       child: Text(
                         '$count paused',
-                        style: theme.textTheme.bodyMedium?.copyWith(
+                        style: proxieMono(theme.textTheme.bodyMedium)?.copyWith(
                           color: theme.colorScheme.onTertiaryContainer,
                         ),
                       ),

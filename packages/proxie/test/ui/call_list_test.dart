@@ -331,7 +331,9 @@ void main() {
     final rows = tester.widgetList<CallRow>(find.byType(CallRow)).toList();
     expect(rows.map((r) => r.call.id), ['new', 'old']);
     expect(rows.first.call.statusCode, isNull);
-    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    // A still mark: nothing in the list loops.
+    expect(find.byKey(const ValueKey('proxie-call-pending')), findsOneWidget);
+    expect(find.byType(ProgressIndicator), findsNothing);
 
     // Completing the call updates its row in place.
     engine.recordResponse('new', okResponse());
@@ -341,7 +343,7 @@ void main() {
       tester.widget<CallRow>(find.byType(CallRow).first).call.statusCode,
       200,
     );
-    expect(find.byType(CircularProgressIndicator), findsNothing);
+    expect(find.byKey(const ValueKey('proxie-call-pending')), findsNothing);
   });
 
   testWidgets('session header rows, including the previous session', (
@@ -656,7 +658,10 @@ void main() {
   ) async {
     await addItems(200);
     final engine = await pumpWithEngine(tester);
-    await tester.drag(find.byType(Scrollable).last, const Offset(0, -3000));
+    await tester.drag(
+      find.byType(Scrollable).last,
+      const Offset(0, -CallRow.height * 50),
+    );
     await tester.pump();
     await tester.pump();
     final anchor = find.text('/items/150');
@@ -710,7 +715,10 @@ void main() {
     await tester.tap(find.widgetWithText(FilterChip, 'Errors'));
     await tester.pump();
     await tester.pump();
-    await tester.drag(find.byType(Scrollable).last, const Offset(0, -3000));
+    await tester.drag(
+      find.byType(Scrollable).last,
+      const Offset(0, -CallRow.height * 50),
+    );
     await tester.pump();
     await tester.pump();
     final anchor = find.text('/items/150');
@@ -891,7 +899,10 @@ void main() {
     await tester.tap(post);
     await tester.pump();
     await tester.pump();
-    await tester.drag(find.byType(Scrollable).last, const Offset(0, -3000));
+    await tester.drag(
+      find.byType(Scrollable).last,
+      const Offset(0, -CallRow.height * 50),
+    );
     await tester.pumpAndSettle();
     expect(pixelsOf(tester), greaterThan(0));
 

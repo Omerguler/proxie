@@ -70,11 +70,11 @@ class _PresetPickerState extends State<PresetPicker> {
     final theme = Theme.of(context);
     final custom = widget.rules.customPresets;
     Widget heading(String text) => Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
       child: Text(
         text,
         style: theme.textTheme.labelLarge?.copyWith(
-          color: theme.colorScheme.primary,
+          color: theme.colorScheme.onSurfaceVariant,
         ),
       ),
     );

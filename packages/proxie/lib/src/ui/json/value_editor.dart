@@ -236,19 +236,26 @@ class _ValueEditorDialogState extends State<ValueEditorDialog> {
               ),
             if (widget.askValue) ...[
               const SizedBox(height: 8),
-              DropdownButton<JsonKind>(
-                key: const ValueKey('proxie-kind-field'),
-                value: _kind,
-                isExpanded: true,
-                onChanged: (k) {
-                  if (k != null) _setKind(k);
-                },
-                items: [
-                  for (final k in JsonKind.values)
-                    DropdownMenuItem(value: k, child: Text(_kindLabel(k))),
-                ],
+              InputDecorator(
+                decoration: const InputDecoration(),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<JsonKind>(
+                    key: const ValueKey('proxie-kind-field'),
+                    value: _kind,
+                    isExpanded: true,
+                    isDense: true,
+                    onChanged: (k) {
+                      if (k != null) _setKind(k);
+                    },
+                    items: [
+                      for (final k in JsonKind.values)
+                        DropdownMenuItem(value: k, child: Text(_kindLabel(k))),
+                    ],
+                  ),
+                ),
               ),
-              if (_kind != JsonKind.nullValue)
+              if (_kind != JsonKind.nullValue) ...[
+                const SizedBox(height: 8),
                 TextField(
                   key: const ValueKey('proxie-value-field'),
                   controller: _text,
@@ -260,6 +267,7 @@ class _ValueEditorDialogState extends State<ValueEditorDialog> {
                     errorText: _error,
                   ),
                 ),
+              ],
             ],
           ],
         ),

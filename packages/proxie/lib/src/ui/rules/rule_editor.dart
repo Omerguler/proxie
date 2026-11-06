@@ -328,6 +328,7 @@ class _RuleEditorState extends State<RuleEditor> {
       actions: [
         IconButton(
           tooltip: 'Save rule',
+          color: Theme.of(context).colorScheme.onSurface,
           icon: const Icon(Icons.check),
           onPressed: _saving ? null : () => unawaited(_save()),
         ),
@@ -343,8 +344,8 @@ class _RuleEditorState extends State<RuleEditor> {
           children: [
             const TabBar(
               tabs: [
-                Tab(text: 'Rule'),
-                Tab(text: 'Response'),
+                Tab(height: 40, text: 'Rule'),
+                Tab(height: 40, text: 'Response'),
               ],
             ),
             Expanded(
@@ -383,7 +384,7 @@ class _RuleEditorState extends State<RuleEditor> {
     final theme = Theme.of(context);
     final method = _method;
     return ListView(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(12),
       children: [
         TextField(
           key: const ValueKey('rule-name'),
@@ -422,9 +423,9 @@ class _RuleEditorState extends State<RuleEditor> {
           ],
           onChanged: (v) => setState(() => _method = v),
         ),
-        const SizedBox(height: 20),
+        const SizedBox(height: 16),
         if (_kind == RuleKind.breakpoint) ...[
-          Text('Pause at', style: theme.textTheme.labelLarge),
+          Text('Pause at', style: theme.textTheme.bodySmall),
           const SizedBox(height: 8),
           SegmentedButton<BreakpointPhase>(
             segments: const [
@@ -442,7 +443,7 @@ class _RuleEditorState extends State<RuleEditor> {
             onSelectionChanged: (s) => setState(() => _phase = s.single),
           ),
         ] else ...[
-          Text('Answer with', style: theme.textTheme.labelLarge),
+          Text('Answer with', style: theme.textTheme.bodySmall),
           const SizedBox(height: 8),
           SegmentedButton<_Outcome>(
             segments: const [
@@ -501,7 +502,7 @@ class _PresetLabelDialogState extends State<_PresetLabelDialog> {
         onPressed: () => Navigator.of(context).pop(),
         child: const Text('Cancel'),
       ),
-      TextButton(
+      FilledButton(
         onPressed: () => Navigator.of(context).pop(_label.text),
         child: const Text('Save'),
       ),

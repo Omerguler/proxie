@@ -213,7 +213,7 @@ class _TruncatedNotice extends StatelessWidget {
     return ColoredBox(
       color: theme.colorScheme.tertiaryContainer,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         child: Text(
           'Truncated — captured ${formatBytes(kept)} of '
           '${formatBytes(total)}',

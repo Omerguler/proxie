@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:proxie/proxie.dart';
 import 'package:proxie/src/ui/breakpoint/breakpoint_editor.dart';
+import 'package:proxie/src/ui/common.dart';
 import 'package:proxie/src/ui/detail/call_detail.dart';
 import 'package:proxie/src/ui/json/json_tree_controller.dart';
 import 'package:proxie/src/ui/json/json_tree_view.dart';
@@ -484,7 +485,7 @@ void main() {
       worker.encodeGate = Completer<void>();
       await tester.tap(_execute);
       await tester.pump();
-      expect(find.byType(LinearProgressIndicator), findsOneWidget);
+      expect(find.byType(BusyLine), findsOneWidget);
       breakpoints.resolve('a', const ContinueUnchanged());
       await tester.pump();
       worker.encodeGate!.complete();

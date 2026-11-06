@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'package:proxie/src/model/call.dart';
+import 'package:proxie/src/ui/theme.dart';
 
 /// The Headers tab: request and response headers, one row per value.
 class HeadersTab extends StatelessWidget {
@@ -32,8 +33,9 @@ class HeadersTab extends StatelessWidget {
   ) {
     final theme = Theme.of(context);
     final muted = theme.textTheme.bodySmall?.copyWith(
-      color: theme.colorScheme.onSurfaceVariant,
+      color: ProxieColors.of(context).muted,
     );
+    final figure = proxieMono(theme.textTheme.bodySmall);
     final count = headers.values.fold(0, (n, v) => n + v.length);
     return [
       Padding(
@@ -52,9 +54,12 @@ class HeadersTab extends StatelessWidget {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                SizedBox(width: 160, child: Text(e.key, style: muted)),
+                SizedBox(
+                  width: 160,
+                  child: Text(e.key, style: proxieMono(muted)),
+                ),
                 const SizedBox(width: 8),
-                Expanded(child: Text(v, style: theme.textTheme.bodySmall)),
+                Expanded(child: Text(v, style: figure)),
               ],
             ),
           ),

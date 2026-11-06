@@ -33,7 +33,31 @@ class DemoApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) => MaterialApp(
     title: 'Proxie example',
-    theme: ThemeData(colorSchemeSeed: Colors.indigo),
+    theme: ThemeData(
+      colorScheme: const ColorScheme.dark(
+        primary: Color(0xFFE9A23B),
+        onPrimary: Color(0xFF141415),
+        surface: Color(0xFF141415),
+        onSurface: Color(0xFFEDEDED),
+        onSurfaceVariant: Color(0xFFA1A1A6),
+      ),
+      scaffoldBackgroundColor: const Color(0xFF141415),
+      appBarTheme: const AppBarTheme(
+        backgroundColor: Color(0xFF141415),
+        scrolledUnderElevation: 0,
+      ),
+      elevatedButtonTheme: ElevatedButtonThemeData(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: const Color(0xFF232325),
+          foregroundColor: const Color(0xFFEDEDED),
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(8),
+            side: const BorderSide(color: Color(0x14EDEDED)),
+          ),
+        ),
+      ),
+    ),
     builder: Proxie.wrap,
     home: DemoHome(requests: requests),
   );
@@ -122,6 +146,9 @@ class _DemoRow extends StatelessWidget {
               key: ValueKey('result-${request.label}'),
               maxLines: 3,
               overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
             ),
           ),
       ],

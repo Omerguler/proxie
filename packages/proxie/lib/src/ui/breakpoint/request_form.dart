@@ -348,7 +348,7 @@ class RequestForm extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -423,31 +423,34 @@ class _QueryTile extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 12),
             children: [
               for (var i = 0; i < rows.length; i++)
-                Row(
+                Padding(
                   key: ObjectKey(rows[i]),
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        key: ValueKey('query-name-$i'),
-                        controller: rows[i].name,
-                        decoration: const InputDecoration(hintText: 'Name'),
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          key: ValueKey('query-name-$i'),
+                          controller: rows[i].name,
+                          decoration: const InputDecoration(hintText: 'Name'),
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      flex: 2,
-                      child: TextField(
-                        key: ValueKey('query-value-$i'),
-                        controller: rows[i].value,
-                        decoration: const InputDecoration(hintText: 'Value'),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        flex: 2,
+                        child: TextField(
+                          key: ValueKey('query-value-$i'),
+                          controller: rows[i].value,
+                          decoration: const InputDecoration(hintText: 'Value'),
+                        ),
                       ),
-                    ),
-                    IconButton(
-                      tooltip: 'Remove parameter',
-                      icon: const Icon(Icons.remove_circle_outline),
-                      onPressed: () => draft.removeQuery(rows[i]),
-                    ),
-                  ],
+                      IconButton(
+                        tooltip: 'Remove parameter',
+                        icon: const Icon(Icons.remove_circle_outline),
+                        onPressed: () => draft.removeQuery(rows[i]),
+                      ),
+                    ],
+                  ),
                 ),
             ],
           ),

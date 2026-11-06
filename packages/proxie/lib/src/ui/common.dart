@@ -2,6 +2,8 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
+import 'package:proxie/src/ui/theme.dart';
+
 /// Whether [a] and [b] hold the same bytes. Contents are compared only
 /// when the lengths match, four bytes at a time where both are aligned.
 bool sameBytes(Uint8List a, Uint8List b) {
@@ -25,9 +27,37 @@ bool sameBytes(Uint8List a, Uint8List b) {
 }
 
 /// The monospaced style of body text.
-TextStyle? monoStyle(BuildContext context) => Theme.of(
-  context,
-).textTheme.bodySmall?.copyWith(fontFamily: 'monospace', height: 1.4);
+TextStyle? monoStyle(BuildContext context) =>
+    proxieMono(Theme.of(context).textTheme.bodySmall)?.copyWith(height: 1.4);
+
+/// The decoration of the search boxes above the list and the JSON tree: one
+/// height, radius and hairline, from the theme. [clear] goes at the end.
+InputDecoration searchDecoration(
+  String hint, {
+  Widget? clear,
+}) => InputDecoration(
+  hintText: hint,
+  prefixIcon: const Icon(Icons.search),
+  prefixIconConstraints: const BoxConstraints.tightFor(width: 36, height: 36),
+  suffixIcon: clear,
+  suffixIconConstraints: const BoxConstraints.tightFor(width: 36, height: 36),
+);
+
+/// A still 2 px accent line that says work is under way. Not animated: the
+/// only looping motion in Proxie is the paused bubble.
+class BusyLine extends StatelessWidget {
+  /// Creates the line.
+  const BusyLine({super.key});
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    label: 'Working',
+    child: SizedBox(
+      height: 2,
+      child: ColoredBox(color: Theme.of(context).colorScheme.primary),
+    ),
+  );
+}
 
 /// Readable byte count, such as `512 B`, `4.0 KB` or `6.0 MB`.
 String formatBytes(int n) {

@@ -588,7 +588,7 @@ class MessageNotices extends StatelessWidget {
         ColoredBox(
           color: background,
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             child: Text(
               text,
               style: theme.textTheme.bodySmall?.copyWith(color: foreground),
@@ -761,55 +761,58 @@ class MessageHeaders extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 12),
             children: [
               for (var i = 0; i < rows.length; i++)
-                Row(
+                Padding(
                   key: ObjectKey(rows[i]),
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        key: ValueKey('header-name-$i'),
-                        controller: rows[i].name,
-                        decoration: InputDecoration(
-                          hintText: 'Name',
-                          errorText: rows[i].nameError,
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          key: ValueKey('header-name-$i'),
+                          controller: rows[i].name,
+                          decoration: InputDecoration(
+                            hintText: 'Name',
+                            errorText: rows[i].nameError,
+                          ),
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      flex: 2,
-                      child: ValueListenableBuilder<TextEditingValue>(
-                        valueListenable: rows[i].value,
-                        builder: (context, value, _) {
-                          final masked = isMaskedHeaderValue(value.text);
-                          final error = Theme.of(context).colorScheme.error;
-                          return TextField(
-                            key: ValueKey('header-value-$i'),
-                            controller: rows[i].value,
-                            style: masked ? TextStyle(color: error) : null,
-                            decoration: InputDecoration(
-                              hintText: 'Value',
-                              errorText: rows[i].valueError,
-                              prefixIcon: masked
-                                  ? Tooltip(
-                                      message: 'Masked at capture',
-                                      child: Icon(
-                                        Icons.warning_amber,
-                                        color: error,
-                                      ),
-                                    )
-                                  : null,
-                            ),
-                          );
-                        },
+                      const SizedBox(width: 8),
+                      Expanded(
+                        flex: 2,
+                        child: ValueListenableBuilder<TextEditingValue>(
+                          valueListenable: rows[i].value,
+                          builder: (context, value, _) {
+                            final masked = isMaskedHeaderValue(value.text);
+                            final error = Theme.of(context).colorScheme.error;
+                            return TextField(
+                              key: ValueKey('header-value-$i'),
+                              controller: rows[i].value,
+                              style: masked ? TextStyle(color: error) : null,
+                              decoration: InputDecoration(
+                                hintText: 'Value',
+                                errorText: rows[i].valueError,
+                                prefixIcon: masked
+                                    ? Tooltip(
+                                        message: 'Masked at capture',
+                                        child: Icon(
+                                          Icons.warning_amber,
+                                          color: error,
+                                        ),
+                                      )
+                                    : null,
+                              ),
+                            );
+                          },
+                        ),
                       ),
-                    ),
-                    IconButton(
-                      tooltip: 'Remove header',
-                      icon: const Icon(Icons.remove_circle_outline),
-                      onPressed: () => draft.removeHeader(rows[i]),
-                    ),
-                  ],
+                      IconButton(
+                        tooltip: 'Remove header',
+                        icon: const Icon(Icons.remove_circle_outline),
+                        onPressed: () => draft.removeHeader(rows[i]),
+                      ),
+                    ],
+                  ),
                 ),
             ],
           ),

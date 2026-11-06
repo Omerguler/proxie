@@ -119,7 +119,7 @@ class _JsonRowTileState extends State<JsonRowTile> {
     final theme = Theme.of(context);
     final colors = ProxieColors.of(context);
     final muted = theme.colorScheme.onSurfaceVariant;
-    final style = theme.textTheme.bodySmall?.copyWith(fontFamily: 'monospace');
+    final style = proxieMono(theme.textTheme.bodySmall);
     final container = row.kind == JsonKind.object || row.kind == JsonKind.array;
     final header = widget.header;
     final valueColor = switch (row.kind) {
@@ -186,7 +186,7 @@ class _JsonRowTileState extends State<JsonRowTile> {
       selected: highlighted,
       child: Material(
         color: highlighted
-            ? theme.colorScheme.primary.withValues(alpha: 0.18)
+            ? theme.colorScheme.surfaceContainerHigh
             : Colors.transparent,
         child: InkWell(
           onTap: container && !header ? widget.onToggle : null,
@@ -199,12 +199,12 @@ class _JsonRowTileState extends State<JsonRowTile> {
               children: [
                 // The search match is marked by more than its color.
                 Container(
-                  width: 3,
+                  width: 2,
                   color: highlighted
                       ? theme.colorScheme.primary
                       : Colors.transparent,
                 ),
-                SizedBox(width: header ? 9 : 1 + jsonIndent * row.depth),
+                SizedBox(width: header ? 10 : 2 + jsonIndent * row.depth),
                 if (!header)
                   SizedBox(
                     width: 18,
@@ -224,7 +224,7 @@ class _JsonRowTileState extends State<JsonRowTile> {
                     key: _menu,
                     tooltip: 'Edit $label',
                     padding: EdgeInsets.zero,
-                    iconSize: 16,
+                    iconSize: 18,
                     constraints: const BoxConstraints(minWidth: 180),
                     icon: Icon(Icons.more_vert, color: muted),
                     // As wide as a full tap target; rows are 28 high, and the
@@ -257,6 +257,10 @@ class _MissingKeyChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final shape = RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(4),
+      side: BorderSide(color: theme.colorScheme.outline),
+    );
     return Semantics(
       container: true,
       button: true,
@@ -267,21 +271,19 @@ class _MissingKeyChip extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.only(left: 6),
         child: Material(
-          color: theme.colorScheme.surfaceContainer,
-          shape: StadiumBorder(
-            side: BorderSide(color: theme.colorScheme.outlineVariant),
-          ),
+          color: Colors.transparent,
+          shape: shape,
           child: InkWell(
-            customBorder: const StadiumBorder(),
+            customBorder: shape,
             onTap: onTap,
             child: Padding(
               // As tall as a 28 px row allows, for a larger tap target.
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               child: Text(
                 '+ $label',
-                style: theme.textTheme.labelSmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
+                style: proxieMono(
+                  theme.textTheme.labelSmall,
+                )?.copyWith(color: theme.colorScheme.onSurfaceVariant),
               ),
             ),
           ),

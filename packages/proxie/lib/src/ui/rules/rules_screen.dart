@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:proxie/src/core/rule.dart';
 import 'package:proxie/src/ui/rules/rule_editor.dart';
 import 'package:proxie/src/ui/rules/rules_controller.dart';
+import 'package:proxie/src/ui/theme.dart';
 
 /// The rules of the nearest [RulesScope] in matching order: drag to
 /// reorder, switch on and off, delete (with Undo), tap to edit, and add a
@@ -158,6 +159,9 @@ class _RuleTile extends StatelessWidget {
         '${rule.method ?? 'Any'} $pattern',
         maxLines: 2,
         overflow: TextOverflow.ellipsis,
+        style: proxieMono(
+          Theme.of(context).textTheme.bodySmall,
+        )?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
       ),
       onTap: () => unawaited(openRuleEditor(context, existing: rule)),
       trailing: Row(

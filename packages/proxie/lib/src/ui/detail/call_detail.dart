@@ -230,7 +230,6 @@ class _CallDetailState extends State<CallDetail> with TickerProviderStateMixin {
       children: [
         if (_error != null) _ErrorBar(onRetry: _retry),
         _Header(call: call, actions: widget.actions),
-        const Divider(height: 1),
         Expanded(child: _tabs(context, call)),
       ],
     );
@@ -254,7 +253,7 @@ class _CallDetailState extends State<CallDetail> with TickerProviderStateMixin {
           controller: controller,
           isScrollable: true,
           tabAlignment: TabAlignment.start,
-          tabs: [for (final t in tabs) Tab(text: t.$2)],
+          tabs: [for (final t in tabs) Tab(height: 40, text: t.$2)],
         ),
         Expanded(
           child: TabBarView(
@@ -341,21 +340,20 @@ class _Header extends StatelessWidget {
                   children: [
                     Text(
                       call.request.method,
-                      style: theme.textTheme.labelLarge?.copyWith(
+                      style: proxieMono(theme.textTheme.labelLarge)?.copyWith(
                         color: colors.methodColor(call.request.method),
-                        fontWeight: FontWeight.w700,
                       ),
                     ),
-                    const SizedBox(width: 10),
+                    const SizedBox(width: 8),
                     // Narrow when every action button is shown.
                     Flexible(
                       child: Text(
                         status,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.labelLarge?.copyWith(
-                          color: statusColor,
-                        ),
+                        style: proxieMono(
+                          theme.textTheme.labelLarge,
+                        )?.copyWith(color: statusColor),
                       ),
                     ),
                   ],
@@ -363,8 +361,10 @@ class _Header extends StatelessWidget {
                 const SizedBox(height: 4),
                 SelectableText(
                   call.request.url.toString(),
+                  // Without minLines it reserves all three lines.
+                  minLines: 1,
                   maxLines: 3,
-                  style: theme.textTheme.bodySmall,
+                  style: proxieMono(theme.textTheme.bodySmall),
                 ),
               ],
             ),

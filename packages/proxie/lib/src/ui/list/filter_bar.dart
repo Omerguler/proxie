@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'package:proxie/src/storage/call_query.dart';
+import 'package:proxie/src/ui/common.dart';
 import 'package:proxie/src/ui/list/list_controller.dart';
 
 /// The search box and filter chips above the call list.
@@ -72,35 +73,33 @@ class _FilterBarState extends State<FilterBar> {
         mainAxisSize: MainAxisSize.min,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
             child: TextField(
               controller: _search,
               onChanged: _controller.search,
               textInputAction: TextInputAction.search,
-              decoration: InputDecoration(
-                isDense: true,
-                hintText: 'Search URL or body',
-                prefixIcon: const Icon(Icons.search, size: 20),
-                suffixIcon: ListenableBuilder(
+              decoration: searchDecoration(
+                'Search URL or body',
+                clear: ListenableBuilder(
                   listenable: _search,
                   builder: (context, _) => _search.text.isEmpty
                       ? const SizedBox.shrink()
                       : IconButton(
                           tooltip: 'Clear search',
-                          icon: const Icon(Icons.clear, size: 18),
+                          padding: EdgeInsets.zero,
+                          icon: const Icon(Icons.clear),
                           onPressed: () {
                             _search.clear();
                             _controller.clearSearch();
                           },
                         ),
                 ),
-                border: const OutlineInputBorder(),
               ),
             ),
           ),
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
             child: Row(
               children: [
                 _chip(
@@ -175,7 +174,7 @@ class _FilterBarState extends State<FilterBar> {
     required bool selected,
     required VoidCallback onTap,
   }) => Padding(
-    padding: const EdgeInsets.only(right: 6),
+    padding: const EdgeInsets.only(right: 4),
     child: FilterChip(
       label: Text(label),
       selected: selected,

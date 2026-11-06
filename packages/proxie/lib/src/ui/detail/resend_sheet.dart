@@ -8,7 +8,9 @@ import 'package:proxie/src/core/replay.dart';
 import 'package:proxie/src/model/call.dart';
 import 'package:proxie/src/model/request.dart';
 import 'package:proxie/src/ui/breakpoint/request_form.dart';
+import 'package:proxie/src/ui/common.dart';
 import 'package:proxie/src/ui/inspector_shell.dart';
+import 'package:proxie/src/ui/theme.dart';
 import 'package:proxie/src/worker/worker.dart';
 
 /// Sends [edited], the request of [original] as edited, and records it as
@@ -183,7 +185,7 @@ class _ResendSheetState extends State<ResendSheet> {
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (_busy) const LinearProgressIndicator(minHeight: 2),
+          if (_busy) const BusyLine(),
           Expanded(
             child: RequestForm(
               draft: _draft,
@@ -219,7 +221,7 @@ class _ResendSheetState extends State<ResendSheet> {
                       child: Text(
                         '${result.sentVia} · ${result.response.statusCode}',
                         key: const ValueKey('resend-result'),
-                        style: theme.textTheme.bodySmall,
+                        style: proxieMono(theme.textTheme.bodySmall),
                       ),
                     ),
                     if (widget.onOpenCall != null)
@@ -253,7 +255,7 @@ class _ResendSheetState extends State<ResendSheet> {
                       onPressed: _busy || _draft.truncated
                           ? null
                           : () => unawaited(_send()),
-                      icon: const Icon(Icons.send),
+                      icon: const Icon(Icons.send_outlined),
                       label: const Text('Send'),
                     ),
                   ),

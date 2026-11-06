@@ -9,6 +9,7 @@ import 'package:proxie/src/runtime.dart';
 import 'package:proxie/src/ui/detail/body_view.dart';
 import 'package:proxie/src/ui/detail/call_detail.dart';
 import 'package:proxie/src/ui/detail/copy_actions.dart';
+import 'package:proxie/src/ui/detail/timing_tab.dart';
 import 'package:proxie/src/ui/json/json_tree_view.dart';
 import 'package:proxie/src/ui/json/text_lines.dart';
 
@@ -364,6 +365,24 @@ void main() {
     await openTab(tester, 'Timing');
     expect(find.text('123 ms'), findsOneWidget);
     expect(find.text('http'), findsOneWidget);
+    expect(find.byKey(const ValueKey('proxie-timing-trace')), findsOneWidget);
+  });
+
+  group('timing trace', () {
+    test('ticks are round steps from zero, within the duration', () {
+      expect(traceTicks(0), [0]);
+      expect(traceTicks(123, maxTicks: 3), [0, 50, 100]);
+      expect(traceTicks(850), [0, 200, 400, 600, 800]);
+      expect(traceTicks(1000, maxTicks: 2), [0, 500, 1000]);
+      expect(traceTicks(7), [0, 2, 4, 6]);
+    });
+
+    test('tick labels', () {
+      expect(traceTickLabel(0), '0');
+      expect(traceTickLabel(200), '200 ms');
+      expect(traceTickLabel(1000), '1 s');
+      expect(traceTickLabel(1500), '1.5 s');
+    });
   });
 
   testWidgets('registered custom tab appears when it applies', (tester) async {

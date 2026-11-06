@@ -13,6 +13,7 @@ import 'package:proxie/src/ui/json/json_row_tile.dart';
 import 'package:proxie/src/ui/json/json_tree_controller.dart';
 import 'package:proxie/src/ui/json/raw_text_view.dart';
 import 'package:proxie/src/ui/json/value_editor.dart';
+import 'package:proxie/src/ui/theme.dart';
 import 'package:proxie/src/worker/worker.dart';
 
 /// A virtualized, schema-aware tree of [controller]'s document: a search
@@ -162,7 +163,7 @@ class _JsonTreeViewState extends State<JsonTreeView> {
     final theme = Theme.of(context);
     final matches = _c.matches;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 4, 4, 4),
+      padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
       child: Row(
         children: [
           Expanded(
@@ -170,26 +171,23 @@ class _JsonTreeViewState extends State<JsonTreeView> {
               key: const ValueKey('proxie-json-search'),
               controller: _query,
               textInputAction: TextInputAction.search,
-              style: theme.textTheme.bodySmall,
-              decoration: const InputDecoration(
-                isDense: true,
-                hintText: 'Search keys and values',
-                prefixIcon: Icon(Icons.search, size: 18),
-                border: InputBorder.none,
-              ),
+              decoration: searchDecoration('Search keys and values'),
               onSubmitted: (q) => unawaited(_c.search(q)),
             ),
           ),
           if (_c.query.isNotEmpty)
             Semantics(
               liveRegion: true,
-              child: Text(
-                matches.isEmpty
-                    ? 'No matches'
-                    : '${_c.matchIndex + 1}/${matches.length}'
-                          '${_c.matchesCapped ? '+' : ''}',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
+              child: Padding(
+                padding: const EdgeInsets.only(left: 8),
+                child: Text(
+                  matches.isEmpty
+                      ? 'No matches'
+                      : '${_c.matchIndex + 1}/${matches.length}'
+                            '${_c.matchesCapped ? '+' : ''}',
+                  style: proxieMono(
+                    theme.textTheme.bodySmall,
+                  )?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                 ),
               ),
             ),
@@ -378,7 +376,7 @@ class _JsonBodyViewState extends State<JsonBodyView> {
           ColoredBox(
             color: theme.colorScheme.errorContainer,
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               child: Text(
                 _controller.parseError ?? 'Invalid JSON',
                 style: theme.textTheme.bodySmall?.copyWith(
@@ -454,7 +452,7 @@ class _EditErrorBar extends StatelessWidget {
             ),
             IconButton(
               tooltip: 'Dismiss',
-              icon: const Icon(Icons.close, size: 16),
+              icon: const Icon(Icons.close),
               onPressed: onDismiss,
             ),
           ],

@@ -114,7 +114,7 @@ class ResponseEditor extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(12, 8, 8, 0),
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
           child: Wrap(
             spacing: 8,
             crossAxisAlignment: WrapCrossAlignment.center,

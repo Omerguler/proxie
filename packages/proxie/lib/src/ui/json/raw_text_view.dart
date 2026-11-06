@@ -272,7 +272,10 @@ class _RawTextViewState extends State<RawTextView> {
       textAlignVertical: TextAlignVertical.top,
       style: monoStyle(context),
       decoration: const InputDecoration(
+        filled: false,
         border: InputBorder.none,
+        enabledBorder: InputBorder.none,
+        focusedBorder: InputBorder.none,
         contentPadding: EdgeInsets.all(12),
       ),
     );

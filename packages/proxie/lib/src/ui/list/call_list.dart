@@ -10,6 +10,7 @@ import 'package:proxie/src/ui/list/call_row.dart';
 import 'package:proxie/src/ui/list/filter_bar.dart';
 import 'package:proxie/src/ui/list/list_controller.dart';
 import 'package:proxie/src/ui/list/scroll_anchor.dart';
+import 'package:proxie/src/ui/theme.dart';
 import 'package:proxie/src/worker/commands.dart';
 import 'package:proxie/src/worker/worker.dart';
 
@@ -312,12 +313,12 @@ class _SessionHeader extends StatelessWidget {
       header: true,
       child: Container(
         color: theme.colorScheme.surfaceContainer,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
         child: Text(
           text,
-          style: theme.textTheme.labelMedium?.copyWith(
-            color: theme.colorScheme.onSurfaceVariant,
-          ),
+          style: proxieMono(
+            theme.textTheme.bodySmall,
+          )?.copyWith(color: ProxieColors.of(context).muted),
         ),
       ),
     );

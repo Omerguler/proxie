@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 
+import 'package:proxie/src/ui/theme.dart';
+
 /// The row kept still across one data change: its id, its index and its
 /// offset in the list's content (not on screen, so the user's own scrolling
 /// in the meantime cancels out) as of the last layout.
@@ -90,7 +92,7 @@ class ScrollAnchor extends ChangeNotifier {
       scroll.animateTo(
         scroll.position.minScrollExtent,
         duration: const Duration(milliseconds: 250),
-        curve: Curves.easeOut,
+        curve: ProxieMotion.curve,
       );
     }
   }
@@ -305,8 +307,11 @@ class NewCallsPill extends StatelessWidget {
         ? const SizedBox.shrink()
         : Center(
             child: ActionChip(
-              avatar: const Icon(Icons.arrow_upward, size: 16),
+              avatar: const Icon(Icons.arrow_upward),
               label: Text('${anchor.newCalls} new'),
+              color: WidgetStatePropertyAll(
+                Theme.of(context).colorScheme.surfaceContainerHigh,
+              ),
               onPressed: anchor.toTop,
             ),
           ),
