@@ -139,8 +139,8 @@ abstract final class Proxie {
     if (duplicates.isNotEmpty) {
       developer.log(
         'Proxie adapters share the name ${duplicates.join(', ')}: Edit & '
-        'resend uses the first of them, whichever recorded the call. Give each its '
-        'own name.',
+        'resend uses the first of them, whichever recorded the call. Give '
+        'each its own name.',
         name: 'proxie',
       );
     }
@@ -201,7 +201,7 @@ abstract final class Proxie {
   /// tree stays the same.
   static Widget wrap(BuildContext context, Widget? child) {
     final host = child ?? const SizedBox.shrink();
-    if (!kProxieEnabled) return host;
+    if (!kProxieEnabled || ProxieHost.isAbove(context)) return host;
     // Once wrapped, keep wrapping so a later init(enabled: false) does not
     // remount the app.
     if (_disabled && !_wrapped) return host;

@@ -19,6 +19,11 @@ class ProxieHost extends StatefulWidget {
   /// The app, drawn below Proxie's layer.
   final Widget child;
 
+  /// Whether a [ProxieHost] holds [context]: a nested app using `Proxie.wrap`
+  /// too, which must not draw a second layer.
+  static bool isAbove(BuildContext context) =>
+      context.getInheritedWidgetOfExactType<_ProxieHostScope>() != null;
+
   @override
   State<ProxieHost> createState() => _ProxieHostState();
 }
@@ -97,13 +102,20 @@ class _ProxieHostState extends State<ProxieHost> {
               // Swallowed while Proxie speaks for the back button.
               return _overlayOpen;
             },
-            child: widget.child,
+            child: _ProxieHostScope(child: widget.child),
           ),
         ),
         if (runtime != null) ProxieLayer(runtime: runtime),
       ],
     );
   }
+}
+
+class _ProxieHostScope extends InheritedWidget {
+  const _ProxieHostScope({required super.child});
+
+  @override
+  bool updateShouldNotify(_ProxieHostScope oldWidget) => false;
 }
 
 /// The bubble, and the inspector in overlay mode, in Proxie's own theme.

@@ -7,7 +7,10 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:proxie/src/internal_api.dart';
+import 'package:proxie/src/ui/json/json_row_tile.dart';
 import 'package:proxie/src/ui/list/call_list.dart';
+import 'package:proxie/src/ui/list/call_row.dart';
+import 'package:proxie/src/ui/theme.dart' show ProxieThemed;
 
 import '../support/ui_harness.dart';
 
@@ -819,5 +822,98 @@ void main() {
       await tester.runAsync(Proxie.shutdown);
       expect(adapter.hides, 2);
     });
+  });
+
+  testWidgets('nested apps both using Proxie.wrap share one layer', (
+    tester,
+  ) async {
+    addTearDown(tester.view.reset);
+    setViewSize(tester, phoneSize);
+    await initProxie(tester);
+    await tester.pumpWidget(
+      const MaterialApp(
+        builder: Proxie.wrap,
+        home: MaterialApp(
+          builder: Proxie.wrap,
+          home: Scaffold(body: Text('inner home')),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+    expect(find.text('inner home'), findsOneWidget);
+    expect(bubbleFinder, findsOneWidget);
+    Proxie.open();
+    await tester.pumpAndSettle();
+    expect(find.byType(CallList), findsOneWidget);
+    await tester.runAsync(Proxie.shutdown);
+  });
+
+  testWidgets('a large text scale in the host does not overflow Proxie rows', (
+    tester,
+  ) async {
+    addTearDown(tester.view.reset);
+    setViewSize(tester, phoneSize);
+    final call = ProxieCall(
+      id: 'c',
+      sessionId: 1,
+      adapter: 'http',
+      request: ProxieRequest(
+        method: 'DELETE',
+        url: Uri.parse('https://api.test/items/1?page=2'),
+        headers: const {},
+        body: ProxieBody.empty(),
+      ),
+      response: ProxieResponse(
+        statusCode: 200,
+        headers: const {},
+        body: ProxieBody.empty(),
+      ),
+      startedAt: DateTime(2026),
+      duration: const Duration(milliseconds: 12),
+      tags: const {CallTag.mapLocal, CallTag.edited, CallTag.breakpoint},
+    );
+    late double scale;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MediaQuery(
+          data: const MediaQueryData(
+            size: phoneSize,
+            textScaler: TextScaler.linear(3),
+          ),
+          child: ProxieThemed(
+            mode: ProxieThemeMode.dark,
+            child: Builder(
+              builder: (context) {
+                scale = MediaQuery.textScalerOf(context).scale(1);
+                return Scaffold(
+                  body: Column(
+                    children: [
+                      CallRow(call: CallSummary.fromCall(call)),
+                      const JsonRowTile(
+                        editable: false,
+                        row: JsonRow(
+                          nodeId: 1,
+                          depth: 0,
+                          key: 'name',
+                          kind: JsonKind.string,
+                          preview: 'value',
+                          childCount: 0,
+                          expanded: false,
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+    expect(scale, lessThan(3));
+    expect(scale, greaterThan(1));
   });
 }

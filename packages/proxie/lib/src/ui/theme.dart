@@ -565,6 +565,9 @@ abstract final class ProxieTheme {
 /// whatever the host's locale) and
 /// a [Directionality] (the host's, else left-to-right). Lets `Proxie.wrap`
 /// work under a `WidgetsApp`, a `CupertinoApp` or no app at all.
+///
+/// The host's text scale applies up to [maxTextScale]: the inspector's list and
+/// tree rows have fixed heights, so their text would clip above it.
 class ProxieThemed extends StatelessWidget {
   /// Creates the wrapper that themes [child] by [mode].
   const ProxieThemed({required this.mode, required this.child, super.key});
@@ -574,6 +577,9 @@ class ProxieThemed extends StatelessWidget {
 
   /// The Proxie UI to theme.
   final Widget child;
+
+  /// The largest text scale the inspector takes from the host.
+  static const double maxTextScale = 1.3;
 
   @override
   Widget build(BuildContext context) {
@@ -586,7 +592,10 @@ class ProxieThemed extends StatelessWidget {
             mode,
             MediaQuery.platformBrightnessOf(context),
           ),
-          child: child,
+          child: MediaQuery.withClampedTextScaling(
+            maxScaleFactor: maxTextScale,
+            child: child,
+          ),
         ),
       ),
     );
