@@ -1,8 +1,13 @@
 name: CI
 
+# A push to a pull request's branch runs once, as the pull request.
 on:
   push:
+    branches: [main]
   pull_request:
+
+permissions:
+  contents: read
 
 # Windows integration tests are not included. They need a real window and a
 # clipboard (app_test.dart overwrites it and reads it back), and they have only
@@ -24,6 +29,13 @@ jobs:
           cache: true
       - run: flutter pub get
       - run: dart analyze --fatal-infos
+      - run: dart format --set-exit-if-changed .
+      - name: Dry-run publish proxie
+        run: flutter pub publish --dry-run
+        working-directory: packages/proxie
+      - name: Dry-run publish proxie_dio
+        run: flutter pub publish --dry-run
+        working-directory: packages/proxie_dio
       - name: Test proxie
         run: flutter test
         working-directory: packages/proxie
@@ -33,6 +45,46 @@ jobs:
       - name: Test example
         run: flutter test
         working-directory: example
+
+  # dart2js differs from the VM (a shift past 32 bits is 0, say); the JSON code
+  # is plain Dart, so it is run there too.
+  web-unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - run: flutter pub get
+      - name: Test the JSON code on Chrome
+        run: >-
+          flutter test --platform chrome
+          test/json/json_document_test.dart
+          test/json/json_edit_test.dart
+          test/json/json_search_test.dart
+        working-directory: packages/proxie
+
+  # The lowest Flutter the pubspecs declare. HttpClient and its relatives are
+  # implemented here, and they can gain members in any SDK.
+  flutter-floor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          channel: stable
+          flutter-version: 3.38.0
+          cache: true
+      - run: flutter pub get
+      - name: Test proxie
+        run: flutter test
+        working-directory: packages/proxie
+      - name: Test proxie_dio
+        run: flutter test
+        working-directory: packages/proxie_dio
 
   playwright:
     runs-on: ubuntu-latest
