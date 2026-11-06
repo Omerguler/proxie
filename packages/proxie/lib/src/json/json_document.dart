@@ -110,6 +110,11 @@ class JsonDocument {
   /// removed nodes; what the document's memory grows with.
   int get storedCapacity => _n.capacity;
 
+  /// What the open-document budget counts this document as: [storedCapacity],
+  /// plus one for each container holding an append hint, which grows with the
+  /// containers edited without allocating node slots.
+  int get chargedNodes => _n.capacity + _lastChild.length;
+
   /// Applies [edit] and returns the new [visibleCount]. Throws a
   /// [StateError] when there is a [parseError] or when the edit would grow
   /// storage beyond [maxCapacity], and an [ArgumentError] when the edit does

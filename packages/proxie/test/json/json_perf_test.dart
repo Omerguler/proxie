@@ -120,6 +120,22 @@ void main() {
     expect(t, lessThan(1500 * 1000));
   });
 
+  test('appending 22k items one by one < 500 ms', () {
+    final doc = JsonDocument.tryParse(
+      Uint8List.fromList(utf8.encode('{"l":[]}')),
+    );
+    final l = doc.rows(0, 1).single.nodeId;
+    doc.toggle(l);
+    final sw = Stopwatch()..start();
+    for (var i = 0; i < 20000; i++) {
+      doc.apply(AddItem(l, i));
+    }
+    for (var i = 0; i < 2000; i++) {
+      doc.apply(AddKey(0, 'k$i', i));
+    }
+    expect(sw.elapsedMilliseconds, lessThan(500));
+  });
+
   test('rows(20000, 60) < 5 ms', () {
     final doc = JsonDocument.tryParse(bytes);
     // Cold: the first page after opening, then a jump to the middle.

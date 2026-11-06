@@ -416,7 +416,7 @@ class _JsonDocs {
   }
 
   (String, JsonDocument) add(String source, Uint8List bytes, JsonDocument doc) {
-    final nodes = doc.storedCapacity;
+    final nodes = doc.chargedNodes;
     doc.maxCapacity = maxOpenJsonNodes;
     while (_open.isNotEmpty &&
         (_open.length >= maxOpenJsonDocs ||
@@ -445,7 +445,7 @@ class _JsonDocs {
   /// [maxOpenJsonNodes].
   void recharge(String docId) {
     final entry = _open[docId]!;
-    final nodes = _doc(docId).storedCapacity;
+    final nodes = _doc(docId).chargedNodes;
     _nodes += nodes - entry.nodes;
     entry.nodes = nodes;
     while (_nodes > maxOpenJsonNodes && _open.keys.first != docId) {
