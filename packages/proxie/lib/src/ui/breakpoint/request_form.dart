@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import 'package:proxie/src/config.dart' show defaultRawEditableLimit;
 import 'package:proxie/src/core/http_rules.dart';
+import 'package:proxie/src/core/masking.dart'
+    show isMaskedUrl, kMask, kMaskInUrl, showMaskedUrl;
 import 'package:proxie/src/json/json_commands.dart' show JsonBodySide;
 import 'package:proxie/src/model/request.dart';
 import 'package:proxie/src/ui/rules/message_draft.dart';
@@ -25,13 +27,17 @@ class QueryRow {
   final String _rawName;
   final String? _rawValue;
 
-  // A `%` not followed by two hex digits would make decoding throw.
-  static final RegExp _badEscape = RegExp('%(?![0-9a-fA-F]{2})');
+  // A `%` not followed by two hex digits, or a character outside US-ASCII,
+  // would make decoding throw.
+  static final RegExp _undecodable = RegExp(
+    r'%(?![0-9a-fA-F]{2})|[^\x00-\x7F]',
+  );
 
-  /// [s] decoded; kept as it is when it holds a malformed escape or bytes
-  /// that are not UTF-8 (such as a Latin-1 `%E9`), never thrown.
+  /// [s] decoded; kept as it is when it holds a malformed escape, a character
+  /// typed unencoded, or bytes that are not UTF-8 (such as a Latin-1 `%E9`),
+  /// never thrown.
   static String _decode(String s) {
-    if (_badEscape.hasMatch(s)) return s;
+    if (_undecodable.hasMatch(s)) return s;
     try {
       return Uri.decodeQueryComponent(s);
     } on FormatException {
@@ -96,6 +102,7 @@ class RequestDraft extends MessageDraft {
   final TextEditingController url = TextEditingController();
 
   final List<QueryRow> _query = [];
+  int _maskedQuery = 0;
   String _seenMethod = '';
   String _seenUrl = '';
   bool _writing = false;
@@ -105,6 +112,10 @@ class RequestDraft extends MessageDraft {
 
   /// The query parameters, in order.
   List<QueryRow> get query => List.unmodifiable(_query);
+
+  /// How many values of the URL the stored copy had masked; refused by
+  /// [validate] until retyped. Always 0 for a live request.
+  int get maskedQueryCount => _maskedQuery;
 
   /// Why the method was refused by the last [validate], or null.
   String? get methodError => _methodError;
@@ -118,10 +129,24 @@ class RequestDraft extends MessageDraft {
   /// and masked values are counted (see [MessageDraft.maskedCount]).
   void load(ProxieRequest request, {required String callId, bool live = true}) {
     method.text = request.method;
-    url.text = request.url.toString();
+    // Before the URL: its listener counts what it holds as masked.
+    loadMessage(request.headers, request.body, callId: callId, live: live);
+    final text = request.url.toString();
+    url.text = live ? text : showMaskedUrl(text);
     _methodError = null;
     _urlError = null;
-    loadMessage(request.headers, request.body, callId: callId, live: live);
+    _countMaskedQuery();
+    _notifyIfOpen();
+  }
+
+  void _countMaskedQuery() {
+    final text = url.text;
+    final n = isLive
+        ? 0
+        : kMask.allMatches(text).length + kMaskInUrl.allMatches(text).length;
+    if (n == _maskedQuery) return;
+    _maskedQuery = n;
+    _notifyIfOpen();
   }
 
   /// The query part of [text]: from the first `?` to the first `#` (a
@@ -148,6 +173,7 @@ class RequestDraft extends MessageDraft {
       _urlError = null;
       _notifyIfOpen();
     }
+    _countMaskedQuery();
     if (_writing) return;
     final text = url.text;
     final span = _querySpan(text);
@@ -277,15 +303,24 @@ class RequestDraft extends MessageDraft {
     _methodError = m.isEmpty || !isHttpToken(m)
         ? 'This is not a valid method'
         : null;
+    final maskedUrl = !isLive && isMaskedUrl(url.text);
     _urlError = builtUrl == null
         ? 'Must be an absolute http or https URL'
+        : maskedUrl
+        ? 'Masked at capture; retype the value'
         : null;
     final headers = validateHeaders(received: false);
     if (_methodError != null) return '"$m" is not a valid method';
     if (_urlError != null) {
-      return 'The URL must be absolute and use http or https';
+      return maskedUrl
+          ? 'A query value was masked at capture; retype it'
+          : 'The URL must be absolute and use http or https';
     }
-    return headers ?? validateBody();
+    final field = maskedFormField;
+    return headers ??
+        (field == null
+            ? validateBody()
+            : 'The form field "$field" was masked at capture; retype it');
   }
 
   /// The request as edited; check [validate] first. Throws when the edited
@@ -384,6 +419,7 @@ class RequestForm extends StatelessWidget {
           draft: draft,
           useVerb: 'sending',
           refusesMaskedHeaders: true,
+          maskedQueryCount: draft.maskedQueryCount,
         ),
         _QueryTile(key: ValueKey(draft.generation), draft: draft),
         MessageHeaders(
@@ -415,6 +451,7 @@ class _QueryTile extends StatelessWidget {
     return ExpansionTile(
       title: Text('Query parameters (${rows.length})'),
       dense: true,
+      initiallyExpanded: draft.maskedQueryCount > 0,
       children: [
         ConstrainedBox(
           constraints: const BoxConstraints(maxHeight: 200),
@@ -438,10 +475,27 @@ class _QueryTile extends StatelessWidget {
                       const SizedBox(width: 8),
                       Expanded(
                         flex: 2,
-                        child: TextField(
-                          key: ValueKey('query-value-$i'),
-                          controller: rows[i].value,
-                          decoration: const InputDecoration(hintText: 'Value'),
+                        child: ValueListenableBuilder<TextEditingValue>(
+                          valueListenable: rows[i].value,
+                          builder: (context, value, _) {
+                            final masked = isMaskedUrl(value.text);
+                            return TextField(
+                              key: ValueKey('query-value-$i'),
+                              controller: rows[i].value,
+                              style: masked
+                                  ? TextStyle(
+                                      color: Theme.of(
+                                        context,
+                                      ).colorScheme.error,
+                                    )
+                                  : null,
+                              decoration: maskedFieldDecoration(
+                                context,
+                                masked: masked,
+                                hintText: 'Value',
+                              ),
+                            );
+                          },
                         ),
                       ),
                       IconButton(

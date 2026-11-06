@@ -231,6 +231,35 @@ void _contract(
       expect(body['user'], 'bob');
     });
 
+    test('upsert masks query values and error messages, and they cannot '
+        'be found', () async {
+      const secret = 'hunter2value';
+      worker.upsert(
+        ProxieCall(
+          id: 'q',
+          sessionId: 1,
+          adapter: 'test',
+          request: ProxieRequest(
+            method: 'GET',
+            url: Uri.parse('https://api.test/q?token=$secret&page=2'),
+            headers: const {},
+            body: ProxieBody.empty(),
+          ),
+          error: const ProxieError(
+            type: 'network',
+            message: 'Failed: https://api.test/q?token=$secret',
+          ),
+          startedAt: DateTime.now().toUtc(),
+        ),
+      );
+      final got = (await worker.run(const GetCall('q')))!;
+      expect(got.request.url.toString(), isNot(contains(secret)));
+      expect(got.request.url.queryParameters['page'], '2');
+      expect(got.error!.message, isNot(contains(secret)));
+      expect(got.error!.type, 'network');
+      expect(await worker.run(const CountCalls(CallQuery(text: secret))), 0);
+    });
+
     test('rules and presets round-trip', () async {
       final rule = ProxieRule(
         id: 'r1',

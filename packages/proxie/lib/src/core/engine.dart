@@ -268,19 +268,20 @@ class ProxieEngine {
       tags.add(CallTag.truncated);
     }
     final duration = done ? DateTime.now().difference(s.startedAt) : null;
-    ProxieCall build(ProxieRequest rq, ProxieResponse? rs) => ProxieCall(
-      id: callId,
-      sessionId: sessionId,
-      adapter: s.adapter,
-      request: rq,
-      response: rs,
-      error: error,
-      startedAt: s.startedAt,
-      duration: duration,
-      tags: tags,
-    );
+    ProxieCall build(ProxieRequest rq, ProxieResponse? rs, ProxieError? e) =>
+        ProxieCall(
+          id: callId,
+          sessionId: sessionId,
+          adapter: s.adapter,
+          request: rq,
+          response: rs,
+          error: e,
+          startedAt: s.startedAt,
+          duration: duration,
+          tags: tags,
+        );
     try {
-      sink.upsert(build(s.request, response));
+      sink.upsert(build(s.request, response, error));
     } on Object catch (e, st) {
       developer.log('Proxie sink failed', error: e, stackTrace: st);
     }
@@ -297,6 +298,7 @@ class ProxieEngine {
               : masking.maskResponse(
                   response.copyWith(body: _stripBody(response.body)),
                 ),
+          error == null ? null : masking.maskError(error),
         ),
       );
     } on Object catch (e, st) {

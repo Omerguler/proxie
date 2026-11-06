@@ -9,7 +9,8 @@ import 'package:flutter/services.dart';
 import 'package:proxie/src/config.dart' show defaultRawEditableLimit;
 import 'package:proxie/src/core/body_classifier.dart';
 import 'package:proxie/src/core/http_rules.dart';
-import 'package:proxie/src/core/masking.dart' show kMask;
+import 'package:proxie/src/core/masking.dart'
+    show isFormType, kMask, maskedFormFields;
 import 'package:proxie/src/json/json_commands.dart' show JsonBodySide;
 import 'package:proxie/src/model/body.dart';
 import 'package:proxie/src/ui/common.dart';
@@ -28,15 +29,23 @@ const Set<String> transportHeaders = {
 };
 
 /// How many values [bytes] (or [text]) hold that masking replaced: JSON
-/// strings equal to the mask, `"******"` in a [latin1] body. Runs in the
-/// worker, so a large body is never scanned on the UI isolate.
+/// strings equal to the mask, `"******"` in a [latin1] body, or the fields of
+/// a [form] that hold the mask. Runs in the worker, so a large body is never
+/// scanned on the UI isolate.
 class CountMasked extends WorkerCommand<int> {
   /// Counts in the body [bytes].
-  const CountMasked(Uint8List this.bytes, {this.latin1 = false}) : text = null;
+  const CountMasked(
+    Uint8List this.bytes, {
+    this.latin1 = false,
+    this.form = false,
+  }) : text = null;
 
   /// Counts in an edited body's [text].
-  const CountMasked.text(String this.text, {this.latin1 = false})
-    : bytes = null;
+  const CountMasked.text(
+    String this.text, {
+    this.latin1 = false,
+    this.form = false,
+  }) : bytes = null;
 
   /// The body as stored, or null when [text] is given.
   final Uint8List? bytes;
@@ -47,9 +56,13 @@ class CountMasked extends WorkerCommand<int> {
   /// Whether the body is ISO-8859-1, masked as `******`.
   final bool latin1;
 
+  /// Whether the body is a URL-encoded form.
+  final bool form;
+
   @override
   Future<int> execute(WorkerContext ctx) async {
-    final t = text;
+    final t = text ?? (form ? utf8.decode(bytes!, allowMalformed: true) : null);
+    if (form) return maskedFormFields(t!).length;
     if (t != null) {
       final pattern = latin1 ? '"******"' : '"$kMask"';
       return pattern.allMatches(t).length;
@@ -188,11 +201,12 @@ abstract class MessageDraft extends ChangeNotifier {
   }
 
   /// Values the stored copy had masked (P19): header values holding the
-  /// mask (see [isMaskedHeaderValue]) and JSON strings equal to it. A body
-  /// value goes out as it is; a header value is refused in a request and
-  /// kept as it is in a response. Header values count live; the body is
-  /// counted again in the worker shortly after it is edited. Always 0 for a
-  /// live message, which was never masked.
+  /// mask (see [isMaskedHeaderValue]), JSON strings equal to it and form
+  /// fields holding it. A JSON value goes out as it is; a header value or a
+  /// form field is refused in a request and kept as it is in a response.
+  /// Header values count live; the body is counted again in the worker
+  /// shortly after it is edited. Always 0 for a live message, which was never
+  /// masked.
   int get maskedCount => _maskedHeaders + _maskedBody;
 
   /// The part of [maskedCount] in header values.
@@ -200,6 +214,20 @@ abstract class MessageDraft extends ChangeNotifier {
 
   /// The part of [maskedCount] in the body.
   int get maskedBodyCount => _maskedBody;
+
+  /// Whether this message is a paused call's, never stored and never masked.
+  bool get isLive => _live;
+
+  /// The first field of a form body that still holds the mask, or null. A
+  /// form is not spliced like a header: its text is retyped in the raw view.
+  /// Reads the whole body, so it is for a single tap, not for every build.
+  String? get maskedFormField {
+    if (_live || !isFormType(contentType)) return null;
+    final fields = maskedFormFields(
+      _rawText ?? utf8.decode(_bytes, allowMalformed: true),
+    );
+    return fields.isEmpty ? null : fields.first;
+  }
 
   /// Bytes kept of a [truncated] body.
   int get keptBytes => _keptBytes;
@@ -261,7 +289,11 @@ abstract class MessageDraft extends ChangeNotifier {
     if (!live) {
       unawaited(
         _countBody(
-          CountMasked(body.bytes, latin1: isLatin1Text(body.contentType)),
+          CountMasked(
+            body.bytes,
+            latin1: isLatin1Text(body.contentType),
+            form: isFormType(body.contentType),
+          ),
         ),
       );
     }
@@ -359,7 +391,11 @@ abstract class MessageDraft extends ChangeNotifier {
       final raw = _rawText;
       final latin = isLatin1Text(contentType);
       if (raw != null) {
-        unawaited(_countBody(CountMasked.text(raw, latin1: latin)));
+        unawaited(
+          _countBody(
+            CountMasked.text(raw, latin1: latin, form: isFormType(contentType)),
+          ),
+        );
         return;
       }
       final tree = _tree;
@@ -568,6 +604,7 @@ class MessageNotices extends StatelessWidget {
     super.key,
     this.useVerb = 'saving',
     this.refusesMaskedHeaders = false,
+    this.maskedQueryCount = 0,
   });
 
   /// The draft described.
@@ -580,6 +617,9 @@ class MessageNotices extends StatelessWidget {
   /// the mask is not a sendable request header value. A response handed
   /// to the app can hold it.
   final bool refusesMaskedHeaders;
+
+  /// Query values of the URL that hold the mask, also refused.
+  final int maskedQueryCount;
 
   @override
   Widget build(BuildContext context) {
@@ -597,9 +637,21 @@ class MessageNotices extends StatelessWidget {
         );
     final scheme = theme.colorScheme;
     final headers = draft.maskedHeaderCount;
-    final sentAsMask = refusesMaskedHeaders
+    // A request's form fields are refused like its headers, not sent as is.
+    final forms = refusesMaskedHeaders && isFormType(draft.contentType)
         ? draft.maskedBodyCount
+        : 0;
+    final sentAsMask = refusesMaskedHeaders
+        ? draft.maskedBodyCount - forms
         : draft.maskedCount;
+    Widget refused(int n, String one, String many) => notice(
+      scheme.errorContainer,
+      scheme.onErrorContainer,
+      n == 1
+          ? '1 $one was masked at capture and must be retyped before $useVerb.'
+          : '$n $many were masked at capture and must be retyped before '
+                '$useVerb.',
+    );
     final what = refusesMaskedHeaders ? 'body value' : 'value';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -613,16 +665,11 @@ class MessageNotices extends StatelessWidget {
             '${formatBytes(draft.totalBytes)}). Edit or replace it '
             'before $useVerb.',
           ),
+        if (maskedQueryCount > 0)
+          refused(maskedQueryCount, 'query value', 'query values'),
         if (refusesMaskedHeaders && headers > 0)
-          notice(
-            scheme.errorContainer,
-            scheme.onErrorContainer,
-            headers == 1
-                ? '1 header value was masked at capture and must be retyped '
-                      'before $useVerb.'
-                : '$headers header values were masked at capture and must '
-                      'be retyped before $useVerb.',
-          ),
+          refused(headers, 'header value', 'header values'),
+        if (forms > 0) refused(forms, 'form field', 'form fields'),
         if (sentAsMask > 0)
           notice(
             scheme.errorContainer,
@@ -730,6 +777,26 @@ class MessageBody extends StatelessWidget {
   }
 }
 
+/// A value field's look when [masked]: the warning color and icon.
+InputDecoration maskedFieldDecoration(
+  BuildContext context, {
+  required bool masked,
+  required String hintText,
+  String? errorText,
+}) {
+  final error = Theme.of(context).colorScheme.error;
+  return InputDecoration(
+    hintText: hintText,
+    errorText: errorText,
+    prefixIcon: masked
+        ? Tooltip(
+            message: 'Masked at capture',
+            child: Icon(Icons.warning_amber, color: error),
+          )
+        : null,
+  );
+}
+
 /// [draft]'s header lines in a tile: add, edit and remove them. Masked
 /// values are marked.
 class MessageHeaders extends StatelessWidget {
@@ -789,18 +856,11 @@ class MessageHeaders extends StatelessWidget {
                               key: ValueKey('header-value-$i'),
                               controller: rows[i].value,
                               style: masked ? TextStyle(color: error) : null,
-                              decoration: InputDecoration(
+                              decoration: maskedFieldDecoration(
+                                context,
+                                masked: masked,
                                 hintText: 'Value',
                                 errorText: rows[i].valueError,
-                                prefixIcon: masked
-                                    ? Tooltip(
-                                        message: 'Masked at capture',
-                                        child: Icon(
-                                          Icons.warning_amber,
-                                          color: error,
-                                        ),
-                                      )
-                                    : null,
                               ),
                             );
                           },

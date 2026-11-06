@@ -12,7 +12,7 @@ export 'src/core/breakpoint_controller.dart';
 export 'src/core/curl.dart';
 export 'src/core/decision.dart';
 export 'src/core/engine.dart';
-export 'src/core/masking.dart';
+export 'src/core/masking.dart' show ProxieMasking, kMask;
 export 'src/core/presets.dart';
 export 'src/core/rule.dart';
 export 'src/core/url_matcher.dart';

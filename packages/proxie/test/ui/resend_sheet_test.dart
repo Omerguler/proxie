@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:proxie/proxie.dart';
+import 'package:proxie/src/core/masking.dart' show kFormType, kMaskInUrl;
 import 'package:proxie/src/core/replay.dart';
 import 'package:proxie/src/ui/detail/resend_sheet.dart';
 import 'package:proxie/src/ui/json/json_tree_view.dart';
@@ -313,6 +314,164 @@ void main() {
     // The failure is shown in the sheet; Send works again.
     expect(find.text('Send failed: SocketException: offline'), findsOneWidget);
     expect(_sendEnabled(tester), isTrue);
+  });
+
+  group('masked query values and form fields', () {
+    ProxieCall masked({String url = '', ProxieBody? body}) {
+      final base = _call(body: body);
+      return base.copyWith(
+        request: base.request.copyWith(
+          url: Uri.parse('https://api.test/users?page=2$url'),
+        ),
+      );
+    }
+
+    testWidgets('a masked query value warns, is marked, and is refused until '
+        'retyped', (tester) async {
+      final sent = <ProxieRequest>[];
+      await pumpSheet(
+        tester,
+        masked(url: '&token=$kMaskInUrl'),
+        send: (original, edited, _) async {
+          sent.add(edited);
+          return ReplayResult(
+            callId: 'n',
+            response: original.response!,
+            adapterName: 'http',
+            viaFallback: false,
+          );
+        },
+      );
+      final urlField = find.byKey(const ValueKey('request-url'));
+      // Shown the way people read it.
+      expect(
+        tester.widget<TextField>(urlField).controller!.text,
+        'https://api.test/users?page=2&token=$kMask',
+      );
+      expect(
+        find.text(
+          '1 query value was masked at capture and must be retyped before '
+          'sending.',
+        ),
+        findsOneWidget,
+      );
+      // The query tile opens on its own, with the masked row marked.
+      final value = find.byKey(const ValueKey('query-value-1'));
+      expect(value, findsOneWidget);
+      expect(find.byTooltip('Masked at capture'), findsOneWidget);
+
+      await tester.tap(_send);
+      await tester.pumpAndSettle();
+      expect(sent, isEmpty);
+      expect(
+        find.text('A query value was masked at capture; retype it'),
+        findsOneWidget,
+      );
+
+      await tester.enterText(value, 'real');
+      await tester.pumpAndSettle();
+      expect(find.textContaining('must be retyped'), findsNothing);
+      expect(find.byTooltip('Masked at capture'), findsNothing);
+      await tester.tap(_send);
+      await tester.pumpAndSettle();
+      expect(sent.single.url.queryParameters['token'], 'real');
+      expect(sent.single.url.queryParameters['page'], '2');
+    });
+
+    testWidgets('typing the value in the URL field also lifts the refusal', (
+      tester,
+    ) async {
+      final sent = <ProxieRequest>[];
+      await pumpSheet(
+        tester,
+        masked(url: '&token=$kMaskInUrl'),
+        send: (original, edited, _) async {
+          sent.add(edited);
+          return ReplayResult(
+            callId: 'n',
+            response: original.response!,
+            adapterName: 'http',
+            viaFallback: false,
+          );
+        },
+      );
+      await tester.enterText(
+        find.byKey(const ValueKey('request-url')),
+        'https://api.test/users?token=typed',
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(_send);
+      await tester.pumpAndSettle();
+      expect(sent.single.url.query, 'token=typed');
+    });
+
+    testWidgets('a masked form field warns and is refused until retyped', (
+      tester,
+    ) async {
+      final sent = <ProxieRequest>[];
+      await pumpSheet(
+        tester,
+        _call(
+          headers: const {
+            'content-type': [kFormType],
+          },
+          body: _text('user=a&password=$kMask', type: kFormType),
+        ),
+        send: (original, edited, _) async {
+          sent.add(edited);
+          return ReplayResult(
+            callId: 'n',
+            response: original.response!,
+            adapterName: 'http',
+            viaFallback: false,
+          );
+        },
+      );
+      expect(
+        find.text(
+          '1 form field was masked at capture and must be retyped before '
+          'sending.',
+        ),
+        findsOneWidget,
+      );
+      expect(find.textContaining('will be sent as'), findsNothing);
+
+      await tester.tap(_send);
+      await tester.pumpAndSettle();
+      expect(sent, isEmpty);
+      expect(
+        find.text('The form field "password" was masked at capture; retype it'),
+        findsOneWidget,
+      );
+
+      // The body is edited as raw text; the form is not spliced for the user.
+      await tester.enterText(
+        find.byKey(const ValueKey('proxie-raw-editor')),
+        'user=a&password=real',
+      );
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('must be retyped'), findsNothing);
+      await tester.tap(_send);
+      await tester.pumpAndSettle();
+      expect(sent.single.body.text, 'user=a&password=real');
+    });
+
+    testWidgets('a URL typed with other characters does not throw', (
+      tester,
+    ) async {
+      await pumpSheet(
+        tester,
+        _call(),
+        send: (_, _, _) async => throw StateError('unused'),
+      );
+      await tester.enterText(
+        find.byKey(const ValueKey('request-url')),
+        'https://api.test/users?q=café',
+      );
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    });
   });
 
   testWidgets('masked JSON body values are counted and sent as they are', (

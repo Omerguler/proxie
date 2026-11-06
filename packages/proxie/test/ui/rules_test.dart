@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:proxie/proxie.dart';
+import 'package:proxie/src/core/masking.dart' show kFormType, kMaskInUrl;
 import 'package:proxie/src/ui/detail/call_detail.dart';
 import 'package:proxie/src/ui/json/json_tree_controller.dart';
 import 'package:proxie/src/ui/json/json_tree_view.dart';
@@ -471,6 +472,40 @@ void main() {
     expect(engine.rules.rules.last.id, 'a');
     expect(engine.rules.rules.first.matcher.pattern, 'https://api.test/users*');
     expect((await store.rules()).last.id, 'a');
+  });
+
+  testWidgets('a pattern holding a masked value warns but can be saved', (
+    tester,
+  ) async {
+    await openMapLocal(tester, _call());
+    expect(find.textContaining('holds a value masked'), findsNothing);
+    final pattern = find.byKey(const ValueKey('rule-pattern'));
+    await tester.enterText(pattern, 'https://api.test/x?token=$kMaskInUrl');
+    await tester.pump();
+    expect(find.textContaining('holds a value masked'), findsOneWidget);
+    await save(tester);
+    expect(find.byType(RuleEditor), findsNothing);
+    expect(engine.rules.rules, hasLength(1));
+  });
+
+  testWidgets('a captured form body flags its masked fields', (tester) async {
+    await openMapLocal(
+      tester,
+      _call(
+        headers: const {
+          'content-type': [kFormType],
+        },
+        body: ProxieBody.from(
+          Uint8List.fromList(utf8.encode('token=$kMask&a=1')),
+          kFormType,
+        ),
+      ),
+    );
+    await showResponseTab(tester);
+    expect(
+      find.textContaining('1 value was masked at capture'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('values masked at capture are flagged but can be saved', (

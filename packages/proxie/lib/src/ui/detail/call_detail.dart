@@ -4,6 +4,7 @@ import 'dart:developer' as developer;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import 'package:proxie/src/core/masking.dart' show showMaskedUrl;
 import 'package:proxie/src/model/body.dart';
 import 'package:proxie/src/model/call.dart';
 import 'package:proxie/src/ui/detail/body_view.dart';
@@ -360,7 +361,7 @@ class _Header extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 SelectableText(
-                  call.request.url.toString(),
+                  showMaskedUrl(call.request.url.toString()),
                   // Without minLines it reserves all three lines.
                   minLines: 1,
                   maxLines: 3,

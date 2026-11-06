@@ -4,6 +4,7 @@ import 'dart:developer' as developer;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'package:proxie/src/core/masking.dart' show isMaskedUrl;
 import 'package:proxie/src/core/rule.dart';
 import 'package:proxie/src/core/url_matcher.dart';
 import 'package:proxie/src/model/body.dart';
@@ -392,14 +393,21 @@ class _RuleEditorState extends State<RuleEditor> {
           decoration: const InputDecoration(labelText: 'Name'),
         ),
         const SizedBox(height: 12),
-        TextField(
-          key: const ValueKey('rule-pattern'),
-          controller: _pattern,
-          decoration: InputDecoration(
-            labelText: 'URL pattern',
-            helperText: _regex
-                ? 'Regular expression, matched as written'
-                : '* matches anything; case-insensitive',
+        ValueListenableBuilder<TextEditingValue>(
+          valueListenable: _pattern,
+          builder: (context, pattern, _) => TextField(
+            key: const ValueKey('rule-pattern'),
+            controller: _pattern,
+            decoration: InputDecoration(
+              labelText: 'URL pattern',
+              helperMaxLines: 2,
+              helperText: isMaskedUrl(pattern.text)
+                  ? 'This holds a value masked at capture, so it will not '
+                        'match the real URL. Retype it or use *.'
+                  : _regex
+                  ? 'Regular expression, matched as written'
+                  : '* matches anything; case-insensitive',
+            ),
           ),
         ),
         SwitchListTile(

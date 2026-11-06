@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'package:proxie/src/core/masking.dart' show showMaskedUrl;
 import 'package:proxie/src/model/call.dart';
 import 'package:proxie/src/storage/call_query.dart';
 import 'package:proxie/src/ui/sections.dart';
@@ -43,7 +44,7 @@ class CallRow extends StatelessWidget {
     final path = uri == null
         ? call.url
         : (uri.path.isEmpty ? '/' : uri.path) +
-              (uri.hasQuery ? '?${uri.query}' : '');
+              (uri.hasQuery ? '?${showMaskedUrl(uri.query)}' : '');
     // Muted text does not reach 4.5:1 on the selected row's raised surface.
     final metaColor = selected ? scheme.onSurfaceVariant : colors.muted;
     final muted = theme.textTheme.bodySmall?.copyWith(color: metaColor);

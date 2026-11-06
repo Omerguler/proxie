@@ -178,6 +178,24 @@ void main() {
     },
   );
 
+  test('the stream copy masks query values and errors; the sink is raw and '
+      'the app gets the real URL', () async {
+    final seen = <ProxieCall>[];
+    engine.calls.listen(seen.add);
+    final req = _req().copyWith(url: Uri.parse('https://a.test/x?token=abc'));
+    final d = await engine.onRequest('c1', 'http', req);
+    expect((d as Proceed).request.url.query, 'token=abc');
+    engine.onError(
+      'c1',
+      const ProxieError(type: 'network', message: 'at /x?token=abc'),
+    );
+    await Future<void>.delayed(Duration.zero);
+    expect(seen.first.request.url.toString(), isNot(contains('abc')));
+    expect(seen.last.error!.message, 'at /x?token=$kMask');
+    expect(sink.last.request.url.query, 'token=abc');
+    expect(sink.last.error!.message, 'at /x?token=abc');
+  });
+
   test('onResponse works for mocked calls and calls stream emits', () async {
     final seen = <ProxieCall>[];
     engine.calls.listen(seen.add);

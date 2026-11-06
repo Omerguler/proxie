@@ -5,13 +5,54 @@ import 'package:proxie/src/core/body_classifier.dart' show isLatin1Text;
 import 'package:proxie/src/json/json_parser.dart';
 import 'package:proxie/src/json/json_row.dart';
 import 'package:proxie/src/model/body.dart';
+import 'package:proxie/src/model/call.dart';
 import 'package:proxie/src/model/request.dart';
 import 'package:proxie/src/model/response.dart';
 
 /// Replacement for masked values.
 const kMask = '••••••';
 
-/// Masks sensitive headers and JSON keys on stored/displayed copies.
+/// Replacement for masked query values, as it is written inside a URL.
+const kMaskInUrl = '%E2%80%A2%E2%80%A2%E2%80%A2%E2%80%A2%E2%80%A2%E2%80%A2';
+
+/// The content type of a URL-encoded form.
+const kFormType = 'application/x-www-form-urlencoded';
+
+/// Whether [contentType] names a URL-encoded form.
+bool isFormType(String? contentType) =>
+    contentType?.split(';').first.trim().toLowerCase() == kFormType;
+
+/// [url] as people read it: masked query values show as [kMask].
+String showMaskedUrl(String url) => url.replaceAll(kMaskInUrl, kMask);
+
+/// Whether the URL text [url] holds a value masked at capture.
+bool isMaskedUrl(String url) => url.contains(kMaskInUrl) || url.contains(kMask);
+
+/// The fields of the URL-encoded form [text] whose value was masked at
+/// capture, decoded, in order.
+List<String> maskedFormFields(String text) => [
+  for (final part in text.split(RegExp('[&;]')))
+    if (part.endsWith('=$kMask') || part.endsWith('=$kMaskInUrl'))
+      _decodeLeniently(part.substring(0, part.indexOf('='))),
+];
+
+final _badEscape = RegExp('%(?![0-9a-fA-F]{2})');
+final _nonAscii = RegExp(r'[^\x00-\x7F]');
+
+/// [s] with its query encoding undone, or as it is when that encoding is
+/// malformed. Never throws.
+String _decodeLeniently(String s) {
+  if (_badEscape.hasMatch(s) || _nonAscii.hasMatch(s)) return s;
+  return Uri.decodeQueryComponent(
+    s,
+    encoding: const Utf8Codec(allowMalformed: true),
+  );
+}
+
+/// Masks sensitive values on stored/displayed copies: the [headers] and,
+/// matched on the [jsonKeys] names, JSON values at any depth, query parameters
+/// (in the URL and in URLs held by errors and by `Location`,
+/// `Content-Location` and `Referer` headers) and URL-encoded form fields.
 ///
 /// A body keeps every byte except the masked values: one with nothing to mask
 /// comes back as the same object. `ProxieMasking(headers: {}, jsonKeys: {})`
@@ -46,7 +87,8 @@ class ProxieMasking {
   /// Header names to mask (case-insensitive).
   final Set<String> headers;
 
-  /// JSON object keys to mask at any depth (case-insensitive).
+  /// Names to mask (case-insensitive): JSON object keys at any depth, query
+  /// parameters and form fields.
   final Set<String> jsonKeys;
 
   // Lowercased name sets and the fallback key matcher, computed once per
@@ -55,13 +97,31 @@ class ProxieMasking {
 
   _Compiled get _compiled => _cache[this] ??= _Compiled(headers, jsonKeys);
 
-  /// A copy of [r] with sensitive headers and JSON values masked.
-  ProxieRequest maskRequest(ProxieRequest r) =>
-      r.copyWith(headers: _maskHeaders(r.headers), body: _maskBody(r.body));
+  /// A copy of [r] with sensitive headers, query parameters, form fields and
+  /// JSON values masked.
+  ProxieRequest maskRequest(ProxieRequest r) => r.copyWith(
+    url: maskUrl(r.url),
+    headers: _maskHeaders(r.headers),
+    body: _maskBody(r.body),
+  );
 
-  /// A copy of [r] with sensitive headers and JSON values masked.
+  /// A copy of [r] with sensitive headers, form fields and JSON values masked.
   ProxieResponse maskResponse(ProxieResponse r) =>
       r.copyWith(headers: _maskHeaders(r.headers), body: _maskBody(r.body));
+
+  /// [url] with the values of sensitive query parameters replaced by
+  /// [kMaskInUrl]; the same object when there are none.
+  Uri maskUrl(Uri url) {
+    if (!url.hasQuery) return url;
+    final query = url.query;
+    final masked = _maskPairs(query, kMaskInUrl);
+    return identical(masked, query) ? url : url.replace(query: masked);
+  }
+
+  /// A copy of [e] with the sensitive query values of any URL in its message
+  /// masked.
+  ProxieError maskError(ProxieError e) =>
+      ProxieError(type: e.type, message: _maskUrlsIn(e.message));
 
   Map<String, List<String>> _maskHeaders(Map<String, List<String>> input) {
     final names = _compiled.headerNames;
@@ -69,13 +129,81 @@ class ProxieMasking {
       for (final e in input.entries)
         e.key: names.contains(e.key.toLowerCase())
             ? [for (final _ in e.value) kMask]
+            : _urlHeaders.contains(e.key.toLowerCase())
+            ? [for (final v in e.value) _maskUrlsIn(v)]
             : List<String>.of(e.value),
     };
   }
 
+  /// Headers whose value is a URL.
+  static const _urlHeaders = {'location', 'content-location', 'referer'};
+
+  static final _urlPair = RegExp(r'''[?&;]([^=&;?#\s]+)=([^&;#\s"'<>)\],]*)''');
+
+  /// [text] with the values of sensitive query parameters replaced by [kMask].
+  String _maskUrlsIn(String text) {
+    if (_compiled.keys.isEmpty) return text;
+    return text.replaceAllMapped(_urlPair, (m) {
+      final pair = m[0]!;
+      if (m[2]!.isEmpty || !_isSensitiveName(m[1]!)) return pair;
+      return '${pair.substring(0, pair.length - m[2]!.length)}$kMask';
+    });
+  }
+
+  static final _pair = RegExp('[^&;]+');
+
+  /// The `name=value` pairs of [pairs] with the values of sensitive names
+  /// replaced by [mask]; [pairs] itself when there are none. A name without a
+  /// value is left alone.
+  String _maskPairs(String pairs, String mask) {
+    if (_compiled.keys.isEmpty) return pairs;
+    StringBuffer? out;
+    var copied = 0;
+    for (final m in _pair.allMatches(pairs)) {
+      final eq = pairs.indexOf('=', m.start);
+      if (eq < 0 || eq >= m.end - 1) continue;
+      if (!_isSensitiveName(pairs.substring(m.start, eq))) continue;
+      (out ??= StringBuffer())
+        ..write(pairs.substring(copied, eq + 1))
+        ..write(mask);
+      copied = m.end;
+    }
+    if (out == null) return pairs;
+    out.write(pairs.substring(copied));
+    return out.toString();
+  }
+
+  static final _nameParts = RegExp(r'[\[\]]');
+
+  /// Whether the encoded parameter name [raw] is sensitive, itself or as a
+  /// part of a bracketed name such as `user[password]`.
+  bool _isSensitiveName(String raw) {
+    final keys = _compiled.keys;
+    return _decodeLeniently(
+      raw,
+    ).toLowerCase().split(_nameParts).any(keys.contains);
+  }
+
+  ProxieBody _maskForm(ProxieBody body) {
+    // One character per byte both ways, so other bytes stay as they are.
+    final view = latin1.decode(body.bytes);
+    final masked = _maskPairs(view, _maskView);
+    if (identical(masked, view)) return body;
+    return ProxieBody(
+      bytes: Uint8List.fromList(latin1.encode(masked)),
+      contentType: body.contentType,
+      kind: body.kind,
+      truncated: body.truncated,
+      originalLength: body.originalLength,
+    );
+  }
+
+  static final String _maskView = latin1.decode(utf8.encode(kMask));
+
   ProxieBody _maskBody(ProxieBody body) {
     final bytes = body.bytes;
     if (bytes.isEmpty || _compiled.keys.isEmpty) return body;
+    if (isFormType(body.contentType)) return _maskForm(body);
     final declared =
         body.kind == BodyKind.json ||
         (body.contentType?.toLowerCase().contains('json') ?? false);

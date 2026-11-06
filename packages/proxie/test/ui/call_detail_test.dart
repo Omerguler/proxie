@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:proxie/proxie.dart';
+import 'package:proxie/src/core/masking.dart' show kMaskInUrl;
 import 'package:proxie/src/runtime.dart';
 import 'package:proxie/src/ui/detail/body_view.dart';
 import 'package:proxie/src/ui/detail/call_detail.dart';
@@ -366,6 +367,21 @@ void main() {
     expect(find.text('123 ms'), findsOneWidget);
     expect(find.text('http'), findsOneWidget);
     expect(find.byKey(const ValueKey('proxie-timing-trace')), findsOneWidget);
+  });
+
+  testWidgets('a masked query value shows as the mask, not its encoding', (
+    tester,
+  ) async {
+    final c = _call(response: _response(_body([], null)));
+    await store.upsert(
+      c.copyWith(
+        request: c.request.copyWith(
+          url: Uri.parse('https://api.test/users?token=$kMaskInUrl'),
+        ),
+      ),
+    );
+    await pumpDetail(tester);
+    expect(find.text('https://api.test/users?token=$kMask'), findsOneWidget);
   });
 
   group('timing trace', () {
