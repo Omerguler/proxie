@@ -341,6 +341,7 @@ is stored afterwards is masked.
 | Setting | Default |
 |---|---|
 | Calls kept (`retentionCalls`, `retentionAge`) | 5,000 calls, 7 days; applied at start and as calls come in |
+| Bodies kept when history is in memory (web, or `persistHistory: false`) | 100 MB, a fixed limit. The oldest calls go first; the newest always stays. |
 | Captured per body (`teeCap`) | 5 MB; the app still gets every byte |
 | Largest body rendered (`renderCap`) | 5 MB |
 | Bodies editable as raw text (`rawEditableLimit`) | Below 1 MB |
@@ -367,8 +368,8 @@ Reports from these platforms are welcome in the
 
 - **No background isolate.** Parsing, masking, search and storage run on the UI
   thread in one go, so large bodies can make the app stutter.
-- **No SQLite.** History is kept in memory and is gone after a reload.
-  `persistHistory` has no effect.
+- **No SQLite.** History is kept in memory, within the 100 MB of bodies above,
+  and is gone after a reload. `persistHistory` has no effect.
 - **No `dart:io`.** `ProxieHttpOverridesAdapter` does nothing, so use
   `Proxie.httpClient()` or `proxie_dio`.
 - **CORS still applies**, because the browser sends the requests. A header you

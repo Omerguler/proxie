@@ -13,21 +13,37 @@ class _Entry {
     final map = source.toMap();
     return _Entry._(map, ProxieCall.fromMap(map));
   }
-  _Entry._(this.map, this.call) : summary = CallSummary.fromCall(call);
+  _Entry._(this.map, this.call)
+    : summary = CallSummary.fromCall(call),
+      bodyBytes =
+          call.request.body.bytes.length +
+          (call.response?.body.bytes.length ?? 0);
 
   final Map<String, Object?> map;
   final ProxieCall call;
   final CallSummary summary;
+  final int bodyBytes;
 }
 
 /// A [ProxieStore] that keeps everything in memory.
 ///
 /// Like a database it stores serialized copies, so later mutation of objects
 /// passed in or handed out never changes what is stored.
+///
+/// The bodies it holds stay within [maxBodyBytes], which a device can run out
+/// of long before the retention count: the oldest calls go first, and the
+/// newest always stays, however large.
 class MemoryStore implements ProxieStore {
   /// Creates an empty store; [now] stands in for the clock in tests.
-  MemoryStore({DateTime Function()? now}) : _now = now ?? DateTime.now;
+  MemoryStore({DateTime Function()? now, this.maxBodyBytes = _defaultBudget})
+    : _now = now ?? DateTime.now;
 
+  static const int _defaultBudget = 100 * 1024 * 1024;
+
+  /// How many bytes of request and response bodies to hold.
+  final int maxBodyBytes;
+
+  int _bodyBytes = 0;
   final DateTime Function() _now;
   final Map<String, _Entry> _calls = {};
   final Map<int, DateTime> _sessions = {};
@@ -44,7 +60,21 @@ class MemoryStore implements ProxieStore {
 
   @override
   Future<void> upsert(ProxieCall c) async {
-    _calls[c.id] = _Entry(c);
+    final entry = _Entry(c);
+    _bodyBytes += entry.bodyBytes - (_calls[c.id]?.bodyBytes ?? 0);
+    _calls[c.id] = entry;
+    if (_bodyBytes > maxBodyBytes) _evictOldest();
+  }
+
+  /// Removes the oldest calls, never the newest, until the bodies fit.
+  void _evictOldest() {
+    final newestFirst = _calls.values.toList()
+      ..sort((a, b) => _newestFirst(a.summary, b.summary));
+    for (final e in newestFirst.skip(1).toList().reversed) {
+      if (_bodyBytes <= maxBodyBytes) return;
+      _calls.remove(e.summary.id);
+      _bodyBytes -= e.bodyBytes;
+    }
   }
 
   Iterable<_Entry> _matching(CallQuery q) {
@@ -192,19 +222,24 @@ class MemoryStore implements ProxieStore {
   @override
   Future<void> trim({required int maxCalls, required Duration maxAge}) async {
     final cutoff = _now().subtract(maxAge);
-    _calls.removeWhere((_, e) => e.summary.startedAt.isBefore(cutoff));
+    _calls.removeWhere((_, e) {
+      final old = e.summary.startedAt.isBefore(cutoff);
+      if (old) _bodyBytes -= e.bodyBytes;
+      return old;
+    });
     final keep = maxCalls < 0 ? 0 : maxCalls;
     if (_calls.length <= keep) return;
     final sorted = _calls.values.map((e) => e.summary).toList()
       ..sort(_newestFirst);
     for (final s in sorted.skip(keep)) {
-      _calls.remove(s.id);
+      _bodyBytes -= _calls.remove(s.id)!.bodyBytes;
     }
   }
 
   @override
   Future<void> clear() async {
     _calls.clear();
+    _bodyBytes = 0;
     _sessions.clear();
   }
 
