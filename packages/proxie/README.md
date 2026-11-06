@@ -296,8 +296,8 @@ traffic is never changed.
 - **Headers**: `Authorization`, `Cookie`, `Set-Cookie`, `Proxy-Authorization`
 - **These names**: `password`, `token`, `access_token`, `refresh_token`,
   `secret`, wherever they appear as:
-  - a JSON key, at any depth, in a JSON body, or in another text body that parses
-    as JSON
+  - a JSON key, at any depth, in a JSON body, or in any other body that starts
+    with `{` or `[` and parses as JSON, whatever its content type
   - a query parameter of the URL. URLs in error messages and in `Location`,
     `Content-Location` and `Referer` headers are covered too
   - a field of an `application/x-www-form-urlencoded` body, `user[password]`
@@ -319,17 +319,30 @@ Proxie.init(
 ```
 
 A body keeps every byte other than the masked values, so numbers, key order and
-formatting stay as they were sent. A body with nothing to mask is stored as is.
+formatting stay as they were sent. A body with nothing to mask is stored as is. A
+`text/*` body in ISO-8859-1 cannot hold `•`, so its values become `"******"`.
+
+Masking errs on the side of hiding too much:
+
+- A JSON body that is cut at the capture cap, not valid JSON or not UTF-8 is
+  scanned for the names as text, and a value that isn't recognisable JSON is
+  masked up to the next `,`, `}` or `]`.
+- A query or form value runs to the next `&`, because it may hold a raw `;`. So
+  `token=a;b=c` hides `b=c` too, while `a=1;token=x` still keeps `a=1`.
+- In an error message, a query value runs to the next `&`, `#` or whitespace,
+  and may hide some of the text after it.
 
 To turn masking off, say so: `ProxieMasking(headers: {}, jsonKeys: {})`. Real
 credentials then reach the database in the app's support directory.
 
 **These are not masked and are stored as they are:** URL paths, user info
 (`https://user:pass@host`) and fragments; other headers; multipart bodies; other
-text and binary bodies; JSON held in a string value, such as
-`{"data":"{\"token\":\"abc\"}"}`; and a key written with an escape
-(`pass\u0077ord`) in a body that is truncated or not valid UTF-8. Native builds
-keep them on disk until retention removes them; use
+text and binary bodies, including UTF-8 text under a type that isn't JSON which
+only starts like JSON (`{"password":"x",}` as `text/plain`); JSON in UTF-16;
+JSON held in a string value, such as `{"data":"{\"token\":\"abc\"}"}`; and a
+key written with an escape (`pass\u0077ord`) in a body that isn't parsed: one that
+is truncated, not valid JSON, not valid UTF-8, or over 5 MB with `teeCap` raised.
+Native builds keep them on disk until retention removes them; use
 `ProxieConfig(persistHistory: false)` to keep history in memory only. While a call
 is paused at a breakpoint the editor shows its real values, held in memory; what
 is stored afterwards is masked.
