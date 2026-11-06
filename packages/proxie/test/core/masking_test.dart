@@ -2,8 +2,8 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:proxie/proxie.dart';
 import 'package:proxie/src/core/masking.dart' show kFormType, kMaskInUrl;
+import 'package:proxie/src/internal_api.dart';
 
 ProxieBody _json(String s) =>
     ProxieBody.from(Uint8List.fromList(utf8.encode(s)), 'application/json');

@@ -5,10 +5,10 @@ import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:proxie/proxie.dart';
 // The inspector's replay entry point is internal to proxie; this pins that
 // it works with the Dio adapter (P34).
 import 'package:proxie/src/core/replay.dart';
+import 'package:proxie/src/internal_api.dart';
 import 'package:proxie_dio/proxie_dio.dart';
 
 import 'support/test_server.dart';

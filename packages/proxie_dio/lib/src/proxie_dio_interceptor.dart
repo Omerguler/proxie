@@ -144,7 +144,7 @@ class ProxieDioInterceptor extends Interceptor implements ProxieCaptureAdapter {
         case AbortRequest(:final error):
           _finish(options);
           handler.reject(_aborted(options, error), true);
-        case Mock(:final action):
+        case MockDecision(:final action):
           await _mock(engine, callId, options, action, handler);
         case Proceed(request: final proceeded):
           if (!identical(proceeded, captured)) {

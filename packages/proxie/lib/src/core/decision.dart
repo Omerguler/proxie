@@ -17,9 +17,9 @@ class Proceed extends RequestDecision {
 }
 
 /// Answer locally per [action] instead of hitting the network.
-class Mock extends RequestDecision {
+class MockDecision extends RequestDecision {
   /// Creates a decision that answers with [action].
-  const Mock(this.action);
+  const MockDecision(this.action);
 
   /// The local response or simulated failure to answer with.
   final MapLocalAction action;

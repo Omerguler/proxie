@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:proxie/proxie.dart';
+import 'package:proxie/src/internal_api.dart';
 import 'package:proxie/src/ui/list/call_list.dart';
 
 // Widget tests run the real worker isolate (in-memory store, no files) via

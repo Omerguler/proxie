@@ -140,7 +140,7 @@ class ProxieEngine {
     if (action != null) {
       state.tags.add(CallTag.mapLocal);
       _emit(callId, state);
-      return Mock(action);
+      return MockDecision(action);
     }
     return Proceed(current);
   }

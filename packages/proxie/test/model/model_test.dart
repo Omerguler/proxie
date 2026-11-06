@@ -1,7 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:proxie/proxie.dart';
+import 'package:proxie/src/internal_api.dart';
 
 ProxieBody _body(List<int> bytes, BodyKind kind, {String? ct}) => ProxieBody(
   bytes: Uint8List.fromList(bytes),

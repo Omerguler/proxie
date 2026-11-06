@@ -118,7 +118,7 @@ class IoExchange {
     switch (decision) {
       case AbortRequest(:final error):
         throw HttpException(error.message, uri: _request.uri);
-      case Mock(:final action):
+      case MockDecision(:final action):
         return await _mock(engine, callId, action);
       case Proceed(request: final proceeded):
         return await _proceed(engine, callId, captured, proceeded);

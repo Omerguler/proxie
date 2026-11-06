@@ -6,8 +6,8 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:proxie/proxie.dart';
 import 'package:proxie/src/core/replay.dart';
+import 'package:proxie/src/internal_api.dart';
 
 import '../support/io_harness.dart';
 

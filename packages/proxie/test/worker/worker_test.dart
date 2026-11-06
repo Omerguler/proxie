@@ -7,7 +7,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
-import 'package:proxie/proxie.dart';
+import 'package:proxie/src/internal_api.dart';
 import 'package:proxie/src/worker/in_process_worker.dart';
 import 'package:proxie/src/worker/isolate_worker.dart';
 import 'package:proxie/src/worker/worker_factory_web.dart' as web;

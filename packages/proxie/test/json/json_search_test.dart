@@ -3,7 +3,7 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:proxie/proxie.dart';
+import 'package:proxie/src/internal_api.dart';
 
 JsonDocument _doc(String s) =>
     JsonDocument.tryParse(Uint8List.fromList(utf8.encode(s)));

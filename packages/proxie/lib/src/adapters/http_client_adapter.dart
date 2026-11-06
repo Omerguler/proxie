@@ -97,7 +97,7 @@ class ProxieHttpClient extends http.BaseClient implements ProxieCaptureAdapter {
     switch (decision) {
       case AbortRequest(:final error):
         throw http.ClientException(error.message, request.url);
-      case Mock(:final action):
+      case MockDecision(:final action):
         return await _mock(engine, callId, request, action, aborted);
       case Proceed(request: final proceeded):
         return await _proceed(

@@ -5,7 +5,7 @@ import 'dart:typed_data';
 
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:proxie/proxie.dart';
+import 'package:proxie/src/internal_api.dart';
 
 class _Sink implements CallSink {
   final calls = <ProxieCall>[];
@@ -85,7 +85,7 @@ void main() {
     expect(sink.last.tags, isEmpty);
   });
 
-  test('map-local rule: Mock and tagged mapLocal', () async {
+  test('map-local rule: MockDecision and tagged mapLocal', () async {
     final action = MapLocalAction(response: _res(404));
     engine.rules = RuleSet([
       ProxieRule(
@@ -97,7 +97,7 @@ void main() {
       ),
     ]);
     final d = await engine.onRequest('c1', 'http', _req());
-    expect((d as Mock).action, same(action));
+    expect((d as MockDecision).action, same(action));
     expect(sink.last.tags, contains(CallTag.mapLocal));
   });
 
@@ -413,7 +413,7 @@ void main() {
     final f = engine.onRequest('c1', 'http', _req());
     await Future<void>.delayed(Duration.zero);
     bps.resolve('c1', ExecuteRequest(_req(path: '/other')));
-    expect(await f, isA<Mock>());
+    expect(await f, isA<MockDecision>());
   });
 
   test('mock goes through a response breakpoint', () async {
@@ -427,7 +427,7 @@ void main() {
         mapLocal: MapLocalAction(response: _res(404)),
       ),
     ]);
-    expect(await engine.onRequest('c1', 'http', _req()), isA<Mock>());
+    expect(await engine.onRequest('c1', 'http', _req()), isA<MockDecision>());
     final f = engine.onResponse('c1', _res(404));
     await Future<void>.delayed(Duration.zero);
     expect(bps.pending.single.phase, BreakpointPhase.response);

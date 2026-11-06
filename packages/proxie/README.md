@@ -162,7 +162,7 @@ class MyClientAdapter implements ProxieCaptureAdapter {
     switch (await engine.onRequest(id, name, request)) {
       case AbortRequest(:final error):
         throw Exception(error.message);
-      case Mock(:final action):
+      case MockDecision(:final action):
         await Future<void>.delayed(action.delay);
         if (action.failure case final failure?) {
           final error = ProxieError(type: failure.name, message: 'Simulated');

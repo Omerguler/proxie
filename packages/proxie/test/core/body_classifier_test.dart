@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:proxie/proxie.dart';
+import 'package:proxie/src/internal_api.dart';
 
 Uint8List _u(List<int> b) => Uint8List.fromList(b);
 Uint8List _s(String s) => _u(utf8.encode(s));

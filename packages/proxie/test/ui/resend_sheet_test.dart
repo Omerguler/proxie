@@ -5,9 +5,9 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:proxie/proxie.dart';
 import 'package:proxie/src/core/masking.dart' show kFormType, kMaskInUrl;
 import 'package:proxie/src/core/replay.dart';
+import 'package:proxie/src/internal_api.dart';
 import 'package:proxie/src/ui/detail/resend_sheet.dart';
 import 'package:proxie/src/ui/json/json_tree_view.dart';
 

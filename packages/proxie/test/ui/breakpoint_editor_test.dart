@@ -4,7 +4,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:proxie/proxie.dart';
+import 'package:proxie/src/internal_api.dart';
 import 'package:proxie/src/ui/breakpoint/breakpoint_editor.dart';
 import 'package:proxie/src/ui/common.dart';
 import 'package:proxie/src/ui/detail/call_detail.dart';
