@@ -88,10 +88,7 @@ class ProxieHttpClient extends http.BaseClient implements ProxieCaptureAdapter {
         error: e,
         stackTrace: st,
       );
-      final out = http.Request(request.method, request.url)
-        ..followRedirects = request.followRedirects
-        ..maxRedirects = request.maxRedirects
-        ..persistentConnection = request.persistentConnection
+      final out = _sameKind(request, request.method, request.url)
         ..headers.addAll(request.headers)
         ..bodyBytes = bytes;
       return await runMarkedCaptured(() => _inner.send(out));
@@ -256,16 +253,37 @@ class ProxieHttpClient extends http.BaseClient implements ProxieCaptureAdapter {
       );
       rethrow;
     }
-    final received = ProxieResponse(
-      statusCode: res.statusCode,
-      reasonPhrase: res.reasonPhrase,
-      headers: _responseHeaders(res),
-      body: ProxieBody.from(
-        body,
-        _header(res.headers, 'content-type'),
-        cap: engine.config.teeCap,
+    ProxieResponse? built;
+    guardRecording(
+      () => built = ProxieResponse(
+        statusCode: res.statusCode,
+        reasonPhrase: res.reasonPhrase,
+        headers: _responseHeaders(res),
+        body: ProxieBody.from(
+          body,
+          _header(res.headers, 'content-type'),
+          cap: engine.config.teeCap,
+        ),
       ),
     );
+    final received = built;
+    if (received == null) {
+      // Unrecorded, but the app still gets what arrived.
+      aborted.check(request.url);
+      return _streamed(
+        ProxieResponse(
+          statusCode: res.statusCode,
+          reasonPhrase: res.reasonPhrase,
+          headers: _responseHeaders(res),
+          body: ProxieBody.empty(),
+        ),
+        body,
+        request,
+        url: _finalUrl(res, request),
+        isRedirect: res.isRedirect,
+        persistentConnection: res.persistentConnection,
+      );
+    }
     final out = await _respond(engine, callId, request.url, received);
     aborted.check(request.url);
     return _streamed(
@@ -278,6 +296,18 @@ class ProxieHttpClient extends http.BaseClient implements ProxieCaptureAdapter {
     );
   }
 
+  /// A new request to [url] with the abort trigger and connection settings of
+  /// [original].
+  http.Request _sameKind(http.BaseRequest original, String method, Uri url) {
+    final trigger = original is http.Abortable ? original.abortTrigger : null;
+    return (trigger == null
+          ? http.Request(method, url)
+          : http.AbortableRequest(method, url, abortTrigger: trigger))
+      ..followRedirects = original.followRedirects
+      ..maxRedirects = original.maxRedirects
+      ..persistentConnection = original.persistentConnection;
+  }
+
   /// Rebuilds the request to send, keeping the app's headers, full body and
   /// abort trigger unless they were edited at a breakpoint.
   http.Request _outgoing(
@@ -286,18 +316,7 @@ class ProxieHttpClient extends http.BaseClient implements ProxieCaptureAdapter {
     ProxieRequest proceeded,
     Uint8List bytes,
   ) {
-    final trigger = original is http.Abortable ? original.abortTrigger : null;
-    final out =
-        (trigger == null
-              ? http.Request(proceeded.method, proceeded.url)
-              : http.AbortableRequest(
-                  proceeded.method,
-                  proceeded.url,
-                  abortTrigger: trigger,
-                ))
-          ..followRedirects = original.followRedirects
-          ..maxRedirects = original.maxRedirects
-          ..persistentConnection = original.persistentConnection;
+    final out = _sameKind(original, proceeded.method, proceeded.url);
     // Unedited (the engine hands back the same object): the app's headers as
     // given; edited: the breakpoint's headers.
     if (identical(proceeded, captured)) {

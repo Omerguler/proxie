@@ -379,6 +379,28 @@ void main() {
     await res.drain<void>();
   });
 
+  test('an abort on an endless response at a response breakpoint closes the '
+      'connection', () async {
+    h.adapter.detach();
+    final e = ProxieEngine(
+      config: const ProxieConfig(
+        breakpointTimeout: Duration(milliseconds: 300),
+      ),
+      sink: h.sink,
+    )..rules = RuleSet([breakpointRule('*/stream', BreakpointPhase.response)]);
+    addTearDown(e.dispose);
+    h.adapter.attach(e);
+    final client = HttpClient();
+    addTearDown(() => client.close(force: true));
+    final req = await client.openUrl('GET', h.server.url('/stream'));
+    final res = req.close();
+    // After the response has arrived, while it is being buffered.
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    req.abort();
+    await expectLater(res, throwsA(anything));
+    await h.server.waitForNoStreams();
+  });
+
   test('a response breakpoint past the capture cap streams through, keeping '
       'every byte', () async {
     h.adapter.detach();

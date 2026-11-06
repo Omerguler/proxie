@@ -123,6 +123,18 @@ class _BrokenRecording extends _BrokenEngine {
   ) async => Proceed(req);
 }
 
+/// An engine whose config can start throwing.
+class _ConfigBreaks extends ProxieEngine {
+  _ConfigBreaks(CallSink sink)
+    : super(config: const ProxieConfig(), sink: sink);
+
+  bool broken = false;
+
+  @override
+  ProxieConfig get config =>
+      broken ? throw StateError('broken config') : super.config;
+}
+
 void main() {
   late TestServer server;
   late _Sink sink;
@@ -871,6 +883,55 @@ void main() {
       final res = await c.post(server.url('/echo'), body: 'hello');
       expect(res.statusCode, 200);
       expect((jsonDecode(res.body) as Map)['body'], 'hello');
+    });
+
+    test('a failing onRequest keeps the abort trigger', () async {
+      final trigger = Completer<void>();
+      final fake = _FakeClient(
+        (_) async => http.StreamedResponse(Stream.value(const [1]), 200),
+      );
+      final c = ProxieHttpClient(inner: fake)..attach(_BrokenEngine(sink));
+      await c.send(
+        http.AbortableRequest(
+          'GET',
+          server.url('/json'),
+          abortTrigger: trigger.future,
+        ),
+      );
+      expect(fake.sent.single, isA<http.Abortable>());
+      expect((fake.sent.single as http.Abortable).abortTrigger, trigger.future);
+
+      await c.send(http.Request('GET', server.url('/json')));
+      expect(fake.sent.last, isNot(isA<http.Abortable>()));
+    });
+
+    test('a failure recording a buffered response still gives the app its '
+        'body', () async {
+      final e = _ConfigBreaks(sink)
+        ..rules = RuleSet([_bp('*/json', BreakpointPhase.response)]);
+      addTearDown(() {
+        e
+          ..broken = false
+          ..dispose();
+      });
+      Stream<List<int>> body() async* {
+        yield utf8.encode('hello ');
+        yield utf8.encode('world');
+        e.broken = true;
+      }
+
+      final c = ProxieHttpClient(
+        inner: _FakeClient(
+          (_) async =>
+              http.StreamedResponse(body(), 201, headers: {'x-kept': 'yes'}),
+        ),
+      )..attach(e);
+      final res = await http.Response.fromStream(
+        await c.send(http.Request('GET', server.url('/json'))),
+      );
+      expect(res.statusCode, 201);
+      expect(res.headers['x-kept'], 'yes');
+      expect(res.body, 'hello world');
     });
 
     test('a failing recordResponse still ends the app stream', () async {

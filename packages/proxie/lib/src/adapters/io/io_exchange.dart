@@ -215,6 +215,8 @@ class IoExchange {
       );
       final rest = read.rest;
       if (rest != null) {
+        // An abort has no effect on a response that has arrived: drop it.
+        if (_abortError != null) unawaited(rest.listen(null).cancel());
         _checkNotAborted();
         return _tee(engine, callId, res, rest);
       }
@@ -231,16 +233,35 @@ class IoExchange {
       rethrow;
     }
     _checkNotAborted();
-    final received = ProxieResponse(
-      statusCode: res.statusCode,
-      reasonPhrase: res.reasonPhrase,
-      headers: headersToMap(res.headers),
-      body: ProxieBody.from(
-        body,
-        res.headers[HttpHeaders.contentTypeHeader]?.first,
-        cap: engine.config.teeCap,
+    ProxieResponse? built;
+    guardRecording(
+      () => built = ProxieResponse(
+        statusCode: res.statusCode,
+        reasonPhrase: res.reasonPhrase,
+        headers: headersToMap(res.headers),
+        body: ProxieBody.from(
+          body,
+          res.headers[HttpHeaders.contentTypeHeader]?.first,
+          cap: engine.config.teeCap,
+        ),
       ),
     );
+    final received = built;
+    if (received == null) {
+      // Unrecorded, but the app still gets what arrived.
+      return ProxieClientResponse.buffered(
+        ProxieResponse(
+          statusCode: res.statusCode,
+          reasonPhrase: res.reasonPhrase,
+          headers: headersToMap(res.headers),
+          body: ProxieBody.empty(),
+        ),
+        body,
+        method: proceeded.method,
+        real: res,
+        owned: true,
+      );
+    }
     final out = await _respond(engine, callId, received);
     final full = keepsFull(received.body, out.body);
     return ProxieClientResponse.buffered(

@@ -41,8 +41,55 @@ class _BrokenRecording extends _BrokenEngine {
   ) async => Proceed(req);
 }
 
+/// An engine whose config can start throwing.
+class _ConfigBreaks extends ProxieEngine {
+  _ConfigBreaks(CallSink sink)
+    : super(config: const ProxieConfig(), sink: sink);
+
+  bool broken = false;
+
+  @override
+  ProxieConfig get config =>
+      broken ? throw StateError('broken config') : super.config;
+}
+
 void main() {
   final h = IoHarness()..install();
+
+  test('a failure recording a buffered response still gives the app its '
+      'body', () async {
+    h.adapter.detach();
+    final e = _ConfigBreaks(h.sink)
+      ..rules = RuleSet([breakpointRule('*/late', BreakpointPhase.response)]);
+    addTearDown(() {
+      e
+        ..broken = false
+        ..dispose();
+    });
+    h.adapter.attach(e);
+    final origin = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(origin.close);
+    origin.listen((r) async {
+      r.response
+        ..statusCode = 201
+        ..headers.set('x-kept', 'yes')
+        ..write('hello ');
+      await r.response.flush();
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      e.broken = true;
+      r.response.write('world');
+      await r.response.close();
+    });
+    final client = HttpClient();
+    addTearDown(() => client.close(force: true));
+    final req = await client.getUrl(
+      Uri.parse('http://127.0.0.1:${origin.port}/late'),
+    );
+    final res = await req.close().timeout(const Duration(seconds: 5));
+    expect(res.statusCode, 201);
+    expect(res.headers.value('x-kept'), 'yes');
+    expect(await readText(res), 'hello world');
+  });
 
   test('plain HttpClient().getUrl(/json) is captured once', () async {
     final client = HttpClient();
