@@ -8,6 +8,39 @@ import 'package:proxie/proxie.dart';
 
 import '../../support/io_harness.dart';
 
+/// An engine whose recording always throws.
+class _BrokenEngine extends ProxieEngine {
+  _BrokenEngine(CallSink sink)
+    : super(config: const ProxieConfig(), sink: sink);
+
+  @override
+  Future<RequestDecision> onRequest(
+    String callId,
+    String adapter,
+    ProxieRequest req,
+  ) => throw StateError('broken onRequest');
+
+  @override
+  void recordResponse(String callId, ProxieResponse res) =>
+      throw StateError('broken recordResponse');
+
+  @override
+  void onError(String callId, ProxieError err, {ProxieResponse? response}) =>
+      throw StateError('broken onError');
+}
+
+/// Asks like a healthy engine, but recording the outcome throws.
+class _BrokenRecording extends _BrokenEngine {
+  _BrokenRecording(super.sink);
+
+  @override
+  Future<RequestDecision> onRequest(
+    String callId,
+    String adapter,
+    ProxieRequest req,
+  ) async => Proceed(req);
+}
+
 void main() {
   final h = IoHarness()..install();
 
@@ -393,5 +426,26 @@ void main() {
     final bytes = await res.fold<List<int>>([], (a, c) => a..addAll(c));
     expect(bytes, zipped);
     expect(res.contentLength, zipped.length);
+  });
+
+  group('recording never breaks live traffic', () {
+    test('a failing onRequest still sends the request', () async {
+      h.adapter.attach(_BrokenEngine(h.sink));
+      final res = await h.send(
+        'POST',
+        '/echo',
+        prepare: (r) => r.write('hello'),
+      );
+      expect((await h.echo(res))['body'], 'hello');
+    });
+
+    test('a failing recordResponse still ends the app stream', () async {
+      h.adapter.attach(_BrokenRecording(h.sink));
+      final res = await h.send('GET', '/json');
+      expect(
+        await readText(res).timeout(const Duration(seconds: 3)),
+        '{"hello":"world"}',
+      );
+    });
   });
 }

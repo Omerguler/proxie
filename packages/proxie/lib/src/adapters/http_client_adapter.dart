@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
@@ -60,18 +61,38 @@ class ProxieHttpClient extends http.BaseClient implements ProxieCaptureAdapter {
     // Headers are read after finalize(), which may set them (multipart).
     final bytes = await request.finalize().toBytes();
     final callId = engine.newCallId();
-    final captured = ProxieRequest(
-      method: request.method,
-      url: request.url,
-      headers: _toProxieHeaders(request.headers),
-      body: ProxieBody.from(
-        bytes,
-        _header(request.headers, 'content-type'),
-        cap: engine.config.teeCap,
-      ),
-    );
-    final aborted = _watchAbort(engine, callId, request);
-    final decision = await engine.onRequest(callId, name, captured);
+    final ProxieRequest captured;
+    final _AbortFlag aborted;
+    final RequestDecision decision;
+    try {
+      captured = ProxieRequest(
+        method: request.method,
+        url: request.url,
+        headers: _toProxieHeaders(request.headers),
+        body: ProxieBody.from(
+          bytes,
+          _header(request.headers, 'content-type'),
+          cap: engine.config.teeCap,
+        ),
+      );
+      aborted = _watchAbort(engine, callId, request);
+      decision = await engine.onRequest(callId, name, captured);
+    } on Object catch (e, st) {
+      // Recording must never break live traffic: send it on, unrecorded.
+      developer.log(
+        'Proxie capture failed',
+        name: 'proxie',
+        error: e,
+        stackTrace: st,
+      );
+      final out = http.Request(request.method, request.url)
+        ..followRedirects = request.followRedirects
+        ..maxRedirects = request.maxRedirects
+        ..persistentConnection = request.persistentConnection
+        ..headers.addAll(request.headers)
+        ..bodyBytes = bytes;
+      return await runMarkedCaptured(() => _inner.send(out));
+    }
     aborted.check(request.url);
     switch (decision) {
       case AbortRequest(:final error):
@@ -102,11 +123,13 @@ class ProxieHttpClient extends http.BaseClient implements ProxieCaptureAdapter {
     if (request case http.Abortable(:final abortTrigger?)) {
       void abort() {
         flag.aborted = true;
-        engine.onError(
-          callId,
-          const ProxieError(
-            type: 'cancelled',
-            message: 'Request aborted by the app',
+        guardRecording(
+          () => engine.onError(
+            callId,
+            const ProxieError(
+              type: 'cancelled',
+              message: 'Request aborted by the app',
+            ),
           ),
         );
       }
@@ -198,11 +221,13 @@ class ProxieHttpClient extends http.BaseClient implements ProxieCaptureAdapter {
       buffer = _hasResponseBreakpoint(engine, proceeded);
       res = await runMarkedCaptured(() => _inner.send(out));
     } catch (e) {
-      engine.onError(
-        callId,
-        ProxieError(
-          type: e is TimeoutException ? 'timeout' : 'network',
-          message: '$e',
+      guardRecording(
+        () => engine.onError(
+          callId,
+          ProxieError(
+            type: e is TimeoutException ? 'timeout' : 'network',
+            message: '$e',
+          ),
         ),
       );
       rethrow;
@@ -213,7 +238,12 @@ class ProxieHttpClient extends http.BaseClient implements ProxieCaptureAdapter {
     try {
       body = await res.stream.toBytes();
     } catch (e) {
-      engine.onError(callId, ProxieError(type: 'stream_error', message: '$e'));
+      guardRecording(
+        () => engine.onError(
+          callId,
+          ProxieError(type: 'stream_error', message: '$e'),
+        ),
+      );
       rethrow;
     }
     final received = ProxieResponse(

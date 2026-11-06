@@ -1,7 +1,23 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 import 'dart:typed_data';
 
 import 'package:proxie/src/model/body.dart';
+
+/// Runs [record], a step that records a call and is not needed by the app,
+/// and logs what it throws: recording must never break live traffic.
+void guardRecording(void Function() record) {
+  try {
+    record();
+  } on Object catch (e, st) {
+    developer.log(
+      'Proxie capture failed',
+      name: 'proxie',
+      error: e,
+      stackTrace: st,
+    );
+  }
+}
 
 /// Streams [source] through unchanged while keeping a copy of its first
 /// bytes for capture.
@@ -11,7 +27,8 @@ import 'package:proxie/src/model/body.dart';
 /// [teedBody]). When [source] ends, [onDone] gets the copy and the total
 /// byte count. A stream error (type `stream_error`, forwarded to the
 /// listener afterwards) or the listener cancelling early (type `cancelled`,
-/// which also cancels [source]) calls [onFail] once instead.
+/// which also cancels [source]) calls [onFail] once instead. What [onDone] and
+/// [onFail] throw is logged and otherwise ignored.
 ///
 /// Pause and resume are forwarded, so back-pressure still reaches [source].
 Stream<List<int>> teeStream(
@@ -30,7 +47,7 @@ Stream<List<int>> teeStream(
   void fail(String type, String message) {
     if (finished) return;
     finished = true;
-    onFail(type, message, kept.toBytes(), total);
+    guardRecording(() => onFail(type, message, kept.toBytes(), total));
   }
 
   late final StreamController<List<int>> controller;
@@ -52,7 +69,7 @@ Stream<List<int>> teeStream(
         onDone: () {
           if (!finished) {
             finished = true;
-            onDone(kept.toBytes(), total);
+            guardRecording(() => onDone(kept.toBytes(), total));
           }
           unawaited(controller.close());
         },

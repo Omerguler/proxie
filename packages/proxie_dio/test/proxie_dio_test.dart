@@ -152,6 +152,21 @@ String? _throwingDecoder(
 /// The overrides set globally, ignoring zone overrides.
 HttpOverrides? _globalOverrides() => Zone.root.run(() => HttpOverrides.current);
 
+class _NullSink implements CallSink {
+  @override
+  void upsert(ProxieCall call) {}
+}
+
+/// Asks like a healthy engine, but recording an outcome throws.
+class _BrokenRecording extends ProxieEngine {
+  _BrokenRecording(CallSink sink)
+    : super(config: const ProxieConfig(), sink: sink);
+
+  @override
+  void onError(String callId, ProxieError err, {ProxieResponse? response}) =>
+      throw StateError('broken onError');
+}
+
 void main() {
   late TestServer server;
   late _Sink sink;
@@ -1172,6 +1187,20 @@ void main() {
       expect(
         () => ProxieDioInterceptor().replay(req('/echo')),
         throwsStateError,
+      );
+    });
+  });
+
+  group('recording never breaks live traffic', () {
+    test('a failing onError still hands the error to the app', () async {
+      final broken = _BrokenRecording(_NullSink());
+      final dio = Dio();
+      ProxieDio.install(dio).attach(broken);
+      await expectLater(
+        dio
+            .get<void>('http://127.0.0.1:1/x')
+            .timeout(const Duration(seconds: 10)),
+        throwsA(isA<DioException>()),
       );
     });
   });

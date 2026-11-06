@@ -90,6 +90,39 @@ void _onPause(
   });
 }
 
+/// An engine whose recording always throws.
+class _BrokenEngine extends ProxieEngine {
+  _BrokenEngine(CallSink sink)
+    : super(config: const ProxieConfig(), sink: sink);
+
+  @override
+  Future<RequestDecision> onRequest(
+    String callId,
+    String adapter,
+    ProxieRequest req,
+  ) => throw StateError('broken onRequest');
+
+  @override
+  void recordResponse(String callId, ProxieResponse res) =>
+      throw StateError('broken recordResponse');
+
+  @override
+  void onError(String callId, ProxieError err, {ProxieResponse? response}) =>
+      throw StateError('broken onError');
+}
+
+/// Asks like a healthy engine, but recording the outcome throws.
+class _BrokenRecording extends _BrokenEngine {
+  _BrokenRecording(super.sink);
+
+  @override
+  Future<RequestDecision> onRequest(
+    String callId,
+    String adapter,
+    ProxieRequest req,
+  ) async => Proceed(req);
+}
+
 void main() {
   late TestServer server;
   late _Sink sink;
@@ -829,6 +862,46 @@ void main() {
       trigger.complete();
       await expectLater(sending, throwsA(isA<http.RequestAbortedException>()));
       expect(sink.last.error!.type, 'cancelled');
+    });
+  });
+
+  group('recording never breaks live traffic', () {
+    test('a failing onRequest still sends the request', () async {
+      final c = ProxieHttpClient()..attach(_BrokenEngine(sink));
+      final res = await c.post(server.url('/echo'), body: 'hello');
+      expect(res.statusCode, 200);
+      expect((jsonDecode(res.body) as Map)['body'], 'hello');
+    });
+
+    test('a failing recordResponse still ends the app stream', () async {
+      final c = ProxieHttpClient()..attach(_BrokenRecording(sink));
+      final res = await c
+          .get(server.url('/json'))
+          .timeout(const Duration(seconds: 3));
+      expect(res.body, '{"hello":"world"}');
+    });
+
+    test('a failing onError does not hide a stream error', () async {
+      final c = ProxieHttpClient(
+        inner: _FakeClient(
+          (_) async => http.StreamedResponse(
+            Stream<List<int>>.error(StateError('network')),
+            200,
+          ),
+        ),
+      )..attach(_BrokenRecording(sink));
+      final res = await c.send(http.Request('GET', server.url('/json')));
+      await expectLater(res.stream.drain<void>(), throwsStateError);
+    });
+
+    test('a failing onError does not hide a send failure', () async {
+      final c = ProxieHttpClient(
+        inner: _FakeClient((_) async => throw TimeoutException('slow')),
+      )..attach(_BrokenRecording(sink));
+      await expectLater(
+        c.send(http.Request('GET', server.url('/json'))),
+        throwsA(isA<TimeoutException>()),
+      );
     });
   });
 }

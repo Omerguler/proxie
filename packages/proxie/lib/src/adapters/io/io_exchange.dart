@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -65,11 +66,13 @@ class IoExchange {
     _abortError = error;
     final callId = _callId;
     if (callId != null) {
-      _engine?.onError(
-        callId,
-        const ProxieError(
-          type: 'cancelled',
-          message: 'Request aborted by the app',
+      guardRecording(
+        () => _engine?.onError(
+          callId,
+          const ProxieError(
+            type: 'cancelled',
+            message: 'Request aborted by the app',
+          ),
         ),
       );
     }
@@ -85,17 +88,31 @@ class IoExchange {
     }
     final callId = engine.newCallId();
     _callId = callId;
-    final captured = ProxieRequest(
-      method: _request.method,
-      url: _request.uri,
-      headers: _recordedHeaders(),
-      body: ProxieBody.from(
-        _bytes,
-        _request.headers[HttpHeaders.contentTypeHeader]?.first,
-        cap: engine.config.teeCap,
-      ),
-    );
-    final decision = await engine.onRequest(callId, _adapterName, captured);
+    final ProxieRequest captured;
+    final RequestDecision decision;
+    try {
+      captured = ProxieRequest(
+        method: _request.method,
+        url: _request.uri,
+        headers: _recordedHeaders(),
+        body: ProxieBody.from(
+          _bytes,
+          _request.headers[HttpHeaders.contentTypeHeader]?.first,
+          cap: engine.config.teeCap,
+        ),
+      );
+      decision = await engine.onRequest(callId, _adapterName, captured);
+    } on Object catch (e, st) {
+      // Recording must never break live traffic: send it on, unrecorded.
+      developer.log(
+        'Proxie capture failed',
+        name: 'proxie',
+        error: e,
+        stackTrace: st,
+      );
+      _checkNotAborted();
+      return await _send(_request.method, _request.uri, null, _bytes);
+    }
     _checkNotAborted();
     switch (decision) {
       case AbortRequest(:final error):
@@ -169,11 +186,13 @@ class IoExchange {
             );
     } catch (e) {
       if (_abortError == null) {
-        engine.onError(
-          callId,
-          ProxieError(
-            type: e is TimeoutException ? 'timeout' : 'network',
-            message: '$e',
+        guardRecording(
+          () => engine.onError(
+            callId,
+            ProxieError(
+              type: e is TimeoutException ? 'timeout' : 'network',
+              message: '$e',
+            ),
           ),
         );
       }
@@ -193,9 +212,11 @@ class IoExchange {
           .then((b) => b.takeBytes());
     } catch (e) {
       if (_abortError == null) {
-        engine.onError(
-          callId,
-          ProxieError(type: 'stream_error', message: '$e'),
+        guardRecording(
+          () => engine.onError(
+            callId,
+            ProxieError(type: 'stream_error', message: '$e'),
+          ),
         );
       }
       rethrow;

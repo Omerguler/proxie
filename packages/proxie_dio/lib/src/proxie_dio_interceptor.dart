@@ -271,11 +271,16 @@ class ProxieDioInterceptor extends Interceptor implements ProxieCaptureAdapter {
     }
 
     _finish(options);
-    engine.onError(
-      callId,
-      _recordedError(err),
-      response: response == null ? null : _snapshot(engine, response),
-    );
+    // Recording must never keep the error from the app.
+    try {
+      engine.onError(
+        callId,
+        _recordedError(err),
+        response: response == null ? null : _snapshot(engine, response),
+      );
+    } on Object catch (e, st) {
+      developer.log('Proxie error capture failed', error: e, stackTrace: st);
+    }
     handler.next(err);
   }
 
