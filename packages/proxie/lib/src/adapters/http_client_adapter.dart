@@ -70,12 +70,14 @@ class ProxieHttpClient extends http.BaseClient implements ProxieCaptureAdapter {
         cap: engine.config.teeCap,
       ),
     );
+    final aborted = _watchAbort(engine, callId, request);
     final decision = await engine.onRequest(callId, name, captured);
+    aborted.check(request.url);
     switch (decision) {
       case AbortRequest(:final error):
         throw http.ClientException(error.message, request.url);
       case Mock(:final action):
-        return await _mock(engine, callId, request, action);
+        return await _mock(engine, callId, request, action, aborted);
       case Proceed(request: final proceeded):
         return await _proceed(
           engine,
@@ -84,8 +86,36 @@ class ProxieHttpClient extends http.BaseClient implements ProxieCaptureAdapter {
           captured,
           proceeded,
           bytes,
+          aborted,
         );
     }
+  }
+
+  /// Records the call as cancelled when the app aborts [request], which also
+  /// releases any pause; the returned flag tells the steps that follow.
+  _AbortFlag _watchAbort(
+    ProxieEngine engine,
+    String callId,
+    http.BaseRequest request,
+  ) {
+    final flag = _AbortFlag();
+    if (request case http.Abortable(:final abortTrigger?)) {
+      void abort() {
+        flag.aborted = true;
+        engine.onError(
+          callId,
+          const ProxieError(
+            type: 'cancelled',
+            message: 'Request aborted by the app',
+          ),
+        );
+      }
+
+      unawaited(
+        abortTrigger.then((_) => abort(), onError: (Object _) => abort()),
+      );
+    }
+    return flag;
   }
 
   @override
@@ -121,8 +151,10 @@ class ProxieHttpClient extends http.BaseClient implements ProxieCaptureAdapter {
     String callId,
     http.BaseRequest request,
     MapLocalAction action,
+    _AbortFlag aborted,
   ) async {
     if (action.delay > Duration.zero) await Future<void>.delayed(action.delay);
+    aborted.check(request.url);
     switch (action.failure) {
       case SimulatedFailure.timeout:
         engine.onError(
@@ -146,6 +178,7 @@ class ProxieHttpClient extends http.BaseClient implements ProxieCaptureAdapter {
         action.response ??
         ProxieResponse(statusCode: 200, headers: {}, body: ProxieBody.empty());
     final out = await _respond(engine, callId, request.url, mocked);
+    aborted.check(request.url);
     return _streamed(out, out.body.bytes, request, url: request.url);
   }
 
@@ -156,6 +189,7 @@ class ProxieHttpClient extends http.BaseClient implements ProxieCaptureAdapter {
     ProxieRequest captured,
     ProxieRequest proceeded,
     Uint8List bytes,
+    _AbortFlag aborted,
   ) async {
     final bool buffer;
     final http.StreamedResponse res;
@@ -193,6 +227,7 @@ class ProxieHttpClient extends http.BaseClient implements ProxieCaptureAdapter {
       ),
     );
     final out = await _respond(engine, callId, request.url, received);
+    aborted.check(request.url);
     return _streamed(
       out,
       keepsFull(received.body, out.body) ? body : out.body.bytes,
@@ -203,18 +238,26 @@ class ProxieHttpClient extends http.BaseClient implements ProxieCaptureAdapter {
     );
   }
 
-  /// Rebuilds the request to send, keeping the app's headers and full body
-  /// unless they were edited at a breakpoint.
+  /// Rebuilds the request to send, keeping the app's headers, full body and
+  /// abort trigger unless they were edited at a breakpoint.
   http.Request _outgoing(
     http.BaseRequest original,
     ProxieRequest captured,
     ProxieRequest proceeded,
     Uint8List bytes,
   ) {
-    final out = http.Request(proceeded.method, proceeded.url)
-      ..followRedirects = original.followRedirects
-      ..maxRedirects = original.maxRedirects
-      ..persistentConnection = original.persistentConnection;
+    final trigger = original is http.Abortable ? original.abortTrigger : null;
+    final out =
+        (trigger == null
+              ? http.Request(proceeded.method, proceeded.url)
+              : http.AbortableRequest(
+                  proceeded.method,
+                  proceeded.url,
+                  abortTrigger: trigger,
+                ))
+          ..followRedirects = original.followRedirects
+          ..maxRedirects = original.maxRedirects
+          ..persistentConnection = original.persistentConnection;
     // Unedited (the engine hands back the same object): the app's headers as
     // given; edited: the breakpoint's headers.
     if (identical(proceeded, captured)) {
@@ -305,6 +348,16 @@ class ProxieHttpClient extends http.BaseClient implements ProxieCaptureAdapter {
       // The engine logs and ignores failing rule lookups as well.
       return false;
     }
+  }
+}
+
+/// Whether the app aborted the request of a call.
+class _AbortFlag {
+  bool aborted = false;
+
+  /// Fails the way an aborted `package:http` client does.
+  void check(Uri url) {
+    if (aborted) throw http.RequestAbortedException(url);
   }
 }
 

@@ -721,4 +721,114 @@ void main() {
     await pumpEventQueue();
     expect(sink.last.request.body.text, 'one,two,three');
   });
+
+  group('abort triggers', () {
+    http.StreamedResponse ok() =>
+        http.StreamedResponse(Stream.value(utf8.encode('ok')), 200);
+
+    test('reach the inner client', () async {
+      final fake = _FakeClient((_) async => ok());
+      final c = ProxieHttpClient(inner: fake)..attach(engine);
+      final trigger = Completer<void>();
+      final req = http.AbortableRequest(
+        'GET',
+        server.url('/json'),
+        abortTrigger: trigger.future,
+      );
+      await c.send(req);
+      expect(fake.sent.single, isA<http.Abortable>());
+      expect((fake.sent.single as http.Abortable).abortTrigger, trigger.future);
+    });
+
+    test('a request without one stays a plain request', () async {
+      final fake = _FakeClient((_) async => ok());
+      final c = ProxieHttpClient(inner: fake)..attach(engine);
+      await c.send(http.Request('GET', server.url('/json')));
+      expect(fake.sent.single, isNot(isA<http.Abortable>()));
+    });
+
+    test('the real client aborts mid-flight', () async {
+      final trigger = Completer<void>();
+      final res = await client.send(
+        http.AbortableRequest(
+          'GET',
+          server.url('/stream'),
+          abortTrigger: trigger.future,
+        ),
+      );
+      final got = Completer<void>();
+      final done = res.stream.map((c) {
+        if (!got.isCompleted) got.complete();
+        return c;
+      }).drain<void>();
+      await got.future;
+      trigger.complete();
+      await expectLater(done, throwsA(isA<http.RequestAbortedException>()));
+    });
+
+    test('release a request pause and fail the call', () async {
+      engine.rules = RuleSet([_bp('*/json', BreakpointPhase.request)]);
+      final fake = _FakeClient((_) async => ok());
+      final c = ProxieHttpClient(inner: fake)..attach(engine);
+      final trigger = Completer<void>();
+      final sending = c.send(
+        http.AbortableRequest(
+          'GET',
+          server.url('/json'),
+          abortTrigger: trigger.future,
+        ),
+      );
+      await pumpEventQueue();
+      expect(engine.breakpoints.pending, hasLength(1));
+      trigger.complete();
+      await expectLater(sending, throwsA(isA<http.RequestAbortedException>()));
+      expect(engine.breakpoints.pending, isEmpty);
+      expect(fake.sent, isEmpty);
+      expect(sink.last.error!.type, 'cancelled');
+    });
+
+    test('release a response pause and fail the call', () async {
+      engine.rules = RuleSet([_bp('*/json', BreakpointPhase.response)]);
+      final fake = _FakeClient((_) async => ok());
+      final c = ProxieHttpClient(inner: fake)..attach(engine);
+      final trigger = Completer<void>();
+      final sending = c.send(
+        http.AbortableRequest(
+          'GET',
+          server.url('/json'),
+          abortTrigger: trigger.future,
+        ),
+      );
+      await pumpEventQueue();
+      expect(engine.breakpoints.pending, hasLength(1));
+      trigger.complete();
+      await expectLater(sending, throwsA(isA<http.RequestAbortedException>()));
+      expect(engine.breakpoints.pending, isEmpty);
+      expect(sink.last.error!.type, 'cancelled');
+    });
+
+    test('stop a Map Local delay', () async {
+      engine.rules = RuleSet([
+        _mapLocal(
+          '*/json',
+          MapLocalAction(
+            response: _jsonRes(200, '{}'),
+            delay: const Duration(milliseconds: 50),
+          ),
+        ),
+      ]);
+      final trigger = Completer<void>();
+      final sending = client.send(
+        http.AbortableRequest(
+          'GET',
+          server.url('/json'),
+          abortTrigger: trigger.future,
+        ),
+      );
+      await pumpEventQueue();
+      trigger.complete();
+      await expectLater(sending, throwsA(isA<http.RequestAbortedException>()));
+      expect(sink.last.error!.type, 'cancelled');
+    });
+  });
 }
