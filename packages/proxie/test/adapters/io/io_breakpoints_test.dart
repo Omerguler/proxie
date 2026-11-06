@@ -378,4 +378,23 @@ void main() {
     expect(res.isRedirect, isTrue);
     await res.drain<void>();
   });
+
+  test('a response breakpoint past the capture cap streams through, keeping '
+      'every byte', () async {
+    h.adapter.detach();
+    final e = ProxieEngine(
+      config: const ProxieConfig(teeCap: 1024),
+      sink: h.sink,
+    )..rules = RuleSet([breakpointRule('*/stream', BreakpointPhase.response)]);
+    addTearDown(e.dispose);
+    h.adapter.attach(e);
+    final res = await h
+        .send('GET', '/stream')
+        .timeout(const Duration(seconds: 5));
+    expect(e.breakpoints.pending, isEmpty);
+    expect(res.statusCode, 200);
+    final first = await res.first;
+    expect(first, isNotEmpty);
+    await h.server.waitForNoStreams();
+  });
 }

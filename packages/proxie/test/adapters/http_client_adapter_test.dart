@@ -904,4 +904,89 @@ void main() {
       );
     });
   });
+
+  group('a response breakpoint on a response that does not end', () {
+    late StreamController<List<int>> source;
+
+    ProxieHttpClient clientOf(ProxieEngine e) {
+      source = StreamController<List<int>>();
+      addTearDown(e.dispose);
+      return ProxieHttpClient(
+        inner: _FakeClient(
+          (_) async => http.StreamedResponse(source.stream, 200),
+        ),
+      )..attach(e);
+    }
+
+    test('past the capture cap it stops buffering and streams through, '
+        'keeping every byte', () async {
+      final e = ProxieEngine(config: const ProxieConfig(teeCap: 4), sink: sink)
+        ..rules = RuleSet([_bp('*/sse', BreakpointPhase.response)]);
+      final c = clientOf(e);
+      final sending = c.send(http.Request('GET', server.url('/sse')));
+      source.add(utf8.encode('abc'));
+      await pumpEventQueue();
+      source.add(utf8.encode('defg'));
+      final res = await sending.timeout(const Duration(seconds: 3));
+      expect(e.breakpoints.pending, isEmpty);
+
+      final body = res.stream.toBytes();
+      await pumpEventQueue();
+      source.add(utf8.encode('hij'));
+      await source.close();
+      expect(utf8.decode(await body), 'abcdefghij');
+      await pumpEventQueue();
+      expect(sink.last.response!.body.truncated, isTrue);
+      expect(sink.last.response!.body.originalLength, 10);
+      expect(utf8.decode(sink.last.response!.body.bytes), 'abcd');
+    });
+
+    test('a slow one streams through after the breakpoint timeout', () async {
+      final e = ProxieEngine(
+        config: const ProxieConfig(
+          breakpointTimeout: Duration(milliseconds: 20),
+        ),
+        sink: sink,
+      )..rules = RuleSet([_bp('*/sse', BreakpointPhase.response)]);
+      final c = clientOf(e);
+      final sending = c.send(http.Request('GET', server.url('/sse')));
+      source.add(utf8.encode('abc'));
+      final res = await sending.timeout(const Duration(seconds: 3));
+      final body = res.stream.toBytes();
+      await pumpEventQueue();
+      source.add(utf8.encode('def'));
+      await source.close();
+      expect(utf8.decode(await body), 'abcdef');
+    });
+
+    test('one that ends below the cap still pauses', () async {
+      final e = ProxieEngine(config: const ProxieConfig(), sink: sink)
+        ..rules = RuleSet([_bp('*/sse', BreakpointPhase.response)]);
+      final c = clientOf(e);
+      final sending = c.send(http.Request('GET', server.url('/sse')));
+      source.add(utf8.encode('abc'));
+      await source.close();
+      await pumpEventQueue();
+      expect(e.breakpoints.pending, hasLength(1));
+      e.breakpoints.resolve(
+        e.breakpoints.pending.single.callId,
+        const ContinueUnchanged(),
+      );
+      final res = await sending;
+      expect(utf8.decode(await res.stream.toBytes()), 'abc');
+    });
+
+    test(
+      'a stream error while buffering reaches the app and the call',
+      () async {
+        final e = ProxieEngine(config: const ProxieConfig(), sink: sink)
+          ..rules = RuleSet([_bp('*/sse', BreakpointPhase.response)]);
+        final c = clientOf(e);
+        final sending = c.send(http.Request('GET', server.url('/sse')));
+        source.addError(StateError('lost'));
+        await expectLater(sending, throwsStateError);
+        expect(sink.last.error!.type, 'stream_error');
+      },
+    );
+  });
 }

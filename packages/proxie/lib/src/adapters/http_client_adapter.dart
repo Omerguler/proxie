@@ -232,11 +232,18 @@ class ProxieHttpClient extends http.BaseClient implements ProxieCaptureAdapter {
       );
       rethrow;
     }
-    if (!buffer) return _tee(engine, callId, request, res);
+    if (!buffer) return _tee(engine, callId, request, res, res.stream);
 
     final Uint8List body;
     try {
-      body = await res.stream.toBytes();
+      final read = await bufferForPause(
+        res.stream,
+        cap: engine.config.teeCap,
+        timeout: engine.config.breakpointTimeout,
+      );
+      final rest = read.rest;
+      if (rest != null) return _tee(engine, callId, request, res, rest);
+      body = read.body!;
     } catch (e) {
       guardRecording(
         () => engine.onError(
@@ -306,13 +313,14 @@ class ProxieHttpClient extends http.BaseClient implements ProxieCaptureAdapter {
     return out;
   }
 
-  /// Streams [res] to the app unchanged while keeping a copy of at most
-  /// `teeCap` bytes, reported when the stream ends.
+  /// Streams [source], the body of [res], to the app unchanged while keeping a
+  /// copy of at most `teeCap` bytes, reported when the stream ends.
   http.StreamedResponse _tee(
     ProxieEngine engine,
     String callId,
     http.BaseRequest request,
     http.StreamedResponse res,
+    Stream<List<int>> source,
   ) {
     final cap = engine.config.teeCap;
     ProxieResponse snapshot(
@@ -333,7 +341,7 @@ class ProxieHttpClient extends http.BaseClient implements ProxieCaptureAdapter {
     );
 
     final stream = teeStream(
-      res.stream,
+      source,
       cap: cap,
       // The app already has the bytes: record without breakpoints.
       onDone: (kept, total) =>

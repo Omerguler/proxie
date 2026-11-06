@@ -26,8 +26,9 @@ const _simulatedTimeout = 'Request timed out (simulated by Proxie)';
 /// With no `engine` the request is sent to `inner` as given, unrecorded.
 ///
 /// A response is fully buffered only when a response breakpoint matches the
-/// (possibly edited) request; otherwise it streams through with a copy of at
-/// most `teeCap` bytes recorded when the app finishes reading. A streamed
+/// (possibly edited) request, and only up to `teeCap` bytes or the breakpoint
+/// timeout (see `bufferForPause`); otherwise it streams through with a copy of
+/// at most `teeCap` bytes recorded when the app finishes reading. A streamed
 /// response the app never listens to leaves the call pending.
 class IoExchange {
   /// Creates the exchange for [request] with its buffered body [bytes].
@@ -203,13 +204,21 @@ class IoExchange {
       unawaited(res.listen(null).cancel());
       _checkNotAborted();
     }
-    if (!buffer) return _tee(engine, callId, res);
+    if (!buffer) return _tee(engine, callId, res, res);
 
     final Uint8List body;
     try {
-      body = await res
-          .fold(BytesBuilder(copy: false), (b, chunk) => b..add(chunk))
-          .then((b) => b.takeBytes());
+      final read = await bufferForPause(
+        res,
+        cap: engine.config.teeCap,
+        timeout: engine.config.breakpointTimeout,
+      );
+      final rest = read.rest;
+      if (rest != null) {
+        _checkNotAborted();
+        return _tee(engine, callId, res, rest);
+      }
+      body = read.body!;
     } catch (e) {
       if (_abortError == null) {
         guardRecording(
@@ -334,12 +343,13 @@ class IoExchange {
     return value == (uri.port == defaultPort ? host : '$host:${uri.port}');
   }
 
-  /// Streams [res] to the app unchanged while keeping a copy of at most
-  /// `teeCap` bytes, reported when the stream ends.
+  /// Streams [source], the body of [res], to the app unchanged while keeping
+  /// a copy of at most `teeCap` bytes, reported when the stream ends.
   HttpClientResponse _tee(
     ProxieEngine engine,
     String callId,
     HttpClientResponse res,
+    Stream<List<int>> source,
   ) {
     final cap = engine.config.teeCap;
     final headers = headersToMap(res.headers);
@@ -355,7 +365,7 @@ class IoExchange {
       body: teedBody(kept, total, contentType, cap: cap, partial: partial),
     );
     final stream = teeStream(
-      res,
+      source,
       cap: cap,
       // The app already has the bytes: record without breakpoints.
       onDone: (kept, total) =>

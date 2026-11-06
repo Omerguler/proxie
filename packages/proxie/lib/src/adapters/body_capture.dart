@@ -85,6 +85,62 @@ Stream<List<int>> teeStream(
   return controller.stream;
 }
 
+/// Reads [source] for a response breakpoint, which needs the whole body.
+///
+/// Gives the `body` when [source] ends holding at most [cap] bytes within
+/// [timeout]. Otherwise it may never end (server-sent events, say) and a pause
+/// could not start: gives up and hands back `rest`, which is every byte of
+/// [source], those read so far first, for streaming on as usual. A stream
+/// error before that fails the returned future.
+Future<({Uint8List? body, Stream<List<int>>? rest})> bufferForPause(
+  Stream<List<int>> source, {
+  required int cap,
+  required Duration timeout,
+}) {
+  final result = Completer<({Uint8List? body, Stream<List<int>>? rest})>();
+  final held = BytesBuilder(copy: false);
+  late final StreamSubscription<List<int>> upstream;
+  late final Timer timer;
+  void giveUp() {
+    timer.cancel();
+    upstream.pause();
+    late final StreamController<List<int>> rest;
+    rest = StreamController<List<int>>(
+      onListen: () {
+        final kept = held.takeBytes();
+        if (kept.isNotEmpty) rest.add(kept);
+        upstream
+          ..onData(rest.add)
+          ..onError(rest.addError)
+          ..onDone(() => unawaited(rest.close()))
+          ..resume();
+      },
+      onPause: upstream.pause,
+      onResume: upstream.resume,
+      onCancel: upstream.cancel,
+    );
+    result.complete((body: null, rest: rest.stream));
+  }
+
+  timer = Timer(timeout, giveUp);
+  upstream = source.listen(
+    (chunk) {
+      held.add(chunk);
+      if (held.length > cap) giveUp();
+    },
+    onError: (Object e, StackTrace st) {
+      timer.cancel();
+      unawaited(upstream.cancel());
+      result.completeError(e, st);
+    },
+    onDone: () {
+      timer.cancel();
+      result.complete((body: held.takeBytes(), rest: null));
+    },
+  );
+  return result.future;
+}
+
 /// The stored body for a [teeStream] copy of a [total]-byte stream.
 ///
 /// A [partial] copy (the stream failed or was cancelled) is marked truncated:

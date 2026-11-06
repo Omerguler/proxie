@@ -33,23 +33,11 @@ class TestServer {
 
   int hitsFor(String path) => hits[path] ?? 0;
 
-  /// Completes once no client connection is open, or throws a [StateError]
-  /// after [timeout].
-  Future<void> waitForNoConnections({
-    Duration timeout = const Duration(seconds: 5),
-  }) async {
-    final sw = Stopwatch()..start();
-    while (_server.connectionsInfo().total > 0) {
-      if (sw.elapsed > timeout) throw StateError('Connections still open');
-      await Future<void>.delayed(const Duration(milliseconds: 10));
-    }
-  }
-
   /// Completes once no `/stream` response is being served, or throws a
-  /// [StateError] after [timeout]. Unlike [waitForNoConnections] this shows
-  /// that the client closed: `dart:io`'s server only learns of that from a
-  /// failed write, and on Linux a write after the peer reset the connection
-  /// can wait forever, so its connection count stays up.
+  /// [StateError] after [timeout]. This shows that the client closed, unlike
+  /// the server's `connectionsInfo`: `dart:io`'s server only learns of that
+  /// from a failed write, and on Linux a write after the peer reset the
+  /// connection can wait forever, so its count stays up.
   Future<void> waitForNoStreams({
     Duration timeout = const Duration(seconds: 5),
   }) async {
