@@ -206,6 +206,11 @@ class _BrokenRecording extends ProxieEngine {
       throw StateError('broken onError');
 }
 
+class _ThrowingToString {
+  @override
+  String toString() => throw StateError('no');
+}
+
 void main() {
   late TestServer server;
   late _Sink sink;
@@ -1300,6 +1305,50 @@ void main() {
         ),
         throwsArgumentError,
       );
+    });
+  });
+
+  group('a response a custom decoder made is still JSON', () {
+    String encode(Object data) =>
+        utf8.decode(encodeResponseData(data, ResponseType.json));
+
+    test('an unknown value becomes its toString', () {
+      final at = DateTime.utc(2026);
+      expect(
+        encode({'password': 'hunter2', 'at': at}),
+        jsonEncode({'password': 'hunter2', 'at': '$at'}),
+      );
+    });
+
+    test('keys that are not strings keep their keys quoted', () {
+      expect(
+        encode({
+          1: {'password': 'hunter2'},
+          'password': 'x',
+        }),
+        '{"1":{"password":"hunter2"},"password":"x"}',
+      );
+    });
+
+    test('sets and other iterables are lists', () {
+      expect(
+        encode({
+          'a': {1, 2},
+        }),
+        '{"a":[1,2]}',
+      );
+      expect(encode({1, 2}), '[1,2]');
+    });
+
+    test('what still cannot be encoded is a placeholder', () {
+      final cycle = <String, Object?>{'password': 'hunter2'};
+      cycle['self'] = cycle;
+      final throwing = {'password': 'hunter2', 'x': _ThrowingToString()};
+      for (final data in [cycle, throwing]) {
+        final text = encode(data);
+        expect(text, isNot(contains('hunter2')));
+        expect(text, contains('not captured'));
+      }
     });
   });
 
