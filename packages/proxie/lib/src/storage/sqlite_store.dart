@@ -346,17 +346,10 @@ class SqliteStore implements ProxieStore {
         adapter: r['adapter'] as String,
         hasError: r['error_type'] != null,
       );
-    } on Exception {
+    } on Object catch (e) {
+      // A stored row that no longer decodes is skipped, not an error.
+      if (!isStoredRowError(e)) rethrow;
       return null;
-      // Stored rows are decoded with casts and enum names, so a bad row
-      // shows up as a TypeError or ArgumentError; treat it as undecodable.
-      // ignore: avoid_catching_errors
-    } on TypeError {
-      return null; // A wrongly typed column.
-      // See above: an unknown enum name in a stored row.
-      // ignore: avoid_catching_errors
-    } on ArgumentError {
-      return null; // An unknown enum name (e.g. from a newer version).
     }
   }
 
@@ -410,16 +403,9 @@ class SqliteStore implements ProxieStore {
       final call = ProxieCall.fromMap(map);
       // The columns hold the exact instant and whether it was UTC.
       return call.copyWith(startedAt: _startedAt(row));
-    } on Exception {
-      return null; // A stored row that no longer decodes.
-      // Stored rows are decoded with casts and enum names, so a bad row
-      // shows up as a TypeError or ArgumentError; treat it as undecodable.
-      // ignore: avoid_catching_errors
-    } on TypeError {
-      return null;
-      // See above: an unknown enum name in a stored row.
-      // ignore: avoid_catching_errors
-    } on ArgumentError {
+    } on Object catch (e) {
+      // A stored row that no longer decodes is skipped, not an error.
+      if (!isStoredRowError(e)) rethrow;
       return null;
     }
   }
@@ -472,13 +458,9 @@ class SqliteStore implements ProxieStore {
         out.add(
           ProxieRule.fromMap(decodeJsonBytes(r['json'] as String)! as Map),
         );
-      } on Exception {
+      } on Object catch (e) {
         // Skip rules that no longer decode (e.g. written by a newer version).
-        // Stored rows are decoded with casts, so a wrongly typed field shows
-        // up as a TypeError; skip that row like any other undecodable one.
-        // ignore: avoid_catching_errors
-      } on TypeError {
-        // A wrongly typed field in a stored row.
+        if (!isStoredRowError(e)) rethrow;
       }
     }
     return out;
@@ -515,13 +497,9 @@ class SqliteStore implements ProxieStore {
             build: (_) => MapLocalAction.fromMap(action.toMap()),
           ),
         );
-      } on Exception {
+      } on Object catch (e) {
         // Skip presets that no longer decode.
-        // Stored rows are decoded with casts, so a wrongly typed field shows
-        // up as a TypeError; skip that row like any other undecodable one.
-        // ignore: avoid_catching_errors
-      } on TypeError {
-        // A wrongly typed field in a stored row.
+        if (!isStoredRowError(e)) rethrow;
       }
     }
     return out;

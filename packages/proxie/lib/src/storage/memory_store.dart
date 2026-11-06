@@ -137,13 +137,9 @@ class MemoryStore implements ProxieStore {
         // Decode twice: the first validates, the second yields copies that
         // share no byte buffers with the stored map.
         out.add(ProxieRule.fromMap(ProxieRule.fromMap(m).toMap()));
-      } on Exception {
+      } on Object catch (e) {
         // Skip rules that no longer decode (e.g. written by a newer version).
-        // Stored rows are decoded with casts, so a wrongly typed field shows
-        // up as a TypeError; skip that row like any other undecodable one.
-        // ignore: avoid_catching_errors
-      } on TypeError {
-        // A wrongly typed field in a stored row.
+        if (!isStoredRowError(e)) rethrow;
       }
     }
     return out;
@@ -167,13 +163,9 @@ class MemoryStore implements ProxieStore {
             build: (_) => MapLocalAction.fromMap(action.toMap()),
           ),
         );
-      } on Exception {
+      } on Object catch (e) {
         // Skip presets that no longer decode.
-        // Stored rows are decoded with casts, so a wrongly typed field shows
-        // up as a TypeError; skip that row like any other undecodable one.
-        // ignore: avoid_catching_errors
-      } on TypeError {
-        // A wrongly typed field in a stored row.
+        if (!isStoredRowError(e)) rethrow;
       }
     }
     return out;
