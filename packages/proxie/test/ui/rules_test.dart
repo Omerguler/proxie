@@ -14,6 +14,7 @@ import 'package:proxie/src/ui/rules/rule_editor.dart';
 import 'package:proxie/src/ui/rules/rules_controller.dart';
 import 'package:proxie/src/ui/rules/rules_screen.dart';
 
+import '../support/semantics.dart';
 import '../support/ui_harness.dart';
 
 /// Runs commands straight against a [MemoryStore].
@@ -417,7 +418,7 @@ void main() {
 
       expect(
         tester.getSemantics(find.byType(Switch)),
-        isSemantics(
+        semanticsLike(
           label: 'Enable rule rule a',
           hasToggledState: true,
           isToggled: true,

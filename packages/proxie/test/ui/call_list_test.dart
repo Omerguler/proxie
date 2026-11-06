@@ -11,6 +11,7 @@ import 'package:proxie/src/ui/list/call_row.dart';
 import 'package:proxie/src/ui/list/list_controller.dart';
 import 'package:proxie/src/ui/list/scroll_anchor.dart';
 
+import '../support/semantics.dart';
 import '../support/ui_harness.dart';
 
 /// Runs commands straight against a [MemoryStore] and records them.
@@ -970,7 +971,7 @@ void main() {
       for (final tag in ['BREAK', 'MAP', 'EDITED', 'REPLAY']) {
         expect(label, contains(tag));
       }
-      expect(tester.getSemantics(row), isSemantics(hasTapAction: true));
+      expect(tester.getSemantics(row), semanticsLike(hasTapAction: true));
     } finally {
       semantics.dispose();
     }
@@ -1030,11 +1031,15 @@ void main() {
 
       expect(
         tester.getSemantics(find.bySemanticsLabel(RegExp('/open'))),
-        isSemantics(isButton: true, hasSelectedState: true, isSelected: true),
+        semanticsLike(isButton: true, hasSelectedState: true, isSelected: true),
       );
       expect(
         tester.getSemantics(find.bySemanticsLabel(RegExp('/other'))),
-        isSemantics(isButton: true, hasSelectedState: true, isSelected: false),
+        semanticsLike(
+          isButton: true,
+          hasSelectedState: true,
+          isSelected: false,
+        ),
       );
     } finally {
       semantics.dispose();
@@ -1115,7 +1120,7 @@ void main() {
 
       final row = tester.getSemantics(find.bySemanticsLabel(RegExp('/now')));
       expect(row.label, isNot(contains('Today')));
-      expect(row, isSemantics(isButton: true, hasTapAction: true));
+      expect(row, semanticsLike(isButton: true, hasTapAction: true));
       expect(row.childrenCount, 0);
       expect(
         find.bySemanticsLabel(RegExp(r'^Today \d\d:\d\d — 1 call$')),

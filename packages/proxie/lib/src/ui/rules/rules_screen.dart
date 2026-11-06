@@ -92,8 +92,12 @@ class _RulesList extends StatelessWidget {
                   buildDefaultDragHandles: false,
                   padding: const EdgeInsets.only(bottom: 88),
                   itemCount: list.length,
-                  onReorderItem: (from, to) =>
-                      unawaited(rules.reorder(from, to)),
+                  // onReorderItem needs Flutter 3.44; the minimum is 3.38.1.
+                  // ignore: deprecated_member_use
+                  onReorder: (from, to) => unawaited(
+                    // Here `to` still counts the rule being moved.
+                    rules.reorder(from, to > from ? to - 1 : to),
+                  ),
                   itemBuilder: (context, i) => _RuleTile(
                     key: ValueKey(list[i].id),
                     rule: list[i],

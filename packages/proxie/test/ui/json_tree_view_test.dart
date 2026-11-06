@@ -13,6 +13,7 @@ import 'package:proxie/src/ui/json/json_tree_view.dart';
 import 'package:proxie/src/ui/json/raw_text_view.dart';
 import 'package:proxie/src/ui/json/text_lines.dart';
 import 'package:proxie/src/ui/json/value_editor.dart';
+import '../support/semantics.dart';
 
 /// Runs commands straight against a [MemoryStore], wrapping failures as
 /// the real workers do; records every command and can fail some.
@@ -692,11 +693,15 @@ void main() {
     expect(find.byTooltip('Edit [0]'), findsOneWidget);
     expect(
       tester.getSemantics(find.text('+ avatar')),
-      isSemantics(label: 'Add key avatar', isButton: true, hasTapAction: true),
+      semanticsLike(
+        label: 'Add key avatar',
+        isButton: true,
+        hasTapAction: true,
+      ),
     );
     expect(
       tester.getSemantics(find.byKey(const ValueKey(1))),
-      isSemantics(
+      semanticsLike(
         label: '[0]: {2 keys}',
         hasExpandedState: true,
         isExpanded: false,

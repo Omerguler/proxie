@@ -12,6 +12,7 @@ import 'package:proxie/src/ui/list/call_list.dart';
 import 'package:proxie/src/ui/list/call_row.dart';
 import 'package:proxie/src/ui/theme.dart' show ProxieThemed;
 
+import '../support/semantics.dart';
 import '../support/ui_harness.dart';
 
 final Finder _listFinder = find.byType(CallList);
@@ -172,7 +173,7 @@ void main() {
       expect(tester.getSize(bubble), const Size.square(ProxieBubble.size));
       // Its tap belongs to it alone, and the app is not a child of it.
       final node = tester.getSemantics(bubble);
-      expect(node, isSemantics(isButton: true, hasTapAction: true));
+      expect(node, semanticsLike(isButton: true, hasTapAction: true));
       expect(node.childrenCount, 0);
       expect(find.bySemanticsLabel('host home'), findsOneWidget);
     } finally {
@@ -499,7 +500,7 @@ void main() {
       final node = find.semantics.byLabel('Open Proxie inspector');
       expect(
         tester.getSemantics(find.bySemanticsLabel('Open Proxie inspector')),
-        isSemantics(isButton: true, hasTapAction: true),
+        semanticsLike(isButton: true, hasTapAction: true),
       );
       tester.semantics.tap(node);
       await tester.pumpAndSettle();

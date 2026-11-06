@@ -91,8 +91,7 @@ class RulesController extends ChangeNotifier {
   }
 
   /// Moves the rule at [from] to [to]: [from] indexes [rules] before the
-  /// move, [to] the list with the rule already removed (as
-  /// `ReorderableListView.onReorderItem` reports them).
+  /// move, [to] the list with the rule already removed.
   Future<bool> reorder(int from, int to) {
     final next = [...rules];
     final rule = next.removeAt(from);
