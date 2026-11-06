@@ -1,5 +1,5 @@
 name: proxie
-description: In-app HTTP inspector for Flutter. Capture, inspect, mock, and breakpoint network calls from a debug overlay, with sensitive data masked.
+description: In-app HTTP inspector for Flutter. Capture, inspect, mock, and breakpoint calls from a debug overlay, masking credentials in headers, JSON, URLs and forms.
 version: 0.1.0
 repository: https://github.com/Omerguler/proxie/tree/main/packages/proxie
 issue_tracker: https://github.com/Omerguler/proxie/issues

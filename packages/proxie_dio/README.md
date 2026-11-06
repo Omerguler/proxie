@@ -54,7 +54,16 @@ reuses it and moves it to the end of the list.
 
 The returned interceptor implements `ProxieCaptureAdapter`: pass it to
 `Proxie.init`. It captures from then on, and passes everything through untouched
-before that or when Proxie is off.
+before that or when Proxie is off. When Proxie is compiled out (a release build
+without `--dart-define=PROXIE=true`), `install` leaves your Dio as it found it.
+
+Where it is on, `dio.httpClientAdapter` is Proxie's wrapper, so a cast such as
+`dio.httpClientAdapter as IOHttpClientAdapter` fails. Configure the adapter, for
+certificate pinning say, before calling `install`.
+
+With several Dios, give each its own name so a resend goes through the one that
+made the call, `ProxieDio.install(authDio, name: 'auth')`, and list each in
+`Proxie.init`.
 
 You can add the interceptor yourself instead
 (`dio.interceptors.add(ProxieDioInterceptor(replayClient: dio))`), but then it
@@ -77,7 +86,9 @@ bodies are encoded with Dio's default transformer.
   A response breakpoint can turn an error status into a success and back.
 - Aborts at a breakpoint fail the call with `DioExceptionType.connectionError`
   and the message `Aborted by Proxie`.
-- Replay with the installed Dio (or `replayClient`); replays are not recorded.
+- Edit & resend goes through the installed Dio (or `replayClient`) and is recorded
+  as a new call with a `REPLAY` chip. The interceptor's `replay` method itself
+  records nothing.
 
 ## Limitations
 

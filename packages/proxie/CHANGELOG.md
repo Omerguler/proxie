@@ -11,7 +11,8 @@ First release.
 - Request and response breakpoints. A call nobody acts on continues unchanged
   after 60 seconds.
 - Edit & resend. Resent calls show a `REPLAY` chip and skip your rules.
-- Masking of sensitive headers and JSON keys in stored and shown copies.
+- Masking of sensitive headers, JSON keys, query parameters and form fields in
+  stored and shown copies.
 - History in SQLite on a worker isolate on native platforms, and in memory on the
   UI thread on the web.
 - Navigation through an overlay (default), a navigator key, your own callbacks or
@@ -23,5 +24,6 @@ Behaviour worth knowing:
 
 - Map Local refuses to save invalid header names.
 - Masked values are not stored. A rule made from a captured call needs them
-  retyped, and Edit & resend refuses a masked header until it is retyped.
+  retyped, and Edit & resend refuses a masked header, query value or form field
+  until it is retyped.
 - Only web and Windows have been run. Android, iOS, macOS and Linux have not.

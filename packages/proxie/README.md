@@ -13,8 +13,8 @@ only sees traffic that goes through a client it wraps
 
 ## What it does
 
-- **Call list**: search URLs and bodies, filter by method, errors, JSON, binary
-  or size. History survives restarts on native platforms.
+- **Call list**: search URLs and response bodies, filter by method, errors, JSON,
+  binary or size. History survives restarts on native platforms.
 - **Call detail**: JSON tree with search, raw text, images, headers, a timing
   view, and copy as cURL.
 - **Map Local**: answer matching calls locally with a saved response, a delay or
@@ -23,8 +23,9 @@ only sees traffic that goes through a client it wraps
   or abort. A call nobody acts on continues unchanged after 60 seconds, so your
   app never hangs.
 - **Edit & resend**: change a recorded request and send it again as a new call.
-- **Masking**: sensitive headers and JSON values are replaced in everything
-  Proxie stores or shows. Live traffic is never changed.
+- **Masking**: sensitive headers, JSON values, query parameters and form fields
+  are replaced in everything Proxie stores or shows. Live traffic is never
+  changed.
 
 ## Install
 
@@ -86,6 +87,11 @@ A client from `Proxie.httpClient()` records calls without being listed in
 `adapters`, but Edit & resend then uses Proxie's built-in client, which skips
 anything your own client does. To resend through your client, create a
 `ProxieHttpClient` and list it in `adapters`.
+
+Edit & resend finds the client by the name recorded on the call, so give clients
+of the same kind their own names: `ProxieHttpClient(name: 'payments')`,
+`ProxieDio.install(dio, name: 'auth')`. The list filters by name too. Adapters
+that share a name are logged at `init`, and a resend uses the first of them.
 
 ## Navigation
 
@@ -265,8 +271,10 @@ void registerProxieExtras() {
 ## Release builds
 
 Proxie is on in debug builds only. In profile and release builds every entry
-point does nothing, and the compiler removes Proxie's Dart code. To use it in
-such a build, for an internal test build say, add the flag:
+point does nothing. The compiler removes the inspector UI, the worker and the
+storage code. The capture adapters and the engine stay in the binary, but no
+engine is ever attached, so they only pass traffic through. To use Proxie in such
+a build, for an internal test build say, add the flag:
 
 ```sh
 flutter build apk --dart-define=PROXIE=true
@@ -282,14 +290,21 @@ matters, keep Proxie out of your release flavor's dependencies.
 
 ## Masking
 
-By default these are replaced with `••••••` in stored and shown copies:
+By default these are replaced with `••••••` in stored and shown copies. Live
+traffic is never changed.
 
 - **Headers**: `Authorization`, `Cookie`, `Set-Cookie`, `Proxy-Authorization`
-- **JSON keys, at any depth**: `password`, `token`, `access_token`,
-  `refresh_token`, `secret`
+- **These names**: `password`, `token`, `access_token`, `refresh_token`,
+  `secret`, wherever they appear as:
+  - a JSON key, at any depth, in a JSON body, or in another text body that parses
+    as JSON
+  - a query parameter of the URL. URLs in error messages and in `Location`,
+    `Content-Location` and `Referer` headers are covered too
+  - a field of an `application/x-www-form-urlencoded` body, `user[password]`
+    included
 
 Names are case-insensitive. To add your own, include the defaults or they are
-replaced:
+replaced. `jsonKeys` sets the names for all three:
 
 ```dart
 Proxie.init(
@@ -303,11 +318,21 @@ Proxie.init(
 );
 ```
 
-Only those headers and JSON values are masked. **URLs, including query strings,
-and non-JSON bodies such as form posts are stored as they are.** Native builds
-keep them in a database in the app's support directory. A token in a query
-string is therefore on disk until retention removes it; use
-`ProxieConfig(persistHistory: false)` to keep history in memory only.
+A body keeps every byte other than the masked values, so numbers, key order and
+formatting stay as they were sent. A body with nothing to mask is stored as is.
+
+To turn masking off, say so: `ProxieMasking(headers: {}, jsonKeys: {})`. Real
+credentials then reach the database in the app's support directory.
+
+**These are not masked and are stored as they are:** URL paths, user info
+(`https://user:pass@host`) and fragments; other headers; multipart bodies; other
+text and binary bodies; JSON held in a string value, such as
+`{"data":"{\"token\":\"abc\"}"}`; and a key written with an escape
+(`pass\u0077ord`) in a body that is truncated or not valid UTF-8. Native builds
+keep them on disk until retention removes them; use
+`ProxieConfig(persistHistory: false)` to keep history in memory only. While a call
+is paused at a breakpoint the editor shows its real values, held in memory; what
+is stored afterwards is masked.
 
 ## Other defaults
 
@@ -315,7 +340,7 @@ string is therefore on disk until retention removes it; use
 
 | Setting | Default |
 |---|---|
-| Calls kept (`retentionCalls`, `retentionAge`) | 5,000 calls, 7 days |
+| Calls kept (`retentionCalls`, `retentionAge`) | 5,000 calls, 7 days; applied at start and as calls come in |
 | Captured per body (`teeCap`) | 5 MB; the app still gets every byte |
 | Largest body rendered (`renderCap`) | 5 MB |
 | Bodies editable as raw text (`rawEditableLimit`) | Below 1 MB |
@@ -340,8 +365,8 @@ Reports from these platforms are welcome in the
 
 ### Web is best-effort
 
-- **No background isolate.** Parsing, search and storage run on the UI thread,
-  so large bodies can make the app stutter.
+- **No background isolate.** Parsing, masking, search and storage run on the UI
+  thread in one go, so large bodies can make the app stutter.
 - **No SQLite.** History is kept in memory and is gone after a reload.
   `persistHistory` has no effect.
 - **No `dart:io`.** `ProxieHttpOverridesAdapter` does nothing, so use
@@ -363,8 +388,15 @@ Reports from these platforms are welcome in the
 - **HTTP only.** WebSocket and gRPC calls aren't inspected.
 - **Masked values aren't stored, so you retype them.** A Map Local rule made from
   a captured call is pre-filled from the masked copy; the editor warns you but
-  still lets you save. Edit & resend refuses a masked header until you retype it,
-  and sends a masked JSON body value as it is after a warning.
+  still lets you save. Edit & resend refuses a masked header, query value or form
+  field until you retype it (a form field in the raw body text), and sends a
+  masked JSON body value as it is after a warning.
+- **Search covers URLs and response bodies**, not request bodies or status codes.
+  Rules match a URL pattern and a method; put the host in the pattern.
+- **A response breakpoint can't pause a response it can't hold.** One over the
+  capture cap, or still arriving when the breakpoint timeout ends (server-sent
+  events, say), streams through to your app without pausing.
+- **Text scale stops at 1.3** inside the inspector, whose rows have fixed heights.
 - **Map Local refuses invalid header names** when you save a rule.
 - **Cancel on Edit & resend mostly just stops waiting.** It closes the connection
   only for Proxie's built-in client. Through an adapter the request carries on,

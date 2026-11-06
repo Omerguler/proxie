@@ -312,8 +312,9 @@ highlighting.
 - **Existing HttpOverrides**: Proxie chains to any `HttpOverrides.current`
   present at init (keeps the app's pinning/proxy settings), never replaces it.
 - **Web**: best-effort. No worker isolate on web in v1; heavy work runs on the
-  main thread in chunks (yielding between batches). The 60 fps / 10 MB target
-  applies to native platforms. A web-worker backend can be added later behind
+  main thread, one command at a time and not chunked (amended before 0.1.0, as
+  chunking was not built: a large body can stall a frame, which the README
+  states). The 60 fps / 10 MB target applies to native platforms. A web-worker backend can be added later behind
   the same worker interface.
 - **Edit & resend**: replays through the original adapter when it supports
   replay (Dio and http adapters keep a reference to their client, so app
