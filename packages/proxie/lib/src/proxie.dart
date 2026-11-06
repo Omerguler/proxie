@@ -21,6 +21,15 @@ import 'package:proxie/src/worker/commands.dart';
 import 'package:proxie/src/worker/worker.dart';
 import 'package:proxie/src/worker/worker_factory.dart';
 
+/// The names shared by more than one of [adapters].
+Set<String> duplicateAdapterNames(List<ProxieCaptureAdapter> adapters) {
+  final seen = <String>{};
+  return {
+    for (final a in adapters)
+      if (!seen.add(a.name)) a.name,
+  };
+}
+
 /// Entry point: set Proxie up once, then wrap the app.
 ///
 /// ```dart
@@ -126,6 +135,16 @@ abstract final class Proxie {
       nav.attachBackButton();
     }
 
+    final duplicates = duplicateAdapterNames(adapters);
+    if (duplicates.isNotEmpty) {
+      developer.log(
+        'Proxie adapters share the name ${duplicates.join(', ')}: Edit & '
+        'resend uses the first of them, whichever recorded the call. Give each its '
+        'own name.',
+        name: 'proxie',
+      );
+    }
+
     ProxieWorker? worker;
     ProxieEngine? engine;
     final attached = <ProxieCaptureAdapter>[];
@@ -196,9 +215,12 @@ abstract final class Proxie {
   /// (default `http.Client()`). Before [init] finishes it is the same, and
   /// starts recording once init completes. When Proxie is disabled it
   /// returns [inner] (or a new `http.Client()`) unchanged.
-  static http.Client httpClient({http.Client? inner}) {
+  static http.Client httpClient({
+    http.Client? inner,
+    String name = ProxieHttpClient.adapterName,
+  }) {
     if (!kProxieEnabled || _disabled) return inner ?? http.Client();
-    final client = ProxieHttpClient(inner: inner);
+    final client = ProxieHttpClient(inner: inner, name: name);
     final runtime = proxieActive.value;
     if (runtime != null) client.attach(runtime.engine);
     _clients

@@ -152,8 +152,9 @@ class _FilterBarState extends State<FilterBar> {
                       methods: _toggle(q.methods, m),
                     ),
                   ),
-                if (widget.adapterNames.length > 1)
-                  for (final a in widget.adapterNames)
+                // Adapters sharing a name cannot be told apart; one chip.
+                if (widget.adapterNames.toSet().length > 1)
+                  for (final a in widget.adapterNames.toSet())
                     _chip(
                       a,
                       selected: q.adapters.contains(a),

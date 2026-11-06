@@ -1137,6 +1137,53 @@ void main() {
     expect(find.byType(CallList), findsOneWidget);
   });
 
+  testWidgets('adapters sharing a name get one chip', (tester) async {
+    addTearDown(tester.view.reset);
+    setViewSize(tester, phoneSize);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ProxieTheme.dark(),
+        home: Scaffold(
+          body: CallList(
+            worker: worker,
+            calls: calls.stream,
+            renderCap: 5 * 1024 * 1024,
+            adapterNames: const ['dio', 'dio', 'http'],
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.widgetWithText(FilterChip, 'http'),
+      100,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.widgetWithText(FilterChip, 'dio'), findsOneWidget);
+  });
+
+  testWidgets('a single name, however many adapters, gets no chip', (
+    tester,
+  ) async {
+    addTearDown(tester.view.reset);
+    setViewSize(tester, const Size(4000, 800));
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ProxieTheme.dark(),
+        home: Scaffold(
+          body: CallList(
+            worker: worker,
+            calls: calls.stream,
+            renderCap: 5 * 1024 * 1024,
+            adapterNames: const ['dio', 'dio'],
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(FilterChip, 'dio'), findsNothing);
+  });
+
   group('the list across data changes', () {
     testWidgets('a row growing above the screen keeps the rows on it still', (
       tester,

@@ -29,17 +29,20 @@ const _simulatedTimeout = 'Request timed out (simulated by Proxie)';
 /// final URL (`BaseResponseWithUrl.url`) but not `IOStreamedResponse`'s
 /// `detachSocket`.
 class ProxieHttpClient extends http.BaseClient implements ProxieCaptureAdapter {
-  /// Wraps [inner], or a new `http.Client` when it is null.
-  ProxieHttpClient({http.Client? inner}) : _inner = inner ?? http.Client();
+  /// Wraps [inner], or a new `http.Client` when it is null. Calls are recorded
+  /// under [name]; give each client its own when an app lists several in
+  /// `Proxie.init`, since Edit & resend finds the client by that name.
+  ProxieHttpClient({http.Client? inner, this.name = adapterName})
+    : _inner = inner ?? http.Client();
 
   final http.Client _inner;
   ProxieEngine? _engine;
 
-  /// The [name] calls of this client are recorded under.
+  /// The default [name].
   static const String adapterName = 'http';
 
   @override
-  String get name => adapterName;
+  final String name;
 
   @override
   bool get supportsReplay => true;

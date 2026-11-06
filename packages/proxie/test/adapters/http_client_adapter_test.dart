@@ -989,4 +989,11 @@ void main() {
       },
     );
   });
+
+  test('a client can be given its own name', () async {
+    expect(ProxieHttpClient().name, 'http');
+    final c = ProxieHttpClient(name: 'payments')..attach(engine);
+    await c.get(server.url('/json'));
+    expect(sink.last.adapter, 'payments');
+  });
 }

@@ -377,4 +377,17 @@ void main() {
       expect((await client.get(Uri.parse('https://a.test/z'))).body, 'ok');
     });
   });
+
+  test('duplicate adapter names are found, for the log at init', () {
+    expect(duplicateAdapterNames([ProxieHttpClient(), ProxieHttpClient()]), {
+      'http',
+    });
+    expect(
+      duplicateAdapterNames([
+        ProxieHttpClient(),
+        ProxieHttpClient(name: 'other'),
+      ]),
+      isEmpty,
+    );
+  });
 }
