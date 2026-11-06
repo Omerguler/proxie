@@ -15,7 +15,7 @@ import 'package:proxie/src/worker/worker.dart';
 Future<ProxieWorker> spawnProxieWorker(
   ProxieConfig config, {
   String? supportDir,
-  Duration startupTimeout = const Duration(seconds: 30),
+  Duration startupTimeout = defaultWorkerStartupTimeout,
 }) async {
   if (!config.persistHistory) {
     return await IsolateWorker.spawn(

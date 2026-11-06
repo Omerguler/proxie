@@ -15,9 +15,6 @@ import 'package:proxie/src/worker/worker.dart';
 class IsolateWorker implements ProxieWorker {
   IsolateWorker._(this._isolate, this._port, this._disposeTimeout);
 
-  /// Default bound on opening and starting the store.
-  static const defaultStartupTimeout = Duration(seconds: 30);
-
   /// Default time [dispose] waits for queued commands before killing the
   /// isolate.
   static const defaultDisposeTimeout = Duration(seconds: 5);
@@ -31,7 +28,7 @@ class IsolateWorker implements ProxieWorker {
   static Future<IsolateWorker> spawn(
     ProxieConfig config,
     ProxieStore Function() openStore, {
-    Duration startupTimeout = defaultStartupTimeout,
+    Duration startupTimeout = defaultWorkerStartupTimeout,
     Duration disposeTimeout = defaultDisposeTimeout,
   }) async {
     final port = RawReceivePort();

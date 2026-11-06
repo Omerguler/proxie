@@ -476,9 +476,10 @@ void main() {
         MemoryStore.new,
         disposeTimeout: const Duration(milliseconds: 200),
       );
-      final stalled = w.run(const _Hang());
+      // Listening first: the failure may arrive while dispose is awaited.
+      final stalled = expectLater(w.run(const _Hang()), throwsStateError);
       await w.dispose().timeout(const Duration(seconds: 10));
-      await expectLater(stalled, throwsStateError);
+      await stalled;
     });
 
     test('stores proxie.db and spill under <supportDir>/proxie', () async {

@@ -18,7 +18,7 @@ import 'package:proxie/src/worker/worker_factory_io.dart'
 Future<ProxieWorker> spawnProxieWorker(
   ProxieConfig config, {
   String? supportDir,
-  Duration startupTimeout = const Duration(seconds: 30),
+  Duration startupTimeout = defaultWorkerStartupTimeout,
 }) => impl.spawnProxieWorker(
   config,
   supportDir: supportDir,

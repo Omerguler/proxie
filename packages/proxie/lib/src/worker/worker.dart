@@ -3,6 +3,9 @@ import 'package:proxie/src/core/engine.dart';
 import 'package:proxie/src/model/call.dart';
 import 'package:proxie/src/storage/store.dart';
 
+/// How long a worker may take to open and start its store by default.
+const Duration defaultWorkerStartupTimeout = Duration(seconds: 30);
+
 /// What a [WorkerCommand] runs against inside the worker.
 class WorkerContext {
   /// Creates the context for commands running against [store].
