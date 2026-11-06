@@ -12,8 +12,9 @@ import 'dart:typed_data';
 /// - `/status/<code>` → that status with a JSON body
 /// - `/redirect` → 302 to the absolute `/json` URL
 /// - `/cookies` → two `Set-Cookie` headers (one with an `Expires` date)
-/// - `/stream` → `text/plain` chunks of 1 KB every 10 ms for up to 10 s (or
-///   until the server closes)
+/// - `/stream` → `text/plain` chunks of 1 KB every 10 ms for up to 10 s, or
+///   until the client goes away or the server closes. Served from the raw
+///   socket, which reports a client closing at once; see [waitForNoStreams].
 /// - `/drop` → promises 100 bytes of `text/plain`, sends `partial`, then
 ///   closes the connection
 /// - `/gzip` → gzip-encoded `{"zipped":true}` with `content-encoding: gzip`
@@ -44,6 +45,22 @@ class TestServer {
     }
   }
 
+  /// Completes once no `/stream` response is being served, or throws a
+  /// [StateError] after [timeout]. Unlike [waitForNoConnections] this shows
+  /// that the client closed: `dart:io`'s server only learns of that from a
+  /// failed write, and on Linux a write after the peer reset the connection
+  /// can wait forever, so its connection count stays up.
+  Future<void> waitForNoStreams({
+    Duration timeout = const Duration(seconds: 5),
+  }) async {
+    final sw = Stopwatch()..start();
+    while (_openStreams > 0) {
+      if (sw.elapsed > timeout) throw StateError('Streams still open');
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+  }
+
+  var _openStreams = 0;
   var _closed = false;
 
   Future<void> close() {
@@ -94,13 +111,8 @@ class TestServer {
         res.headers.contentType = ContentType.text;
         res.write('ok');
       } else if (path == '/stream') {
-        res.headers.contentType = ContentType.text;
-        final chunk = Uint8List(1024)..fillRange(0, 1024, 0x62);
-        for (var i = 0; i < 1000 && !_closed; i++) {
-          res.add(chunk);
-          await res.flush();
-          await Future<void>.delayed(const Duration(milliseconds: 10));
-        }
+        await _stream(await res.detachSocket(writeHeaders: false));
+        return;
       } else if (path == '/drop') {
         final socket = await res.detachSocket(writeHeaders: false);
         socket.write(
@@ -145,6 +157,39 @@ class TestServer {
       try {
         await res.close();
       } on Object catch (_) {}
+    }
+  }
+
+  Future<void> _stream(Socket socket) async {
+    _openStreams++;
+    var gone = false;
+    socket.listen(
+      null,
+      onDone: () => gone = true,
+      onError: (Object _) => gone = true,
+      cancelOnError: true,
+    );
+    try {
+      socket.add(
+        latin1.encode(
+          'HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\n'
+          'transfer-encoding: chunked\r\nconnection: close\r\n\r\n',
+        ),
+      );
+      final frame = BytesBuilder()
+        ..add(latin1.encode('400\r\n'))
+        ..add(Uint8List(1024)..fillRange(0, 1024, 0x62))
+        ..add(latin1.encode('\r\n'));
+      final chunk = frame.takeBytes();
+      for (var i = 0; i < 1000 && !_closed && !gone; i++) {
+        socket.add(chunk);
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+    } on Object catch (_) {
+      // The client went away mid-response; nothing to do.
+    } finally {
+      socket.destroy();
+      _openStreams--;
     }
   }
 }

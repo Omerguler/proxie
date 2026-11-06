@@ -215,7 +215,7 @@ void main() {
     });
     await first.future;
     // The connection is closed instead of streaming on.
-    await h.server.waitForNoConnections();
+    await h.server.waitForNoStreams();
     await pumpEventQueue();
     final call = h.sink.last;
     expect(call.error!.type, 'cancelled');
