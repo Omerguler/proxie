@@ -9,6 +9,7 @@ import 'package:proxie/src/adapters/http_overrides_stub.dart' as web_stub;
 import 'package:proxie/src/ui/list/call_list.dart';
 import 'package:proxie/src/ui/list/call_row.dart';
 import 'package:proxie/src/ui/list/list_controller.dart';
+import 'package:proxie/src/ui/list/scroll_anchor.dart';
 
 import '../support/ui_harness.dart';
 
@@ -1134,5 +1135,117 @@ void main() {
     Proxie.open();
     await tester.pumpAndSettle();
     expect(find.byType(CallList), findsOneWidget);
+  });
+
+  group('the list across data changes', () {
+    testWidgets('a row growing above the screen keeps the rows on it still', (
+      tester,
+    ) async {
+      addTearDown(tester.view.reset);
+      setViewSize(tester, phoneSize);
+      final anchor = ScrollAnchor(rowHeight: 50);
+      addTearDown(anchor.dispose);
+      var extra = 0.0;
+      late StateSetter update;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: StatefulBuilder(
+            builder: (context, setState) {
+              update = setState;
+              return CustomScrollView(
+                controller: anchor.scroll,
+                slivers: [
+                  AnchoredSliver(
+                    anchor: anchor,
+                    sliver: SliverList.builder(
+                      itemCount: 100,
+                      itemBuilder: (context, i) => ScrollAnchorRow(
+                        anchor: anchor,
+                        id: '$i',
+                        index: i,
+                        child: SizedBox(
+                          height: 50 + (i == 10 ? extra : 0),
+                          child: Text('row $i'),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
+      );
+      // Row 10 is above the screen but still laid out.
+      anchor.scroll.jumpTo(50 * 12);
+      await tester.pump();
+      final before = tester.getTopLeft(find.text('row 14')).dy;
+
+      // Row 10 gains a session header; no index changes.
+      anchor.update(added: 0, indexOf: int.parse);
+      update(() => extra = 28);
+      await tester.pump();
+      expect(tester.getTopLeft(find.text('row 14')).dy, before);
+    });
+
+    testWidgets('the pill counts down as the new rows come into view', (
+      tester,
+    ) async {
+      await addItems(200);
+      final engine = await pumpWithEngine(tester);
+      final list = find.byType(Scrollable).last;
+      await tester.drag(list, const Offset(0, -CallRow.height * 50));
+      await tester.pump();
+      await tester.pump();
+      for (var i = 0; i < 5; i++) {
+        await engine.onRequest('n$i', 'http', getRequest('/n$i'));
+        engine.recordResponse('n$i', okResponse());
+      }
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pump();
+      expect(find.text('5 new'), findsOneWidget);
+
+      // Scrolled back to where only two rows are left above the screen.
+      final position = tester.state<ScrollableState>(list).position
+        ..jumpTo(CallRow.height * 2 + 1);
+      await tester.pump();
+      expect(find.text('2 new'), findsOneWidget);
+      // It never counts back up.
+      position.jumpTo(CallRow.height * 4 + 1);
+      await tester.pump();
+      expect(find.text('2 new'), findsOneWidget);
+      position.jumpTo(0);
+      await tester.pump();
+      expect(find.textContaining(' new'), findsNothing);
+    });
+
+    testWidgets('another worker shows its list from the top', (tester) async {
+      await addItems(200);
+      await pumpList(tester);
+      await tester.pump();
+      final list = find.byType(Scrollable).last;
+      await tester.drag(list, const Offset(0, -500));
+      await tester.pumpAndSettle();
+      expect(
+        tester.state<ScrollableState>(list).position.pixels,
+        greaterThan(0),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ProxieTheme.dark(),
+          home: Scaffold(
+            body: CallList(
+              worker: FakeWorker(store, 1),
+              calls: calls.stream,
+              renderCap: 5 * 1024 * 1024,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(tester.state<ScrollableState>(list).position.pixels, 0);
+    });
   });
 }

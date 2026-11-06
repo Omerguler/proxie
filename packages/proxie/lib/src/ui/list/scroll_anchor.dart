@@ -46,7 +46,7 @@ class ScrollAnchor extends ChangeNotifier {
   bool _disposed = false;
 
   /// Calls added above the screen while the list was scrolled away from the
-  /// top.
+  /// top and not scrolled past since: it counts down as they come into view.
   int get newCalls => _newCalls;
 
   void _setNew(int value) {
@@ -66,7 +66,8 @@ class ScrollAnchor extends ChangeNotifier {
   /// gives a call's new index (null when it is not loaded).
   ///
   /// A change that moves no row above the one on screen (a page load, a
-  /// call updated in place, rows added below) does nothing.
+  /// call updated in place, rows added below) moves nothing, unless a row
+  /// above it changes height, as when a page load adds a session header.
   void update({required int added, required int? Function(String id) indexOf}) {
     if (_disposed || !scroll.hasClients) return;
     final position = scroll.position;
@@ -80,7 +81,6 @@ class ScrollAnchor extends ChangeNotifier {
     final moved = (indexOf(anchor.id) ?? anchor.index + added) - anchor.index;
     if (moved > anchor.moved) _setNew(_newCalls + moved - anchor.moved);
     anchor.moved = moved;
-    if (_pending == null && moved == 0) return;
     _pending = anchor;
     _sliver?.markNeedsLayout();
   }
@@ -97,11 +97,13 @@ class ScrollAnchor extends ChangeNotifier {
     }
   }
 
+  // New rows are the top ones: at most as many are unseen as there are rows
+  // above the screen.
   void _onScroll() {
+    if (_newCalls == 0) return;
     final position = scroll.position;
-    if (_newCalls > 0 && position.pixels <= position.minScrollExtent) {
-      _setNew(0);
-    }
+    final above = (position.pixels - position.minScrollExtent) ~/ rowHeight;
+    if (above < _newCalls) _setNew(above < 0 ? 0 : above);
   }
 
   /// The offset of row [id] in the list's content, from the last layout;
