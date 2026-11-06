@@ -227,22 +227,25 @@ class InspectorShell extends StatefulWidget {
 class _InspectorShellState extends State<InspectorShell> {
   static const double _minListWidth = 320;
 
-  // Details a layout may still be showing: the selected one, and any that is
-  // on its way out of the stacked layout.
-  static const int _maxDetailKeys = 4;
-
   final GlobalKey _listKey = GlobalKey(debugLabel: 'proxie-list');
-  final Map<String, GlobalKey> _detailKeys = {};
+
+  // Carries the selected call's detail across a layout change. A detail on its
+  // way out of the stacked layout keeps the key it was built with, and the
+  // next one gets its own, even for the same call.
+  String? _detailId;
+  GlobalKey? _currentDetailKey;
 
   GlobalKey _detailKey(String id) {
-    final key =
-        _detailKeys.remove(id) ?? GlobalKey(debugLabel: 'proxie-detail');
-    // Reinserted last, so the first entry is the one used longest ago.
-    _detailKeys[id] = key;
-    if (_detailKeys.length > _maxDetailKeys) {
-      _detailKeys.remove(_detailKeys.keys.first);
+    if (id != _detailId) {
+      _detailId = id;
+      _currentDetailKey = null;
     }
-    return key;
+    return _currentDetailKey ??= GlobalKey(debugLabel: 'proxie-detail');
+  }
+
+  void _forgetDetailKey() {
+    _detailId = null;
+    _currentDetailKey = null;
   }
 
   Widget _list(BuildContext context) => KeyedSubtree(
@@ -252,10 +255,11 @@ class _InspectorShellState extends State<InspectorShell> {
         const _Placeholder('No requests yet'),
   );
 
-  Widget _detail(BuildContext context, String id) => KeyedSubtree(
-    key: _detailKey(id),
-    child: widget.detailBuilder?.call(context, id) ?? _Placeholder(id),
-  );
+  Widget _detail(BuildContext context, String id, GlobalKey key) =>
+      KeyedSubtree(
+        key: key,
+        child: widget.detailBuilder?.call(context, id) ?? _Placeholder(id),
+      );
 
   @override
   Widget build(BuildContext context) => _InspectorScope(
@@ -268,6 +272,8 @@ class _InspectorShellState extends State<InspectorShell> {
               controller: widget.controller,
               list: _list,
               detail: _detail,
+              detailKey: _detailKey,
+              forgetDetailKey: _forgetDetailKey,
               rulesBuilder: widget.rulesBuilder,
             ),
     ),
@@ -293,7 +299,7 @@ class _InspectorShellState extends State<InspectorShell> {
                 final id = controller.selectedCallId;
                 return id == null
                     ? const _Placeholder('Select a request')
-                    : _detail(context, id);
+                    : _detail(context, id, _detailKey(id));
               },
             ),
           ),
@@ -333,12 +339,17 @@ class _StackedLayout extends StatefulWidget {
     required this.controller,
     required this.list,
     required this.detail,
+    required this.detailKey,
+    required this.forgetDetailKey,
     required this.rulesBuilder,
   });
 
   final ProxieInspectorController controller;
   final WidgetBuilder list;
-  final Widget Function(BuildContext context, String callId) detail;
+  final Widget Function(BuildContext context, String callId, GlobalKey key)
+  detail;
+  final GlobalKey Function(String callId) detailKey;
+  final VoidCallback forgetDetailKey;
   final WidgetBuilder? rulesBuilder;
 
   @override
@@ -364,6 +375,10 @@ class _StackedLayoutState extends State<_StackedLayout> {
     listenable: widget.controller,
     builder: (context, _) {
       final id = widget.controller.selectedCallId;
+      // Bound to this page: a route on its way out rebuilds with the key it
+      // has, whatever the next route takes.
+      final detailKey = id == null ? null : widget.detailKey(id);
+      if (id == null) widget.forgetDetailKey();
       // Blocks the enclosing route's pop while the detail is shown, and pops
       // the detail instead.
       return NavigatorPopHandler(
@@ -386,7 +401,8 @@ class _StackedLayoutState extends State<_StackedLayout> {
                   child: Scaffold(
                     appBar: AppBar(title: const Text('Request')),
                     body: Builder(
-                      builder: (context) => widget.detail(context, id),
+                      builder: (context) =>
+                          widget.detail(context, id, detailKey!),
                     ),
                   ),
                 ),

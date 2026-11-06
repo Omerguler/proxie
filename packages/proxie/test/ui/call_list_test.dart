@@ -1295,4 +1295,45 @@ void main() {
       expect(tester.state<ScrollableState>(list).position.pixels, 0);
     });
   });
+
+  testWidgets('in the shell, tapping a call while its detail goes back '
+      'throws nothing', (tester) async {
+    addTearDown(tester.view.reset);
+    setViewSize(tester, phoneSize);
+    await store.upsert(call('a', at: clock, session: worker.sessionId));
+    final controller = ProxieInspectorController();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ProxieTheme.dark(),
+        home: InspectorShell(
+          controller: controller,
+          listBuilder: (context) => CallList(
+            worker: worker,
+            calls: calls.stream,
+            renderCap: 5 * 1024 * 1024,
+            onSelected: controller.select,
+          ),
+          detailBuilder: (context, id) => Text('detail $id'),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byType(CallRow));
+    await tester.pumpAndSettle();
+    expect(find.text('detail a'), findsOneWidget);
+
+    await tester.tap(find.byType(BackButton));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(controller.selectedCallId, isNull);
+
+    await tester.tap(find.byType(CallRow));
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    expect(controller.selectedCallId, 'a');
+    expect(find.text('detail a'), findsOneWidget);
+  });
 }

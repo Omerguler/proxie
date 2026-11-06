@@ -193,6 +193,99 @@ void main() {
       expect(find.text('detail a'), findsNothing);
     });
 
+    group('tapping a call while its detail is on its way out', () {
+      Widget tappable() => MaterialApp(
+        home: InspectorShell(
+          controller: controller,
+          listBuilder: (context) => Center(
+            child: TextButton(
+              onPressed: () => controller.select('a'),
+              child: const Text('row a'),
+            ),
+          ),
+          // Depends on the view size, so a resize rebuilds it in place.
+          detailBuilder: (context, id) =>
+              Text('detail $id ${MediaQuery.sizeOf(context).width}'),
+        ),
+      );
+
+      Finder detailA() => find.textContaining('detail a');
+
+      Future<void> openThenBack(WidgetTester tester) async {
+        addTearDown(tester.view.reset);
+        setViewSize(tester, phoneSize);
+        await tester.pumpWidget(tappable());
+        await tester.tap(find.text('row a'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byType(BackButton));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(controller.selectedCallId, isNull);
+      }
+
+      testWidgets('opens it again without a duplicate key', (tester) async {
+        await openThenBack(tester);
+        await tester.tap(find.text('row a'));
+        await tester.pump();
+        expect(tester.takeException(), isNull);
+        await tester.pump(const Duration(milliseconds: 50));
+        expect(tester.takeException(), isNull);
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+        expect(controller.selectedCallId, 'a');
+        expect(detailA(), findsOneWidget);
+      });
+
+      testWidgets('the route on its way out may rebuild meanwhile', (
+        tester,
+      ) async {
+        await openThenBack(tester);
+        await tester.tap(find.text('row a'));
+        await tester.pump();
+        expect(detailA(), findsNWidgets(2));
+        setViewSize(tester, Size(phoneSize.width - 10, phoneSize.height));
+        await tester.pump();
+        expect(tester.takeException(), isNull);
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+        expect(detailA(), findsOneWidget);
+      });
+
+      testWidgets('and goes back again, over and over', (tester) async {
+        await openThenBack(tester);
+        for (var i = 0; i < 3; i++) {
+          await tester.tap(find.text('row a'));
+          await tester.pump();
+          await tester.pump(const Duration(milliseconds: 100));
+          await tester.tap(find.byType(BackButton).last);
+          await tester.pump();
+          await tester.pump(const Duration(milliseconds: 100));
+          expect(tester.takeException(), isNull);
+        }
+        await tester.pumpAndSettle();
+        expect(controller.selectedCallId, isNull);
+        expect(detailA(), findsNothing);
+      });
+
+      testWidgets('a selection cleared from outside drops the key too', (
+        tester,
+      ) async {
+        addTearDown(tester.view.reset);
+        setViewSize(tester, phoneSize);
+        await tester.pumpWidget(tappable());
+        controller.select('a');
+        await tester.pumpAndSettle();
+        controller.select(null);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+        controller.select('a');
+        await tester.pump();
+        expect(tester.takeException(), isNull);
+        await tester.pumpAndSettle();
+        expect(detailA(), findsOneWidget);
+      });
+    });
+
     testWidgets('resizing switches layouts live and keeps the selection', (
       tester,
     ) async {
