@@ -9,7 +9,7 @@ Dio calls.
 
 ```yaml
 dependencies:
-  dio: ^5.11.0
+  dio: ^5.11.1
   proxie: ^0.1.0
   proxie_dio: ^0.1.0
 ```
@@ -18,10 +18,18 @@ dependencies:
 
 ```dart
 import 'package:dio/dio.dart';
+import 'package:flutter/material.dart';
+import 'package:proxie/proxie.dart';
 import 'package:proxie_dio/proxie_dio.dart';
 
 final dio = Dio();
-final proxie = ProxieDio.install(dio);
+
+void main() {
+  // After adding your own interceptors.
+  final adapter = ProxieDio.install(dio);
+  Proxie.init(adapters: [adapter]);
+  runApp(MaterialApp(builder: Proxie.wrap, home: const Home()));
+}
 ```
 
 `ProxieDio.install` adds a `ProxieDioInterceptor` at the end of
@@ -44,9 +52,9 @@ cache, for example), those calls stay pending in the inspector.
 `install` on a Dio that already has a `ProxieDioInterceptor` (added by hand)
 reuses it and moves it to the end of the list.
 
-The returned interceptor implements `ProxieCaptureAdapter`: it captures once
-it is attached to a Proxie engine and passes everything through untouched
-while detached.
+The returned interceptor implements `ProxieCaptureAdapter`: pass it to
+`Proxie.init`. It captures from then on, and passes everything through untouched
+before that or when Proxie is off.
 
 You can add the interceptor yourself instead
 (`dio.interceptors.add(ProxieDioInterceptor(replayClient: dio))`), but then it

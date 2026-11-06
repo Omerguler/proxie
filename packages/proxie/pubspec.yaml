@@ -1,7 +1,7 @@
 name: proxie
 description: In-app HTTP inspector for Flutter. Capture, inspect, mock, and breakpoint network calls from a debug overlay, with sensitive data masked.
 version: 0.1.0
-repository: https://github.com/Omerguler/proxie
+repository: https://github.com/Omerguler/proxie/tree/main/packages/proxie
 issue_tracker: https://github.com/Omerguler/proxie/issues
 topics:
   - http
@@ -9,6 +9,17 @@ topics:
   - network
   - inspector
   - proxy
+screenshots:
+  - description: Call list with a JSON response open in the tree view, dark theme.
+    path: doc/screenshots/dark-03-list-detail-json-1280.png
+  - description: Timing tab of a call, with duration, state, adapter and sizes.
+    path: doc/screenshots/dark-05-timing.png
+  - description: A POST request paused at a breakpoint, ready to edit, abort or continue.
+    path: doc/screenshots/dark-18-breakpoint-editor.png
+  - description: Call list with a JSON response open in the tree view, light theme.
+    path: doc/screenshots/light-03-list-detail-json-1280.png
+  - description: Call list at phone width, with a BREAK chip on a call that was paused.
+    path: doc/screenshots/dark-21-phone-list.png
 resolution: workspace
 
 environment:

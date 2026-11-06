@@ -1,7 +1,7 @@
 name: proxie_dio
 description: Dio interceptor adapter for Proxie, the in-app HTTP inspector for Flutter. Captures Dio requests and responses into the Proxie overlay.
 version: 0.1.0
-repository: https://github.com/Omerguler/proxie
+repository: https://github.com/Omerguler/proxie/tree/main/packages/proxie_dio
 issue_tracker: https://github.com/Omerguler/proxie/issues
 topics:
   - dio
