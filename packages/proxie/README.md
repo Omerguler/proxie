@@ -33,7 +33,7 @@ only sees traffic that goes through a client it wraps
 flutter pub add proxie
 ```
 
-Add `proxie_dio` too if you use Dio. Proxie needs Flutter 3.38 or later.
+Add `proxie_dio` too if you use Dio. Proxie needs Flutter 3.38.1 or later.
 
 ## Setup
 
