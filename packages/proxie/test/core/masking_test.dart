@@ -154,7 +154,7 @@ void main() {
     expect(decoded, {'access_token': kMask, 'ok': true});
   });
 
-  test('pretty-printed json stays pretty-printed after masking', () {
+  test('masking keeps the formatting around the masked value', () {
     final pretty = [
       '{',
       '  "password": "x",',
@@ -162,13 +162,7 @@ void main() {
       '}',
     ].join(String.fromCharCode(10));
     final out = masking.maskRequest(_req(body: _json(pretty)));
-    expect(
-      out.body.text,
-      const JsonEncoder.withIndent('  ').convert({
-        'password': kMask,
-        'a': [1, 2],
-      }),
-    );
+    expect(out.body.text, pretty.replaceFirst('"x"', '"$kMask"'));
     final compact = masking.maskRequest(_req(body: _json('{"password":"x"}')));
     expect(compact.body.text, '{"password":"$kMask"}');
   });
@@ -249,22 +243,141 @@ void main() {
     expect(out.originalLength, src.originalLength);
   });
 
-  test('minified json with a trailing newline stays minified', () {
+  test('a trailing newline stays', () {
     final nl = String.fromCharCode(10);
     final out = masking.maskRequest(
       _req(body: _json('{"password":"x","a":1}$nl')),
     );
-    expect(out.body.text, '{"password":"$kMask","a":1}');
-    final pretty = masking.maskRequest(
-      _req(body: _json('{$nl  "password": "x"$nl}')),
-    );
-    expect(pretty.body.text, contains('$nl  "password"'));
+    expect(out.body.text, '{"password":"$kMask","a":1}$nl');
   });
 
-  test('json with a newline only between tokens stays multi-line', () {
-    final nl = String.fromCharCode(10);
-    final out = masking.maskRequest(_req(body: _json('{$nl"a":1$nl}')));
-    expect(out.body.text, contains(nl));
-    expect(jsonDecode(out.body.text!), {'a': 1});
+  group('a body without a sensitive key is byte for byte the same', () {
+    for (final text in [
+      r'{"price":10.50,"e":1e3,"p":"a\/b"}',
+      '{"id":12345678901234567890}',
+      '{"a":1,"a":2}',
+      '{ "spaced" :  [ 1 , 2 ] }',
+      r'{"é":"\u00e9"}',
+    ]) {
+      test(text, () {
+        final body = _json(text);
+        expect(
+          identical(masking.maskRequest(_req(body: body)).body, body),
+          isTrue,
+        );
+      });
+    }
+  });
+
+  test('masking off leaves bodies alone, sensitive keys included', () {
+    const off = ProxieMasking(headers: {}, jsonKeys: {});
+    final body = _json('{"password":"x","n":10.50}');
+    expect(identical(off.maskRequest(_req(body: body)).body, body), isTrue);
+  });
+
+  test('only the masked values change: lexemes and duplicates stay', () {
+    final out = masking.maskRequest(
+      _req(
+        body: _json(
+          '{"id":12345678901234567890,"p":10.50,"password":"x",'
+          r'"token":1,"token":{"a":[1]},"a":1,"a":"\/"}',
+        ),
+      ),
+    );
+    expect(
+      out.body.text,
+      '{"id":12345678901234567890,"p":10.50,"password":"$kMask",'
+      '"token":"$kMask","token":"$kMask","a":1,"a":"\\/"}',
+    );
+  });
+
+  test('a sensitive key inside a masked value is not spliced twice', () {
+    final out = masking.maskRequest(
+      _req(body: _json('{"token":{"password":"x"},"a":[{"secret":1}]}')),
+    );
+    expect(out.body.text, '{"token":"$kMask","a":[{"secret":"$kMask"}]}');
+  });
+
+  test('a key spelled with an escape is masked', () {
+    final out = masking.maskRequest(
+      _req(body: _json(r'{"pass\u0077ord":"x"}')),
+    );
+    expect(out.body.text, endsWith('0077ord":"$kMask"}'));
+  });
+
+  test('a string equal to a sensitive key in an array stays', () {
+    final body = _json('["password","x"]');
+    expect(identical(masking.maskRequest(_req(body: body)).body, body), isTrue);
+  });
+
+  group('JSON that is not valid UTF-8 still masks (fails closed)', () {
+    for (final type in [
+      'application/json',
+      'application/json; charset=iso-8859-1',
+    ]) {
+      test(type, () {
+        final bytes = Uint8List.fromList([
+          ...utf8.encode('{"password":"hunter2","n":"'),
+          0xE9,
+          ...utf8.encode('"}'),
+        ]);
+        final body = ProxieBody.from(bytes, type);
+        expect(body.text, isNull);
+        final out = masking.maskRequest(_req(body: body)).body;
+        expect(latin1.decode(out.bytes), isNot(contains('hunter2')));
+        // Everything else is the same bytes.
+        expect(out.bytes.sublist(out.bytes.length - 3), [0xE9, 0x22, 0x7D]);
+        expect(utf8.decode(out.bytes, allowMalformed: true), contains(kMask));
+        expect(out.kind, body.kind);
+        expect(out.originalLength, bytes.length);
+      });
+    }
+  });
+
+  test('20,000 levels of nesting are masked, not lost', () {
+    const depth = 20000;
+    final text = '${'[' * depth}{"password":"hunter2"}${']' * depth}';
+    final out = masking.maskRequest(_req(body: _json(text))).body;
+    expect(out.text, isNot(contains('hunter2')));
+    expect(out.text, contains('"password":"$kMask"'));
+  });
+
+  group('JSON under another text content type', () {
+    ProxieBody text(String s, [String type = 'text/plain']) =>
+        ProxieBody.from(Uint8List.fromList(utf8.encode(s)), type);
+
+    test('is masked when it parses', () {
+      final out = masking.maskRequest(
+        _req(body: text('{"password":"hunter2","n":1.50}')),
+      );
+      expect(out.body.text, '{"password":"$kMask","n":1.50}');
+      expect(out.body.kind, BodyKind.text);
+    });
+
+    test('is left alone when it does not parse', () {
+      final body = text('{"password": not json}');
+      expect(
+        identical(masking.maskRequest(_req(body: body)).body, body),
+        isTrue,
+      );
+    });
+
+    test('cut at the cap, it is masked as far as it goes', () {
+      final bytes = Uint8List.fromList(
+        utf8.encode('{"password":"hunter2","pad":"${'x' * 50}"}'),
+      );
+      final body = ProxieBody.from(bytes, 'text/plain', cap: 40);
+      expect(body.truncated, isTrue);
+      final out = masking.maskRequest(_req(body: body)).body;
+      expect(out.text, isNot(contains('hunter2')));
+    });
+
+    test('stringified JSON inside a value stays (documented)', () {
+      final body = _json(r'{"data":"{\"token\":\"abc\"}"}');
+      expect(
+        identical(masking.maskRequest(_req(body: body)).body, body),
+        isTrue,
+      );
+    });
   });
 }
