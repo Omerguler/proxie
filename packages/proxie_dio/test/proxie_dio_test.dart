@@ -222,9 +222,8 @@ void main() {
     server = await startTestServer();
     sink = _Sink();
     engine = ProxieEngine(
-      config: const ProxieConfig(),
+      config: const ProxieConfig(breakpointTimeout: Duration(seconds: 5)),
       sink: sink,
-      breakpoints: BreakpointController(timeout: const Duration(seconds: 5)),
     );
     dio = Dio();
     interceptor = ProxieDio.install(dio)..attach(engine);
@@ -825,9 +824,11 @@ void main() {
 
   test('edits to a truncated request body are refused', () async {
     final small = ProxieEngine(
-      config: const ProxieConfig(teeCap: 4),
+      config: const ProxieConfig(
+        teeCap: 4,
+        breakpointTimeout: Duration(seconds: 5),
+      ),
       sink: sink,
-      breakpoints: BreakpointController(timeout: const Duration(seconds: 5)),
     );
     addTearDown(small.dispose);
     interceptor.attach(small);
@@ -937,9 +938,11 @@ void main() {
 
   test('content-type edit on a truncated body is refused', () async {
     final small = ProxieEngine(
-      config: const ProxieConfig(teeCap: 4),
+      config: const ProxieConfig(
+        teeCap: 4,
+        breakpointTimeout: Duration(seconds: 5),
+      ),
       sink: sink,
-      breakpoints: BreakpointController(timeout: const Duration(seconds: 5)),
     );
     addTearDown(small.dispose);
     interceptor.attach(small);

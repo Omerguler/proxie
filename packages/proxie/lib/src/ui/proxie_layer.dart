@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'package:proxie/src/core/engine.dart';
 import 'package:proxie/src/navigation/overlay_navigation.dart';
 import 'package:proxie/src/runtime.dart';
 import 'package:proxie/src/ui/bubble.dart';

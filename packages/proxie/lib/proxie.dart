@@ -36,7 +36,6 @@ export 'src/navigation/navigation_adapter.dart'
         ProxieNavigationAdapter;
 export 'src/proxie.dart' show Proxie;
 export 'src/storage/call_query.dart' show CallSummary;
-export 'src/ui/bubble.dart' show ProxieBubble;
 export 'src/ui/sections.dart'
     show ProxieDetailTab, ProxieListBadge, ProxieSections;
 

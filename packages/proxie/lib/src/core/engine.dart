@@ -32,17 +32,9 @@ class _CallState {
 /// The [sink] receives unmasked calls; the [calls] stream carries copies with
 /// masked headers and bodies stripped (no JSON work on the UI isolate).
 class ProxieEngine {
-  /// Creates an engine; without [breakpoints] it owns a controller that uses
-  /// the configured breakpoint timeout.
-  ProxieEngine({
-    required this.config,
-    required this.sink,
-    BreakpointController? breakpoints,
-    this.sessionId = 0,
-  }) : _ownsBreakpoints = breakpoints == null,
-       breakpoints =
-           breakpoints ??
-           BreakpointController(timeout: config.breakpointTimeout);
+  /// Creates an engine.
+  ProxieEngine({required this.config, required this.sink, this.sessionId = 0})
+    : _breakpoints = BreakpointController(timeout: config.breakpointTimeout);
 
   /// The settings, such as the body capture cap and breakpoint timeout.
   final ProxieConfig config;
@@ -50,9 +42,7 @@ class ProxieEngine {
   /// Where every call snapshot goes, unmasked.
   final CallSink sink;
 
-  /// Holds the calls paused at breakpoints.
-  final BreakpointController breakpoints;
-  final bool _ownsBreakpoints;
+  final BreakpointController _breakpoints;
 
   /// The rules consulted for each call; replace it to change them.
   RuleSet rules = RuleSet(const []);
@@ -76,10 +66,10 @@ class ProxieEngine {
   void dispose() {
     _disposed = true;
     for (final id in _states.keys.toList()) {
-      breakpoints.resolve(id, const ContinueUnchanged());
+      _breakpoints.resolve(id, const ContinueUnchanged());
     }
     _states.clear();
-    if (_ownsBreakpoints) breakpoints.dispose();
+    _breakpoints.dispose();
     unawaited(_calls.close());
   }
 
@@ -96,7 +86,7 @@ class ProxieEngine {
     if (_disposed) return Proceed(req);
     final state = _CallState(req, adapter, DateTime.now());
     if (_states.containsKey(callId)) {
-      breakpoints.resolve(callId, const ContinueUnchanged());
+      _breakpoints.resolve(callId, const ContinueUnchanged());
     }
     _states[callId] = state;
 
@@ -105,7 +95,7 @@ class ProxieEngine {
     if (paused) state.tags.add(CallTag.breakpoint);
     _emit(callId, state);
     if (paused) {
-      final r = await breakpoints.pause(
+      final r = await _breakpoints.pause(
         PausedCall(
           callId: callId,
           phase: BreakpointPhase.request,
@@ -157,7 +147,7 @@ class ProxieEngine {
   }) {
     if (_disposed) return;
     if (_states.containsKey(callId)) {
-      breakpoints.resolve(callId, const ContinueUnchanged());
+      _breakpoints.resolve(callId, const ContinueUnchanged());
     }
     final state = _CallState(req, adapter, DateTime.now());
     state.tags.addAll(tags);
@@ -182,7 +172,7 @@ class ProxieEngine {
     var current = res;
     if (_guard(() => rules.responseBreakpointFor(state.request)) != null) {
       state.tags.add(CallTag.breakpoint);
-      final r = await breakpoints.pause(
+      final r = await _breakpoints.pause(
         PausedCall(
           callId: callId,
           phase: BreakpointPhase.response,
@@ -233,7 +223,7 @@ class ProxieEngine {
   void _fail(String callId, ProxieError err, {ProxieResponse? response}) {
     final state = _states.remove(callId);
     if (state == null) return;
-    breakpoints.resolve(callId, const ContinueUnchanged());
+    _breakpoints.resolve(callId, const ContinueUnchanged());
     _emit(callId, state, response: response, error: err);
   }
 
@@ -310,4 +300,11 @@ class ProxieEngine {
       developer.log('Proxie stream failed', error: e, stackTrace: st);
     }
   }
+}
+
+/// What Proxie itself uses of an engine. Not exported: the paused-call types
+/// are not part of the public API.
+extension ProxieEngineBreakpoints on ProxieEngine {
+  /// Holds the calls paused at breakpoints.
+  BreakpointController get breakpoints => _breakpoints;
 }

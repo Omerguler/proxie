@@ -54,12 +54,11 @@ class IoHarness {
     });
   }
 
-  ProxieEngine makeEngine({ProxieConfig config = const ProxieConfig()}) =>
-      ProxieEngine(
-        config: config,
-        sink: sink,
-        breakpoints: BreakpointController(timeout: const Duration(seconds: 5)),
-      );
+  ProxieEngine makeEngine({
+    ProxieConfig config = const ProxieConfig(
+      breakpointTimeout: Duration(seconds: 5),
+    ),
+  }) => ProxieEngine(config: config, sink: sink);
 
   /// Sends [method] [path] with a fresh `HttpClient()`, closed (not forced)
   /// right after the request is closed, as apps commonly do, unless

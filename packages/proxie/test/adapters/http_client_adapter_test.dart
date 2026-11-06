@@ -141,12 +141,11 @@ void main() {
   late ProxieEngine engine;
   late ProxieHttpClient client;
 
-  ProxieEngine makeEngine({ProxieConfig config = const ProxieConfig()}) =>
-      ProxieEngine(
-        config: config,
-        sink: sink,
-        breakpoints: BreakpointController(timeout: const Duration(seconds: 5)),
-      );
+  ProxieEngine makeEngine({
+    ProxieConfig config = const ProxieConfig(
+      breakpointTimeout: Duration(seconds: 5),
+    ),
+  }) => ProxieEngine(config: config, sink: sink);
 
   setUp(() async {
     server = await startTestServer();

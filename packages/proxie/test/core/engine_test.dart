@@ -50,12 +50,8 @@ void main() {
 
   setUp(() {
     sink = _Sink();
-    bps = BreakpointController();
-    engine = ProxieEngine(
-      config: const ProxieConfig(),
-      sink: sink,
-      breakpoints: bps,
-    );
+    engine = ProxieEngine(config: const ProxieConfig(), sink: sink);
+    bps = engine.breakpoints;
   });
 
   test('config defaults', () {

@@ -590,7 +590,7 @@ void main() {
         config: const ProxieConfig(),
       );
       const text = '{"password":"$kMask","x":1}';
-      expect(await CountMasked.text(text, form: true).execute(ctx), 1);
+      expect(await const CountMasked.text(text, form: true).execute(ctx), 1);
       expect(
         await CountMasked(
           Uint8List.fromList(utf8.encode(text)),
