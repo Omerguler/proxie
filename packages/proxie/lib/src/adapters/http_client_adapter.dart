@@ -221,7 +221,7 @@ class ProxieHttpClient extends http.BaseClient implements ProxieCaptureAdapter {
     final http.StreamedResponse res;
     try {
       final out = _outgoing(request, captured, proceeded, bytes);
-      buffer = _hasResponseBreakpoint(engine, proceeded);
+      buffer = engine.hasResponseBreakpoint(proceeded);
       res = await runMarkedCaptured(() => _inner.send(out));
     } catch (e) {
       guardRecording(
@@ -379,15 +379,6 @@ class ProxieHttpClient extends http.BaseClient implements ProxieCaptureAdapter {
       return await engine.onResponse(callId, res);
     } on ProxieAbortedException catch (e) {
       throw http.ClientException(e.error.message, url);
-    }
-  }
-
-  bool _hasResponseBreakpoint(ProxieEngine engine, ProxieRequest req) {
-    try {
-      return engine.rules.responseBreakpointFor(req) != null;
-    } on Object catch (_) {
-      // The engine logs and ignores failing rule lookups as well.
-      return false;
     }
   }
 }

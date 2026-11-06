@@ -174,7 +174,7 @@ class IoExchange {
     final bool buffer;
     final HttpClientResponse res;
     try {
-      buffer = _hasResponseBreakpoint(engine, proceeded);
+      buffer = engine.hasResponseBreakpoint(proceeded);
       res = identical(proceeded, captured)
           ? await _send(_request.method, _request.uri, null, _bytes)
           : await _send(
@@ -401,15 +401,6 @@ class IoExchange {
       return await engine.onResponse(callId, res);
     } on ProxieAbortedException catch (e) {
       throw HttpException(e.error.message, uri: _request.uri);
-    }
-  }
-
-  bool _hasResponseBreakpoint(ProxieEngine engine, ProxieRequest req) {
-    try {
-      return engine.rules.responseBreakpointFor(req) != null;
-    } on Object catch (_) {
-      // The engine logs and ignores failing rule lookups as well.
-      return false;
     }
   }
 

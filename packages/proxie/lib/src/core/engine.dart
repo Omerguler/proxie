@@ -165,6 +165,11 @@ class ProxieEngine {
     _emit(callId, state);
   }
 
+  /// Whether a response breakpoint matches [req]; a failing lookup is logged
+  /// and counts as none, as in [onResponse].
+  bool hasResponseBreakpoint(ProxieRequest req) =>
+      _guard(() => rules.responseBreakpointFor(req)) != null;
+
   /// Records [res] for call [callId] and returns the response for the app.
   ///
   /// Pauses at a matching response breakpoint first, which may edit the
