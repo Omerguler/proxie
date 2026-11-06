@@ -40,8 +40,8 @@ Set<String> duplicateAdapterNames(List<ProxieCaptureAdapter> adapters) {
 /// ```
 ///
 /// Everything is a no-op unless [kProxieEnabled] (debug builds, or
-/// `--dart-define=PROXIE=true`), so release builds tree-shake Proxie out;
-/// `init(enabled: false)` turns it off at runtime as well.
+/// `--dart-define=PROXIE=true`), so release builds do nothing, though the code
+/// stays in the binary; `init(enabled: false)` turns it off at runtime as well.
 abstract final class Proxie {
   static Future<void>? _init;
   static Future<void>? _shuttingDown;
