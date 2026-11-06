@@ -62,7 +62,11 @@ class CountMasked extends WorkerCommand<int> {
   @override
   Future<int> execute(WorkerContext ctx) async {
     final t = text ?? (form ? utf8.decode(bytes!, allowMalformed: true) : null);
-    if (form) return maskedFormFields(t!).length;
+    if (form) {
+      final fields = maskedFormFields(t!).length;
+      // No field holds it: this may be JSON sent under a form type.
+      if (fields > 0) return fields;
+    }
     if (t != null) {
       final pattern = latin1 ? '"******"' : '"$kMask"';
       return pattern.allMatches(t).length;

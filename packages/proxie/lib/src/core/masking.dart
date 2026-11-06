@@ -130,7 +130,7 @@ class ProxieMasking {
         e.key: names.contains(e.key.toLowerCase())
             ? [for (final _ in e.value) kMask]
             : _urlHeaders.contains(e.key.toLowerCase())
-            ? [for (final v in e.value) _maskUrlsIn(v)]
+            ? [for (final v in e.value) _maskUrlHeader(v)]
             : List<String>.of(e.value),
     };
   }
@@ -138,35 +138,73 @@ class ProxieMasking {
   /// Headers whose value is a URL.
   static const _urlHeaders = {'location', 'content-location', 'referer'};
 
-  static final _urlPair = RegExp(r'''[?&;]([^=&;?#\s]+)=([^&;#\s"'<>)\],]*)''');
+  /// The header value [url] with the values of its sensitive query parameters
+  /// replaced by [kMask]. It holds a URL and nothing else, so its query is
+  /// treated as [maskUrl] treats one.
+  String _maskUrlHeader(String url) {
+    final mark = url.indexOf('?');
+    if (mark < 0) return url;
+    final hash = url.indexOf('#');
+    if (hash >= 0 && hash < mark) return url;
+    final end = hash < 0 ? url.length : hash;
+    final query = url.substring(mark + 1, end);
+    final masked = _maskPairs(query, kMask);
+    if (identical(masked, query)) return url;
+    return '${url.substring(0, mark + 1)}$masked${url.substring(end)}';
+  }
 
-  /// [text] with the values of sensitive query parameters replaced by [kMask].
+  static final _urlName = RegExp(r'[?&;]([^=&;?#\s]+)=');
+  static final _urlValueEnd = RegExp(r'[&#\s]');
+
+  /// [text], prose that may hold URLs, with the values of sensitive query
+  /// parameters replaced by [kMask]. Such a value ends only at `&`, `#` or
+  /// whitespace: anything else may be part of it, and hiding a little of the
+  /// prose is harmless.
   String _maskUrlsIn(String text) {
     if (_compiled.keys.isEmpty) return text;
-    return text.replaceAllMapped(_urlPair, (m) {
-      final pair = m[0]!;
-      if (m[2]!.isEmpty || !_isSensitiveName(m[1]!)) return pair;
-      return '${pair.substring(0, pair.length - m[2]!.length)}$kMask';
-    });
+    StringBuffer? out;
+    var copied = 0;
+    for (final m in _urlName.allMatches(text)) {
+      if (m.start < copied) continue; // Inside a value already masked.
+      if (!_isSensitiveName(m[1]!)) continue;
+      final stop = text.indexOf(_urlValueEnd, m.end);
+      final end = stop < 0 ? text.length : stop;
+      if (end == m.end) continue;
+      (out ??= StringBuffer())
+        ..write(text.substring(copied, m.end))
+        ..write(kMask);
+      copied = end;
+    }
+    if (out == null) return text;
+    out.write(text.substring(copied));
+    return out.toString();
   }
 
   static final _pair = RegExp('[^&;]+');
 
   /// The `name=value` pairs of [pairs] with the values of sensitive names
   /// replaced by [mask]; [pairs] itself when there are none. A name without a
-  /// value is left alone.
+  /// value is left alone. `;` and `&` both start a name, but a masked value
+  /// runs to the next `&`: a value may hold a raw `;`, and hiding a pair too
+  /// many is harmless.
   String _maskPairs(String pairs, String mask) {
     if (_compiled.keys.isEmpty) return pairs;
     StringBuffer? out;
     var copied = 0;
     for (final m in _pair.allMatches(pairs)) {
-      final eq = pairs.indexOf('=', m.start);
-      if (eq < 0 || eq >= m.end - 1) continue;
-      if (!_isSensitiveName(pairs.substring(m.start, eq))) continue;
+      if (m.start < copied) continue; // Inside a value already masked.
+      final pair = m[0]!;
+      final eqInPair = pair.indexOf('=');
+      if (eqInPair < 0) continue;
+      if (!_isSensitiveName(pair.substring(0, eqInPair))) continue;
+      final eq = m.start + eqInPair;
+      final next = pairs.indexOf('&', eq);
+      final end = next < 0 ? pairs.length : next;
+      if (end == eq + 1) continue;
       (out ??= StringBuffer())
         ..write(pairs.substring(copied, eq + 1))
         ..write(mask);
-      copied = m.end;
+      copied = end;
     }
     if (out == null) return pairs;
     out.write(pairs.substring(copied));
@@ -203,13 +241,22 @@ class ProxieMasking {
   ProxieBody _maskBody(ProxieBody body) {
     final bytes = body.bytes;
     if (bytes.isEmpty || _compiled.keys.isEmpty) return body;
-    if (isFormType(body.contentType)) return _maskForm(body);
+    if (isFormType(body.contentType)) {
+      if (!_startsAsJson(bytes)) return _maskForm(body);
+      if (!body.truncated && bytes.length <= defaultBodyCap) {
+        try {
+          return _maskSpans(body, _jsonSpans(bytes));
+        } on FormatException {
+          // Not JSON after all; the scans below decide.
+        }
+      }
+      // It could be either, so it gets both.
+      return _maskForm(_maskSpans(body, _textSpans(latin1.decode(bytes))));
+    }
     final declared =
         body.kind == BodyKind.json ||
         (body.contentType?.toLowerCase().contains('json') ?? false);
-    if (!declared && (body.kind != BodyKind.text || !_startsAsJson(bytes))) {
-      return body;
-    }
+    if (!declared && !_startsAsJson(bytes)) return body;
     final whole = !body.truncated && bytes.length <= defaultBodyCap;
     List<_Span>? spans;
     if (whole) {
@@ -217,17 +264,25 @@ class ProxieMasking {
         spans = _jsonSpans(bytes);
       } on FormatException {
         // Plain text that only starts like JSON stays as it is. A JSON type,
-        // or text in an encoding the parser does not read, goes on to the
-        // text-level scan (fail closed).
-        if (!declared && !isLatin1Text(body.contentType)) return body;
+        // or bytes the parser does not read as UTF-8, go on to the text-level
+        // scan (fail closed).
+        if (!declared &&
+            body.kind == BodyKind.text &&
+            !isLatin1Text(body.contentType)) {
+          return body;
+        }
       }
     }
-    spans ??= _textSpans(latin1.decode(bytes));
+    return _maskSpans(body, spans ?? _textSpans(latin1.decode(bytes)));
+  }
+
+  /// [body] with each of [spans] replaced by the mask; [body] itself when there
+  /// are none. The wire length is kept in originalLength, not recomputed.
+  static ProxieBody _maskSpans(ProxieBody body, List<_Span> spans) {
     if (spans.isEmpty) return body;
-    // The wire length is kept in originalLength; it is not recomputed.
     return ProxieBody(
       bytes: _splice(
-        bytes,
+        body.bytes,
         spans,
         // The mask text is not representable in Latin-1, so those bodies get
         // asterisks instead.
@@ -246,7 +301,7 @@ class ProxieMasking {
     var i = bytes.length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB ? 3 : 0;
     while (i < bytes.length) {
       final c = bytes[i++];
-      if (c == 0x20 || c == 0x09 || c == 0x0a || c == 0x0d) continue;
+      if (_isSpace(c)) continue;
       return c == 0x7b || c == 0x5b;
     }
     return false;
@@ -325,15 +380,14 @@ class ProxieMasking {
   static final List<int> _maskedUtf8 = utf8.encode('"$kMask"');
   static final List<int> _maskedLatin1 = latin1.encode('"******"');
 
-  static final _scalar = RegExp(r'-?\d[\d.eE+-]*|true|false|null');
-
-  /// End offset of the JSON value starting at [start], or null if there is no
-  /// recognisable value. Containers and strings run to the end of [text] when
-  /// they are not closed (truncated body).
+  /// End offset of the value starting at [start], or null if there is none.
+  /// Containers and strings run to the end of [text] when they are not closed
+  /// (truncated body). Anything else, and anything after a closed string, runs
+  /// to the next `,`, `}` or `]`: a value that is not JSON is still a value
+  /// (fail closed).
   static int? _valueEnd(String text, int start) {
     if (start >= text.length) return null;
     final c = text.codeUnitAt(start);
-    if (c == 0x22) return _stringEnd(text, start);
     if (c == 0x7b || c == 0x5b) {
       var depth = 0;
       var i = start;
@@ -352,11 +406,27 @@ class ProxieMasking {
       }
       return text.length;
     }
-    return _scalar.matchAsPrefix(text, start)?.end;
+    final closed = c == 0x22 || c == 0x27 ? _stringEnd(text, start) : start;
+    var end = closed;
+    while (end < text.length) {
+      final u = text.codeUnitAt(end);
+      if (u == 0x2c || u == 0x7d || u == 0x5d) break;
+      end++;
+    }
+    // Whitespace before the delimiter is not part of the value.
+    while (end > closed && _isSpace(text.codeUnitAt(end - 1))) {
+      end--;
+    }
+    return end == start ? null : end;
   }
 
-  /// End offset (exclusive) of the string whose opening quote is at [start].
+  static bool _isSpace(int c) =>
+      c == 0x20 || c == 0x09 || c == 0x0a || c == 0x0d;
+
+  /// End offset (exclusive) of the string whose opening quote is at [start],
+  /// or the end of [text] when it is not closed.
   static int _stringEnd(String text, int start) {
+    final quote = text.codeUnitAt(start);
     var i = start + 1;
     while (i < text.length) {
       final u = text.codeUnitAt(i);
@@ -364,7 +434,7 @@ class ProxieMasking {
         i += 2;
         continue;
       }
-      if (u == 0x22) return i + 1;
+      if (u == quote) return i + 1;
       i++;
     }
     return text.length;
