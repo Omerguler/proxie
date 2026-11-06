@@ -60,8 +60,10 @@ final _defaultTransformer = SyncTransformer();
 ///   answers from its cache. Add such interceptors before installing.
 class ProxieDioInterceptor extends Interceptor implements ProxieCaptureAdapter {
   /// Creates the interceptor; [replay] sends with [replayClient] when given,
-  /// otherwise with the Dio given to [ProxieDio.install].
-  ProxieDioInterceptor({Dio? replayClient}) : _replayClient = replayClient;
+  /// otherwise with the Dio given to [ProxieDio.install]. Calls are recorded
+  /// under [name]; see [ProxieDio.install].
+  ProxieDioInterceptor({Dio? replayClient, this.name = 'dio'})
+    : _replayClient = replayClient;
 
   final Dio? _replayClient;
 
@@ -70,7 +72,7 @@ class ProxieDioInterceptor extends Interceptor implements ProxieCaptureAdapter {
   ProxieEngine? _engine;
 
   @override
-  String get name => 'dio';
+  final String name;
 
   /// True when a Dio to replay with is known: `replayClient` or the one
   /// given to [ProxieDio.install].
@@ -456,20 +458,36 @@ class ProxieDioInterceptor extends Interceptor implements ProxieCaptureAdapter {
     return out;
   }
 
-  ProxieResponse _snapshot(ProxieEngine engine, Response<dynamic> response) =>
-      ProxieResponse(
-        statusCode: response.statusCode ?? 0,
-        reasonPhrase: response.statusMessage,
-        headers: response.headers.map,
-        body: ProxieBody.from(
-          encodeResponseData(
-            response.data,
-            response.requestOptions.responseType,
-          ),
-          response.headers.value(Headers.contentTypeHeader),
-          cap: engine.config.teeCap,
-        ),
-      );
+  ProxieResponse _snapshot(ProxieEngine engine, Response<dynamic> response) {
+    final cap = engine.config.teeCap;
+    final body = ProxieBody.from(
+      encodeResponseData(
+        response.data,
+        response.requestOptions.responseType,
+        limit: cap,
+      ),
+      response.headers.value(Headers.contentTypeHeader),
+      cap: cap,
+    );
+    // Encoding stopped near the cap, so only the server knows the length.
+    final declared = int.tryParse(
+      response.headers.value(Headers.contentLengthHeader) ?? '',
+    );
+    return ProxieResponse(
+      statusCode: response.statusCode ?? 0,
+      reasonPhrase: response.statusMessage,
+      headers: response.headers.map,
+      body: body.truncated && declared != null && declared > body.originalLength
+          ? ProxieBody(
+              bytes: body.bytes,
+              contentType: body.contentType,
+              kind: body.kind,
+              truncated: true,
+              originalLength: declared,
+            )
+          : body,
+    );
+  }
 
   /// Writes the parts of [out] edited at a breakpoint into [response].
   Future<void> _applyResponse(

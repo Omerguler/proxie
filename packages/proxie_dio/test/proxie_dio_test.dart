@@ -10,6 +10,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:proxie/src/core/replay.dart';
 import 'package:proxie/src/internal_api.dart';
 import 'package:proxie_dio/proxie_dio.dart';
+import 'package:proxie_dio/src/dio_bodies.dart';
+import 'package:proxie_dio/src/proxie_dio_interceptor.dart'
+    show installProxieDio;
 
 import 'support/test_server.dart';
 
@@ -151,6 +154,42 @@ String? _throwingDecoder(
 
 /// The overrides set globally, ignoring zone overrides.
 HttpOverrides? _globalOverrides() => Zone.root.run(() => HttpOverrides.current);
+
+class _ListSink implements CallSink {
+  final calls = <ProxieCall>[];
+
+  @override
+  void upsert(ProxieCall call) => calls.add(call);
+}
+
+/// Answers every request with JSON.
+class _Answering implements HttpClientAdapter {
+  _Answering({this.pad = 0});
+
+  final int pad;
+  int fetched = 0;
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    fetched++;
+    final text = jsonEncode({'pad': 'x' * pad});
+    return ResponseBody.fromString(
+      text,
+      200,
+      headers: {
+        'content-type': ['application/json'],
+        'content-length': ['${text.length}'],
+      },
+    );
+  }
+
+  @override
+  void close({bool force = false}) {}
+}
 
 class _NullSink implements CallSink {
   @override
@@ -1202,6 +1241,114 @@ void main() {
             .timeout(const Duration(seconds: 10)),
         throwsA(isA<DioException>()),
       );
+    });
+  });
+
+  group('when Proxie is compiled out', () {
+    test('install leaves the Dio as it found it', () {
+      final inner = _Answering();
+      final dio = Dio()..httpClientAdapter = inner;
+      final before = dio.interceptors.length;
+      final interceptor = installProxieDio(dio, enabled: false);
+      expect(dio.httpClientAdapter, same(inner));
+      expect(dio.interceptors.length, before);
+      expect(dio.interceptors, isNot(contains(interceptor)));
+      // Still safe to hand to Proxie.init, which does nothing then.
+      expect(interceptor.supportsReplay, isFalse);
+    });
+
+    test('a passed interceptor comes back', () {
+      final given = ProxieDioInterceptor();
+      expect(
+        installProxieDio(Dio(), interceptor: given, enabled: false),
+        given,
+      );
+    });
+  });
+
+  group('names', () {
+    test('default to dio; a custom one is recorded and replays through its '
+        'own Dio', () async {
+      final sink = _ListSink();
+      final engine = ProxieEngine(config: const ProxieConfig(), sink: sink);
+      addTearDown(engine.dispose);
+      final public = _Answering();
+      final auth = _Answering();
+      final a = ProxieDio.install(Dio()..httpClientAdapter = public);
+      final authDio = Dio()..httpClientAdapter = auth;
+      final b = ProxieDio.install(authDio, name: 'auth');
+      expect(a.name, 'dio');
+      expect(b.name, 'auth');
+      a.attach(engine);
+      b.attach(engine);
+
+      await authDio.get<void>('http://a.test/x');
+      final recorded = sink.calls.last;
+      expect(recorded.adapter, 'auth');
+
+      await replayCall(recorded, recorded.request, [a, b], engine: engine);
+      expect(auth.fetched, 2);
+      expect(public.fetched, 0);
+    });
+
+    test('an interceptor passed with a name is refused', () {
+      expect(
+        () => ProxieDio.install(
+          Dio(),
+          interceptor: ProxieDioInterceptor(),
+          name: 'auth',
+        ),
+        throwsArgumentError,
+      );
+    });
+  });
+
+  group('encoding a response body stops near the cap', () {
+    test('a large list is cut, not encoded whole', () {
+      final data = List.generate(100000, (i) => {'i': i});
+      final bytes = encodeResponseData(data, ResponseType.json, limit: 1000);
+      expect(bytes.length, greaterThan(1000));
+      expect(bytes.length, lessThan(100000));
+      expect(
+        utf8.decode(bytes.sublist(0, 12)),
+        jsonEncode(data).substring(0, 12),
+      );
+    });
+
+    test('under the limit it is all there, as jsonEncode writes it', () {
+      final data = {
+        'a': [1, 2.5, 'é'],
+      };
+      expect(
+        encodeResponseData(data, ResponseType.json, limit: 1000),
+        utf8.encode(jsonEncode(data)),
+      );
+    });
+
+    test('a long string is cut too', () {
+      final bytes = encodeResponseData(
+        'x' * 5000,
+        ResponseType.plain,
+        limit: 100,
+      );
+      expect(bytes.length, 101);
+    });
+
+    test('the record is truncated, with the declared length', () async {
+      final sink = _ListSink();
+      final engine = ProxieEngine(
+        config: const ProxieConfig(teeCap: 100),
+        sink: sink,
+      );
+      addTearDown(engine.dispose);
+      final dio = Dio()..httpClientAdapter = _Answering(pad: 5000);
+      ProxieDio.install(dio).attach(engine);
+      final res = await dio.get<Map<String, dynamic>>('http://a.test/x');
+      expect((res.data!['pad']! as String).length, 5000);
+      final body = sink.calls.last.response!.body;
+      expect(body.truncated, isTrue);
+      expect(body.bytes.length, lessThanOrEqualTo(100));
+      expect(body.originalLength, 5000 + '{"pad":""}'.length);
     });
   });
 }
