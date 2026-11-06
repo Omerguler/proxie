@@ -249,6 +249,26 @@ test.describe('Edit & resend', () => {
     await expect(app.row('/todos/1', 'REPLAY')).toBeHidden();
   });
 
+  test('Edit value opens with the value, and Save keeps it', async ({ app, net, page }) => {
+    await app.tap('POST JSON', `201 (${created.length} bytes)`);
+    await app.openInspector();
+    await app.row('/posts').click();
+    await app.button('Edit & resend').click();
+    await expect(page.getByRole('button', { name: 'Send' })).toBeVisible();
+
+    await app.button('Edit title').click();
+    await page.getByRole('menuitem', { name: 'Edit value' }).click();
+    await expect(app.field('Value')).toHaveValue('Proxie');
+    await page.getByRole('button', { name: 'Save' }).click();
+    await expect(app.field('Value')).toBeHidden();
+
+    await page.getByRole('button', { name: 'Send' }).click();
+    await expect(app.text(/· 201$/)).toBeVisible();
+    const sent = net.received.filter((r) => r.method() === 'POST');
+    expect(sent).toHaveLength(2);
+    expect(sent[1].postDataJSON()).toEqual({ title: 'Proxie', body: 'demo', userId: 1 });
+  });
+
   test('an unchanged resend is tagged REPLAY only', async ({ app, net, page }) => {
     await app.tap('GET JSON', todoResult);
     await app.openInspector();
