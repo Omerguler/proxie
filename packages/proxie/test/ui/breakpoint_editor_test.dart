@@ -10,6 +10,7 @@ import 'package:proxie/src/ui/common.dart';
 import 'package:proxie/src/ui/detail/call_detail.dart';
 import 'package:proxie/src/ui/json/json_tree_controller.dart';
 import 'package:proxie/src/ui/json/json_tree_view.dart';
+import 'package:proxie/src/ui/list/call_list.dart';
 import 'package:proxie/src/ui/rules/rule_editor.dart';
 import 'package:proxie/src/ui/rules/rules_controller.dart';
 
@@ -1050,7 +1051,7 @@ void main() {
       final (a,) = await pauseRequest(tester, '/a');
       expect(find.byType(BreakpointEditor), findsOneWidget);
       expect(tester.getSize(find.byType(BreakpointEditor)), tabletSize);
-      expect(find.text('No requests yet'), findsNothing);
+      expect(find.byType(CallList), findsNothing);
       await tester.tap(_continue);
       await tester.pumpAndSettle();
       expect(await tester.runAsync(() => a), isA<Proceed>());

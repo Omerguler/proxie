@@ -165,6 +165,25 @@ test.describe('layout', () => {
     await expect(app.field('Search URL or body')).toBeVisible();
     await expect(app.text('delectus aut autem')).toBeVisible();
   });
+
+  test('crossing the split width keeps the search and never says empty', async ({ app, page }) => {
+    await app.tap('GET JSON', todoResult);
+    await app.tap('POST JSON', `201 (${created.length} bytes)`);
+    await app.openInspector();
+    await expect(app.row('/posts')).toBeVisible();
+    await app.type(app.field('Search URL or body'), 'todos');
+    await expect(app.row('/posts')).toBeHidden();
+
+    await page.setViewportSize({ width: 600, height: 800 });
+    await expect(app.field('Search URL or body')).toHaveValue('todos');
+    await expect(app.row('/todos/1')).toBeVisible();
+    await expect(app.row('/posts')).toBeHidden();
+    await expect(app.text('No requests yet')).toBeHidden();
+
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await expect(app.field('Search URL or body')).toHaveValue('todos');
+    await expect(app.row('/posts')).toBeHidden();
+  });
 });
 
 test.describe('Map Local', () => {

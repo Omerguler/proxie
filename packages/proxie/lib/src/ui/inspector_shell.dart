@@ -189,9 +189,11 @@ class _InspectorNavigatorState extends State<_InspectorNavigator> {
 /// At least [splitWidth] wide: list (40% of the width, at least 320) and
 /// detail side by side. Narrower: the list, with the selected call's detail
 /// pushed on top inside the shell's own [Navigator]; back pops it. The
-/// layout follows rotation and window resizes live; the selection lives in
-/// [controller] and survives layout changes.
-class InspectorShell extends StatelessWidget {
+/// layout follows rotation and window resizes live. The selection lives in
+/// [controller]; everything else the list and the detail hold (search, filters,
+/// scroll, tab, revealed bodies) survives too, because this widget's global
+/// keys carry their elements across the layout change.
+class InspectorShell extends StatefulWidget {
   /// Creates the layout driven by [controller].
   const InspectorShell({
     required this.controller,
@@ -218,33 +220,64 @@ class InspectorShell extends StatelessWidget {
   /// [ProxieInspector.navigatorOf]); the button is hidden when null.
   final WidgetBuilder? rulesBuilder;
 
+  @override
+  State<InspectorShell> createState() => _InspectorShellState();
+}
+
+class _InspectorShellState extends State<InspectorShell> {
   static const double _minListWidth = 320;
 
-  Widget _list(BuildContext context) =>
-      listBuilder?.call(context) ?? const _Placeholder('No requests yet');
+  // Details a layout may still be showing: the selected one, and any that is
+  // on its way out of the stacked layout.
+  static const int _maxDetailKeys = 4;
 
-  Widget _detail(BuildContext context, String id) =>
-      detailBuilder?.call(context, id) ?? _Placeholder(id);
+  final GlobalKey _listKey = GlobalKey(debugLabel: 'proxie-list');
+  final Map<String, GlobalKey> _detailKeys = {};
+
+  GlobalKey _detailKey(String id) {
+    final key =
+        _detailKeys.remove(id) ?? GlobalKey(debugLabel: 'proxie-detail');
+    // Reinserted last, so the first entry is the one used longest ago.
+    _detailKeys[id] = key;
+    if (_detailKeys.length > _maxDetailKeys) {
+      _detailKeys.remove(_detailKeys.keys.first);
+    }
+    return key;
+  }
+
+  Widget _list(BuildContext context) => KeyedSubtree(
+    key: _listKey,
+    child:
+        widget.listBuilder?.call(context) ??
+        const _Placeholder('No requests yet'),
+  );
+
+  Widget _detail(BuildContext context, String id) => KeyedSubtree(
+    key: _detailKey(id),
+    child: widget.detailBuilder?.call(context, id) ?? _Placeholder(id),
+  );
 
   @override
   Widget build(BuildContext context) => _InspectorScope(
-    controller: controller,
+    controller: widget.controller,
     child: LayoutBuilder(
-      builder: (context, constraints) => constraints.maxWidth >= splitWidth
+      builder: (context, constraints) =>
+          constraints.maxWidth >= widget.splitWidth
           ? _split(constraints.maxWidth)
           : _StackedLayout(
-              controller: controller,
+              controller: widget.controller,
               list: _list,
               detail: _detail,
-              rulesBuilder: rulesBuilder,
+              rulesBuilder: widget.rulesBuilder,
             ),
     ),
   );
 
   Widget _split(double width) {
+    final controller = widget.controller;
     final listWidth = (width * 0.4).clamp(_minListWidth, width);
     return Scaffold(
-      appBar: _inspectorBar(controller, rulesBuilder),
+      appBar: _inspectorBar(controller, widget.rulesBuilder),
       body: Row(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -260,10 +293,7 @@ class InspectorShell extends StatelessWidget {
                 final id = controller.selectedCallId;
                 return id == null
                     ? const _Placeholder('Select a request')
-                    : KeyedSubtree(
-                        key: ValueKey(id),
-                        child: _detail(context, id),
-                      );
+                    : _detail(context, id);
               },
             ),
           ),
@@ -351,7 +381,7 @@ class _StackedLayoutState extends State<_StackedLayout> {
                 ),
               ),
               if (id != null)
-                MaterialPage<void>(
+                _DetailPage(
                   key: ValueKey(_DetailKey(id)),
                   child: Scaffold(
                     appBar: AppBar(title: const Text('Request')),
@@ -366,6 +396,45 @@ class _StackedLayoutState extends State<_StackedLayout> {
       );
     },
   );
+}
+
+class _DetailPage extends Page<void> {
+  const _DetailPage({required this.child, super.key});
+
+  final Widget child;
+
+  @override
+  Route<void> createRoute(BuildContext context) => _DetailRoute(this);
+}
+
+/// A material route that lets the page below it stay laid out for its first
+/// frame when it appears without a push, as it does when the layout changes.
+///
+/// That page holds the list, just carried over from the side-by-side layout.
+/// A blinking caret in it may still repaint in that frame, and it looks up its
+/// position through its ancestors, which must have been laid out.
+class _DetailRoute extends MaterialPageRoute<void> {
+  _DetailRoute(_DetailPage page)
+    : super(settings: page, builder: (_) => page.child);
+
+  bool _opaque = true;
+
+  @override
+  bool get opaque => _opaque;
+
+  @override
+  WidgetBuilder get builder =>
+      (_) => (settings as _DetailPage).child;
+
+  @override
+  void didAdd() {
+    _opaque = false;
+    super.didAdd();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _opaque = true;
+      if (overlayEntries.isNotEmpty) overlayEntries.first.opaque = true;
+    });
+  }
 }
 
 @immutable

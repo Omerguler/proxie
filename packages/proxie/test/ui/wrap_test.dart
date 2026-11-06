@@ -7,8 +7,11 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:proxie/proxie.dart';
+import 'package:proxie/src/ui/list/call_list.dart';
 
 import '../support/ui_harness.dart';
+
+final Finder _listFinder = find.byType(CallList);
 
 class _RecordingAdapter implements ProxieNavigationAdapter {
   final shown = <Widget>[];
@@ -92,7 +95,7 @@ Future<void> _backGesture(WidgetTester tester, String method) async {
 }
 
 Brightness _proxieBrightness(WidgetTester tester) =>
-    Theme.of(tester.element(find.text('No requests yet'))).brightness;
+    Theme.of(tester.element(_listFinder)).brightness;
 
 Brightness _bubbleBrightness(WidgetTester tester) =>
     Theme.of(tester.element(bubbleButton)).brightness;
@@ -307,7 +310,11 @@ void main() {
           ),
         ),
       );
-      expect(_proxieBrightness(tester), Brightness.light);
+      // Its default placeholder list.
+      expect(
+        Theme.of(tester.element(find.text('No requests yet'))).brightness,
+        Brightness.light,
+      );
     });
   });
 
@@ -349,7 +356,7 @@ void main() {
       );
       await tester.tap(bubbleButton);
       await tester.pumpAndSettle();
-      expect(find.text('No requests yet'), findsOneWidget);
+      expect(_listFinder, findsOneWidget);
       expect(find.text('Select a request'), findsOneWidget);
       await tester.binding.handlePopRoute();
       await tester.pumpAndSettle();
@@ -427,7 +434,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.byType(BackButton));
       await tester.pumpAndSettle();
-      expect(find.text('No requests yet'), findsOneWidget);
+      expect(_listFinder, findsOneWidget);
       await tester.runAsync(Proxie.shutdown);
     });
 
@@ -451,10 +458,7 @@ void main() {
       );
       Proxie.open();
       await tester.pumpAndSettle();
-      expect(
-        Directionality.of(tester.element(find.text('No requests yet'))),
-        TextDirection.rtl,
-      );
+      expect(Directionality.of(tester.element(_listFinder)), TextDirection.rtl);
       await tester.tap(find.byTooltip('Close'));
       await tester.pumpAndSettle();
       expect(shellFinder, findsNothing);
@@ -475,10 +479,7 @@ void main() {
       );
       Proxie.open();
       await tester.pumpAndSettle();
-      expect(
-        Directionality.of(tester.element(find.text('No requests yet'))),
-        TextDirection.rtl,
-      );
+      expect(Directionality.of(tester.element(_listFinder)), TextDirection.rtl);
       await tester.runAsync(Proxie.shutdown);
     });
   });
@@ -518,7 +519,7 @@ void main() {
       Proxie.open();
       await tester.pumpAndSettle();
       expect(find.semantics.byLabel('host home'), findsNothing);
-      expect(find.semantics.byLabel('No requests yet'), findsOneWidget);
+      expect(find.semantics.byLabel('Errors'), findsOneWidget);
       await tester.tap(find.byTooltip('Close'));
       await tester.pumpAndSettle();
       expect(find.semantics.byLabel('host home'), findsOneWidget);

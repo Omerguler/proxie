@@ -196,6 +196,10 @@ class _CallListState extends State<CallList> {
           builder: (context, _) {
             final error = _controller.error;
             if (_controller.count == 0) {
+              if (error == null && !_controller.loaded) {
+                // Not known to be empty yet.
+                return const SizedBox.shrink();
+              }
               return error != null
                   ? _Message(
                       "Couldn't load requests",

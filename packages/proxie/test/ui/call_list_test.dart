@@ -567,6 +567,31 @@ void main() {
     expect(worker.queried.last.text, 'users');
   });
 
+  testWidgets('it says there are no requests only once it has looked', (
+    tester,
+  ) async {
+    worker.hold = true;
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ProxieTheme.dark(),
+        home: Scaffold(
+          body: CallList(
+            worker: worker,
+            calls: const Stream.empty(),
+            renderCap: defaultBodyCap,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.text('No requests yet'), findsNothing);
+    worker
+      ..hold = false
+      ..release();
+    await tester.pumpAndSettle();
+    expect(find.text('No requests yet'), findsOneWidget);
+  });
+
   testWidgets('a failed load shows an error with retry', (tester) async {
     await store.upsert(call('ok', session: 2, path: '/ok', at: clock));
     worker.failCounts = true;
@@ -1109,6 +1134,5 @@ void main() {
     Proxie.open();
     await tester.pumpAndSettle();
     expect(find.byType(CallList), findsOneWidget);
-    expect(find.text('No requests yet'), findsOneWidget);
   });
 }

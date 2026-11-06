@@ -1,10 +1,87 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:proxie/proxie.dart';
+import 'package:proxie/src/ui/list/call_list.dart';
 
 import '../support/ui_harness.dart';
 
+final Finder _listFinder = find.byType(CallList);
+
+/// Holds state a remount would lose.
+class _Stateful extends StatefulWidget {
+  const _Stateful(this.name);
+
+  final String name;
+
+  static int created = 0;
+
+  @override
+  State<_Stateful> createState() => _StatefulState();
+}
+
+class _StatefulState extends State<_Stateful> {
+  final _text = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _Stateful.created++;
+  }
+
+  @override
+  void dispose() {
+    _text.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      TextField(key: ValueKey(widget.name), controller: _text);
+}
+
 void main() {
+  testWidgets('crossing the split width keeps list and detail state', (
+    tester,
+  ) async {
+    addTearDown(tester.view.reset);
+    _Stateful.created = 0;
+    setViewSize(tester, const Size(1000, 800));
+    final controller = ProxieInspectorController()..select('c1');
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: InspectorShell(
+          controller: controller,
+          listBuilder: (_) => const _Stateful('list'),
+          detailBuilder: (_, id) => _Stateful('detail-$id'),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(_Stateful.created, 2);
+    await tester.enterText(find.byKey(const ValueKey('list')), 'kept');
+    await tester.enterText(find.byKey(const ValueKey('detail-c1')), 'also');
+
+    setViewSize(tester, phoneSize);
+    await tester.pumpAndSettle();
+    expect(_Stateful.created, 2);
+    expect(find.text('also'), findsOneWidget);
+
+    setViewSize(tester, const Size(1000, 800));
+    await tester.pumpAndSettle();
+    expect(_Stateful.created, 2);
+    expect(find.text('kept'), findsOneWidget);
+    expect(find.text('also'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    // Another call is a new detail; the list stays.
+    controller.select('c2');
+    await tester.pumpAndSettle();
+    expect(_Stateful.created, 3);
+    expect(find.text('also'), findsNothing);
+    expect(find.text('kept'), findsOneWidget);
+  });
+
   tearDown(() async {
     await Proxie.shutdown();
   });
@@ -265,13 +342,13 @@ void main() {
       await tester.pumpAndSettle();
       final controller = controllerIn(tester)..select('a');
       await tester.pumpAndSettle();
-      expect(find.text('No requests yet'), findsNothing);
+      expect(_listFinder, findsNothing);
 
       await tester.binding.handlePopRoute();
       await tester.pumpAndSettle();
       expect(shellFinder, findsOneWidget);
       expect(controller.selectedCallId, isNull);
-      expect(find.text('No requests yet'), findsOneWidget);
+      expect(_listFinder, findsOneWidget);
 
       await tester.binding.handlePopRoute();
       await tester.pumpAndSettle();
@@ -286,7 +363,7 @@ void main() {
       await tester.pumpWidget(hostApp());
       Proxie.open();
       await tester.pumpAndSettle();
-      expect(find.text('No requests yet'), findsOneWidget);
+      expect(_listFinder, findsOneWidget);
       expect(find.text('Select a request'), findsOneWidget);
       await tester.runAsync(Proxie.shutdown);
     });
@@ -301,7 +378,7 @@ void main() {
       await tester.pumpWidget(hostApp());
       Proxie.open();
       await tester.pumpAndSettle();
-      expect(find.text('No requests yet'), findsOneWidget);
+      expect(_listFinder, findsOneWidget);
       expect(find.text('Select a request'), findsNothing);
       await tester.runAsync(Proxie.shutdown);
     });
@@ -329,7 +406,7 @@ void main() {
       expect(host.colorScheme.primary, hostTheme.colorScheme.primary);
       expect(host.extension<ProxieColors>(), isNull);
 
-      final proxie = Theme.of(tester.element(find.text('No requests yet')));
+      final proxie = Theme.of(tester.element(_listFinder));
       expect(proxie.brightness, Brightness.dark);
       expect(
         proxie.colorScheme.primary,
@@ -463,10 +540,7 @@ void main() {
       expect((route as MaterialPageRoute<void>).fullscreenDialog, isTrue);
       expect(bubbleFinder, findsNothing);
       // Themed with Proxie's theme, not the host's.
-      expect(
-        Theme.of(tester.element(find.text('No requests yet'))).brightness,
-        Brightness.dark,
-      );
+      expect(Theme.of(tester.element(_listFinder)).brightness, Brightness.dark);
 
       await tester.tap(find.byTooltip('Close'));
       await tester.pumpAndSettle();
