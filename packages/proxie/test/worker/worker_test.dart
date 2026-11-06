@@ -52,6 +52,16 @@ ProxieCall _call(
   startedAt: startedAt ?? DateTime.now().toUtc(),
 );
 
+/// Trims fine at startup, then fails.
+class _TrimFails extends MemoryStore {
+  var _trims = 0;
+
+  @override
+  Future<void> trim({required int maxCalls, required Duration maxAge}) async {
+    if (_trims++ > 0) throw StateError('disk full');
+  }
+}
+
 /// Throws inside the worker.
 class _Boom extends WorkerCommand<void> {
   const _Boom();
@@ -594,6 +604,38 @@ void main() {
       );
       expect(await w.run(const CountCalls()), 0);
       await w.dispose();
+    });
+  });
+
+  group('retention during a session', () {
+    const config = ProxieConfig(retentionCalls: 10, persistHistory: false);
+    const snapshots = InProcessWorker.trimEvery * 2 + 5;
+
+    Future<void> runs(ProxieWorker worker) async {
+      addTearDown(worker.dispose);
+      for (var i = 0; i < snapshots; i++) {
+        worker.upsert(_call('c$i'));
+      }
+      final left = await worker.run(const CountCalls());
+      expect(left, lessThanOrEqualTo(10 + InProcessWorker.trimEvery));
+      expect(left, greaterThanOrEqualTo(10));
+    }
+
+    test('in process, as on web', () async {
+      await runs(await InProcessWorker.start(MemoryStore(), config));
+    });
+
+    test('in the worker isolate', () async {
+      await runs(await IsolateWorker.spawn(config, MemoryStore.new));
+    });
+
+    test('a failing trim does not stop recording', () async {
+      final worker = await InProcessWorker.start(_TrimFails(), config);
+      addTearDown(worker.dispose);
+      for (var i = 0; i < snapshots; i++) {
+        worker.upsert(_call('c$i'));
+      }
+      expect(await worker.run(const CountCalls()), snapshots);
     });
   });
 }
