@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:developer' as developer;
+
 import 'package:flutter/material.dart';
 
 import 'package:proxie/src/model/call.dart';
@@ -7,6 +10,8 @@ import 'package:proxie/src/ui/list/call_row.dart';
 import 'package:proxie/src/ui/list/filter_bar.dart';
 import 'package:proxie/src/ui/list/list_controller.dart';
 import 'package:proxie/src/ui/list/scroll_anchor.dart';
+import 'package:proxie/src/ui/theme.dart';
+import 'package:proxie/src/worker/commands.dart';
 import 'package:proxie/src/worker/worker.dart';
 
 /// The inspector's call list: [FilterBar] over a lazily built list of
@@ -27,6 +32,7 @@ class CallList extends StatefulWidget {
     required this.renderCap,
     super.key,
     this.adapterNames = const [],
+    this.optionalAdapterNames = const [],
     this.selectedCallId,
     this.onSelected,
   });
@@ -42,6 +48,11 @@ class CallList extends StatefulWidget {
 
   /// Names of the attached adapters, for the adapter filter chips.
   final List<String> adapterNames;
+
+  /// Names calls can be recorded under without an adapter attached (Proxie's
+  /// own replay client); each gets a chip once such a call exists. It stays
+  /// until the list is rebuilt, even if retention removes those calls.
+  final List<String> optionalAdapterNames;
 
   /// The call to highlight, or null for none.
   final String? selectedCallId;
@@ -64,15 +75,65 @@ class _CallListState extends State<CallList> {
   // True from a query change until the new list's first frame: before it,
   // the scroll position still belongs to the old list.
   bool _freshList = false;
+  // The optional adapter names that have calls.
+  final Set<String> _present = {};
+  StreamSubscription<ProxieCall>? _optionalCalls;
 
   ListController _create([CallQuery query = const CallQuery()]) =>
       ListController(worker: widget.worker, calls: widget.calls, query: query)
         ..addListener(_onListChanged);
 
   @override
+  void initState() {
+    super.initState();
+    _watchOptional();
+  }
+
+  // Calls stored earlier are looked up once; new ones are seen arriving.
+  void _watchOptional() {
+    final names = widget.optionalAdapterNames;
+    if (names.isEmpty) return;
+    _optionalCalls = widget.calls.listen(
+      (c) {
+        if (names.contains(c.adapter) && _present.add(c.adapter)) {
+          setState(() {});
+        }
+      },
+      // The stream belongs to the engine; its errors are not ours to show.
+      onError: _logOptional,
+    );
+    for (final name in names) {
+      unawaited(_lookUpOptional(name));
+    }
+  }
+
+  Future<void> _lookUpOptional(String name) async {
+    final worker = widget.worker;
+    try {
+      final n = await worker.run(CountCalls(CallQuery(adapters: {name})));
+      if (!mounted || worker != widget.worker || n == 0) return;
+      if (_present.add(name)) setState(() {});
+    } on Object catch (e, st) {
+      // Only a filter chip is missing.
+      _logOptional(e, st);
+    }
+  }
+
+  void _logOptional(Object error, StackTrace stack) => developer.log(
+    'Proxie could not look for calls of optional adapters',
+    name: 'proxie',
+    error: error,
+    stackTrace: stack,
+  );
+
+  @override
   void didUpdateWidget(CallList oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.worker != widget.worker || oldWidget.calls != widget.calls) {
+      unawaited(_optionalCalls?.cancel());
+      _optionalCalls = null;
+      _present.clear();
+      _watchOptional();
       final query = _controller.query;
       _controller.dispose();
       _controller = _create(query);
@@ -84,6 +145,7 @@ class _CallListState extends State<CallList> {
 
   @override
   void dispose() {
+    unawaited(_optionalCalls?.cancel());
     _controller.dispose();
     _anchor.dispose();
     super.dispose();
@@ -120,7 +182,12 @@ class _CallListState extends State<CallList> {
       FilterBar(
         controller: _controller,
         renderCap: widget.renderCap,
-        adapterNames: widget.adapterNames,
+        adapterNames: [
+          ...widget.adapterNames,
+          for (final name in widget.optionalAdapterNames)
+            if (_present.contains(name) && !widget.adapterNames.contains(name))
+              name,
+        ],
       ),
       const Divider(height: 1),
       Expanded(
@@ -129,6 +196,10 @@ class _CallListState extends State<CallList> {
           builder: (context, _) {
             final error = _controller.error;
             if (_controller.count == 0) {
+              if (error == null && !_controller.loaded) {
+                // Not known to be empty yet.
+                return const SizedBox.shrink();
+              }
               return error != null
                   ? _Message(
                       "Couldn't load requests",
@@ -240,13 +311,18 @@ class _SessionHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Container(
-      color: theme.colorScheme.surfaceContainer,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      child: Text(
-        text,
-        style: theme.textTheme.labelMedium?.copyWith(
-          color: theme.colorScheme.onSurfaceVariant,
+    // Its own node: it would otherwise merge into the row below it.
+    return Semantics(
+      container: true,
+      header: true,
+      child: Container(
+        color: theme.colorScheme.surfaceContainer,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        child: Text(
+          text,
+          style: proxieMono(
+            theme.textTheme.bodySmall,
+          )?.copyWith(color: ProxieColors.of(context).muted),
         ),
       ),
     );

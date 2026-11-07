@@ -21,6 +21,15 @@ import 'package:proxie/src/worker/commands.dart';
 import 'package:proxie/src/worker/worker.dart';
 import 'package:proxie/src/worker/worker_factory.dart';
 
+/// The names shared by more than one of [adapters].
+Set<String> duplicateAdapterNames(List<ProxieCaptureAdapter> adapters) {
+  final seen = <String>{};
+  return {
+    for (final a in adapters)
+      if (!seen.add(a.name)) a.name,
+  };
+}
+
 /// Entry point: set Proxie up once, then wrap the app.
 ///
 /// ```dart
@@ -31,8 +40,8 @@ import 'package:proxie/src/worker/worker_factory.dart';
 /// ```
 ///
 /// Everything is a no-op unless [kProxieEnabled] (debug builds, or
-/// `--dart-define=PROXIE=true`), so release builds tree-shake Proxie out;
-/// `init(enabled: false)` turns it off at runtime as well.
+/// `--dart-define=PROXIE=true`), so release builds do nothing, though the code
+/// stays in the binary; `init(enabled: false)` turns it off at runtime as well.
 abstract final class Proxie {
   static Future<void>? _init;
   static Future<void>? _shuttingDown;
@@ -126,6 +135,16 @@ abstract final class Proxie {
       nav.attachBackButton();
     }
 
+    final duplicates = duplicateAdapterNames(adapters);
+    if (duplicates.isNotEmpty) {
+      developer.log(
+        'Proxie adapters share the name ${duplicates.join(', ')}: Edit & '
+        'resend uses the first of them, whichever recorded the call. Give '
+        'each its own name.',
+        name: 'proxie',
+      );
+    }
+
     ProxieWorker? worker;
     ProxieEngine? engine;
     final attached = <ProxieCaptureAdapter>[];
@@ -182,7 +201,7 @@ abstract final class Proxie {
   /// tree stays the same.
   static Widget wrap(BuildContext context, Widget? child) {
     final host = child ?? const SizedBox.shrink();
-    if (!kProxieEnabled) return host;
+    if (!kProxieEnabled || ProxieHost.isAbove(context)) return host;
     // Once wrapped, keep wrapping so a later init(enabled: false) does not
     // remount the app.
     if (_disabled && !_wrapped) return host;
@@ -196,9 +215,12 @@ abstract final class Proxie {
   /// (default `http.Client()`). Before [init] finishes it is the same, and
   /// starts recording once init completes. When Proxie is disabled it
   /// returns [inner] (or a new `http.Client()`) unchanged.
-  static http.Client httpClient({http.Client? inner}) {
+  static http.Client httpClient({
+    http.Client? inner,
+    String name = ProxieHttpClient.adapterName,
+  }) {
     if (!kProxieEnabled || _disabled) return inner ?? http.Client();
-    final client = ProxieHttpClient(inner: inner);
+    final client = ProxieHttpClient(inner: inner, name: name);
     final runtime = proxieActive.value;
     if (runtime != null) client.attach(runtime.engine);
     _clients

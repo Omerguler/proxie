@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:proxie/proxie.dart';
+import 'package:proxie/src/internal_api.dart';
 
 ProxieRequest _req() => ProxieRequest(
   method: 'GET',

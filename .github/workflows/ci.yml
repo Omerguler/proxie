@@ -1,0 +1,124 @@
+name: CI
+
+# A push to a pull request's branch runs once, as the pull request.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# Windows integration tests are not included. They need a real window and a
+# clipboard (app_test.dart overwrites it and reads it back), and they have only
+# been run on a desktop session; whether windows-latest provides those has not
+# been tried. Run them locally: cd example && flutter test integration_test -d windows
+
+env:
+  FLUTTER_VERSION: 3.47.9
+
+jobs:
+  analyze-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - run: flutter pub get
+      - run: dart analyze --fatal-infos
+      - run: dart format --set-exit-if-changed .
+      - name: Dry-run publish proxie
+        run: flutter pub publish --dry-run
+        working-directory: packages/proxie
+      - name: Dry-run publish proxie_dio
+        run: flutter pub publish --dry-run
+        working-directory: packages/proxie_dio
+      - name: Test proxie
+        run: flutter test
+        working-directory: packages/proxie
+      - name: Test proxie_dio
+        run: flutter test
+        working-directory: packages/proxie_dio
+      - name: Test example
+        run: flutter test
+        working-directory: example
+
+  # dart2js differs from the VM (a shift past 32 bits is 0, say); the JSON code
+  # is plain Dart, so it is run there too.
+  web-unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - run: flutter pub get
+      - name: Test the JSON code on Chrome
+        run: >-
+          flutter test --platform chrome
+          test/json/json_document_test.dart
+          test/json/json_edit_test.dart
+          test/json/json_search_test.dart
+        working-directory: packages/proxie
+
+  # The lowest Flutter the pubspecs declare. HttpClient and its relatives are
+  # implemented here, and they can gain members in any SDK.
+  flutter-floor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          channel: stable
+          flutter-version: 3.38.1
+          cache: true
+      # The lint package needs a newer SDK than the floor. It is a dev
+      # dependency, so apps installing Proxie never resolve it.
+      - name: Drop the lint package
+        run: >-
+          sed -i '/very_good_analysis/d'
+          packages/proxie/pubspec.yaml
+          packages/proxie_dio/pubspec.yaml
+          example/pubspec.yaml
+      - run: flutter pub get
+      - name: Test proxie
+        run: flutter test
+        working-directory: packages/proxie
+      - name: Test proxie_dio
+        run: flutter test
+        working-directory: packages/proxie_dio
+
+  playwright:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+      - run: flutter pub get
+      - run: npm ci
+        working-directory: e2e
+      - run: npx playwright install --with-deps chromium
+        working-directory: e2e
+      - run: npm test
+        working-directory: e2e
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            e2e/playwright-report
+            e2e/test-results

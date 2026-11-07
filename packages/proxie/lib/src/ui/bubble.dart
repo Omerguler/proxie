@@ -40,10 +40,10 @@ class SessionCallCounter extends ValueNotifier<int> {
 /// The floating Proxie button.
 ///
 /// Draggable; on release it snaps to the nearest horizontal edge, always
-/// inside the safe area. Shows [callCount] as a badge and pulses while
-/// [breakpoints] has paused calls. Fills its parent (pass tight constraints,
-/// e.g. inside a `Stack` with `fit: StackFit.expand`); only the button itself
-/// takes pointer events.
+/// inside the safe area. Shows [callCount] as a quiet badge; while
+/// [breakpoints] has paused calls it wears an amber ring and pulses. Fills
+/// its parent (pass tight constraints, e.g. inside a `Stack` with
+/// `fit: StackFit.expand`); only the button itself takes pointer events.
 class ProxieBubble extends StatefulWidget {
   /// Creates the button; tapping it calls [onTap].
   const ProxieBubble({
@@ -56,7 +56,7 @@ class ProxieBubble extends StatefulWidget {
   /// The number shown on the badge.
   final ValueListenable<int> callCount;
 
-  /// Its paused calls make the button pulse.
+  /// Its paused calls ring the button and make it pulse.
   final BreakpointController breakpoints;
 
   /// Called when the button is tapped, usually to open the inspector.
@@ -80,13 +80,14 @@ class _ProxieBubbleState extends State<ProxieBubble>
   );
   late final Animation<double> _scale = Tween<double>(
     begin: 1,
-    end: 1.15,
+    end: 1.08,
   ).animate(CurvedAnimation(parent: _pulse, curve: Curves.easeInOut));
   late final AnimationController _snap = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 250),
   );
   StreamSubscription<List<PausedCall>>? _breakpointSub;
+  bool _paused = false;
 
   // Position: on the right or left edge, at a vertical fraction of the free
   // height, so rotation and resizes keep it in a sensible place.
@@ -117,12 +118,15 @@ class _ProxieBubbleState extends State<ProxieBubble>
   }
 
   void _listenBreakpoints() {
-    _breakpointSub = widget.breakpoints.changes.listen(_updatePulse);
+    _breakpointSub = widget.breakpoints.changes.listen(
+      (pending) => setState(() => _updatePulse(pending)),
+    );
     _updatePulse(widget.breakpoints.pending);
   }
 
   void _updatePulse(List<PausedCall> pending) {
-    if (pending.isNotEmpty) {
+    _paused = pending.isNotEmpty;
+    if (_paused) {
       if (!_pulse.isAnimating) _pulse.repeat(reverse: true);
     } else {
       _pulse
@@ -167,7 +171,7 @@ class _ProxieBubbleState extends State<ProxieBubble>
     _snapAnimation = Tween<Offset>(
       begin: from,
       end: _resting(),
-    ).animate(CurvedAnimation(parent: _snap, curve: Curves.easeOutCubic));
+    ).animate(CurvedAnimation(parent: _snap, curve: ProxieMotion.curve));
     _snap.forward(from: 0);
   }
 
@@ -200,10 +204,12 @@ class _ProxieBubbleState extends State<ProxieBubble>
   }
 
   Widget _button(BuildContext context) {
-    final colors = ProxieColors.of(context);
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
     return ValueListenableBuilder<int>(
       valueListenable: widget.callCount,
       builder: (context, count, _) => Semantics(
+        container: true,
         button: true,
         label: 'Open Proxie inspector',
         value: count == 1 ? '1 call' : '$count calls',
@@ -221,30 +227,43 @@ class _ProxieBubbleState extends State<ProxieBubble>
               child: Stack(
                 clipBehavior: Clip.none,
                 children: [
+                  // It floats over the host app, so it keeps a soft shadow.
                   DecoratedBox(
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      gradient: colors.accentGradient,
+                      color: scheme.surfaceContainerHigh,
+                      border: Border.fromBorderSide(
+                        BorderSide(color: scheme.outline),
+                      ),
                       boxShadow: const [
                         BoxShadow(
-                          color: Color(0x66000000),
-                          blurRadius: 10,
+                          color: Color(0x33000000),
+                          blurRadius: 12,
                           offset: Offset(0, 4),
                         ),
                       ],
                     ),
-                    child: const Center(
+                    child: Center(
                       child: Text(
                         'P',
-                        style: TextStyle(
-                          color: Color(0xFFFFFFFF),
-                          fontSize: 24,
-                          fontWeight: FontWeight.w800,
+                        style: proxieMono(theme.textTheme.titleLarge)?.copyWith(
+                          color: scheme.onSurface,
+                          fontSize: 20,
                           height: 1,
                         ),
                       ),
                     ),
                   ),
+                  if (_paused)
+                    Positioned.fill(
+                      key: const ValueKey('proxie-bubble-ring'),
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          border: Border.all(color: scheme.primary, width: 2),
+                        ),
+                      ),
+                    ),
                   if (count > 0)
                     Positioned(
                       right: -4,
@@ -267,23 +286,26 @@ class _Badge extends StatelessWidget {
   final String text;
 
   @override
-  Widget build(BuildContext context) => Container(
-    constraints: const BoxConstraints(minWidth: 20, minHeight: 20),
-    padding: const EdgeInsets.symmetric(horizontal: 5),
-    alignment: Alignment.center,
-    decoration: BoxDecoration(
-      color: const Color(0xFF0D1117),
-      borderRadius: BorderRadius.circular(10),
-      border: Border.all(color: const Color(0xFFFFFFFF), width: 1.5),
-    ),
-    child: Text(
-      text,
-      style: const TextStyle(
-        color: Color(0xFFFFFFFF),
-        fontSize: 11,
-        fontWeight: FontWeight.w700,
-        height: 1.2,
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return Container(
+      constraints: const BoxConstraints(minWidth: 20, minHeight: 20),
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHigh,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.fromBorderSide(BorderSide(color: scheme.outline)),
       ),
-    ),
-  );
+      child: Text(
+        text,
+        style: proxieMono(theme.textTheme.labelSmall)?.copyWith(
+          color: scheme.onSurfaceVariant,
+          fontWeight: FontWeight.w400,
+          height: 1.2,
+        ),
+      ),
+    );
+  }
 }

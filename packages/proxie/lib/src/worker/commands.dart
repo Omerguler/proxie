@@ -18,10 +18,12 @@ class UpsertCall extends WorkerCommand<void> {
   Future<void> execute(WorkerContext ctx) {
     final masking = ctx.config.masking;
     final response = call.response;
+    final error = call.error;
     return ctx.store.upsert(
       call.copyWith(
         request: masking.maskRequest(call.request),
         response: response == null ? null : masking.maskResponse(response),
+        error: error == null ? null : masking.maskError(error),
       ),
     );
   }

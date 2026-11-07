@@ -5,8 +5,14 @@ import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:proxie/proxie.dart';
+// The inspector's replay entry point is internal to proxie; this pins that
+// it works with the Dio adapter (P34).
+import 'package:proxie/src/core/replay.dart';
+import 'package:proxie/src/internal_api.dart';
 import 'package:proxie_dio/proxie_dio.dart';
+import 'package:proxie_dio/src/dio_bodies.dart';
+import 'package:proxie_dio/src/proxie_dio_interceptor.dart'
+    show installProxieDio;
 
 import 'support/test_server.dart';
 
@@ -25,6 +31,23 @@ class _Sink implements CallSink {
   }
 
   ProxieCall get last => calls.last;
+}
+
+/// An adapter failing every fetch.
+class _FailingAdapter implements HttpClientAdapter {
+  _FailingAdapter(this.error);
+
+  final DioException Function(RequestOptions options) error;
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async => throw error(options);
+
+  @override
+  void close({bool force = false}) {}
 }
 
 /// An adapter recording whether each fetch ran marked captured.
@@ -132,6 +155,62 @@ String? _throwingDecoder(
 /// The overrides set globally, ignoring zone overrides.
 HttpOverrides? _globalOverrides() => Zone.root.run(() => HttpOverrides.current);
 
+class _ListSink implements CallSink {
+  final calls = <ProxieCall>[];
+
+  @override
+  void upsert(ProxieCall call) => calls.add(call);
+}
+
+/// Answers every request with JSON.
+class _Answering implements HttpClientAdapter {
+  _Answering({this.pad = 0});
+
+  final int pad;
+  int fetched = 0;
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    fetched++;
+    final text = jsonEncode({'pad': 'x' * pad});
+    return ResponseBody.fromString(
+      text,
+      200,
+      headers: {
+        'content-type': ['application/json'],
+        'content-length': ['${text.length}'],
+      },
+    );
+  }
+
+  @override
+  void close({bool force = false}) {}
+}
+
+class _NullSink implements CallSink {
+  @override
+  void upsert(ProxieCall call) {}
+}
+
+/// Asks like a healthy engine, but recording an outcome throws.
+class _BrokenRecording extends ProxieEngine {
+  _BrokenRecording(CallSink sink)
+    : super(config: const ProxieConfig(), sink: sink);
+
+  @override
+  void onError(String callId, ProxieError err, {ProxieResponse? response}) =>
+      throw StateError('broken onError');
+}
+
+class _ThrowingToString {
+  @override
+  String toString() => throw StateError('no');
+}
+
 void main() {
   late TestServer server;
   late _Sink sink;
@@ -143,9 +222,8 @@ void main() {
     server = await startTestServer();
     sink = _Sink();
     engine = ProxieEngine(
-      config: const ProxieConfig(),
+      config: const ProxieConfig(breakpointTimeout: Duration(seconds: 5)),
       sink: sink,
-      breakpoints: BreakpointController(timeout: const Duration(seconds: 5)),
     );
     dio = Dio();
     interceptor = ProxieDio.install(dio)..attach(engine);
@@ -746,9 +824,11 @@ void main() {
 
   test('edits to a truncated request body are refused', () async {
     final small = ProxieEngine(
-      config: const ProxieConfig(teeCap: 4),
+      config: const ProxieConfig(
+        teeCap: 4,
+        breakpointTimeout: Duration(seconds: 5),
+      ),
       sink: sink,
-      breakpoints: BreakpointController(timeout: const Duration(seconds: 5)),
     );
     addTearDown(small.dispose);
     interceptor.attach(small);
@@ -858,9 +938,11 @@ void main() {
 
   test('content-type edit on a truncated body is refused', () async {
     final small = ProxieEngine(
-      config: const ProxieConfig(teeCap: 4),
+      config: const ProxieConfig(
+        teeCap: 4,
+        breakpointTimeout: Duration(seconds: 5),
+      ),
       sink: sink,
-      breakpoints: BreakpointController(timeout: const Duration(seconds: 5)),
     );
     addTearDown(small.dispose);
     interceptor.attach(small);
@@ -987,6 +1069,100 @@ void main() {
     );
   });
 
+  group('replayCall (P34)', () {
+    ProxieCall original() => ProxieCall(
+      id: 'orig',
+      sessionId: 0,
+      adapter: 'dio',
+      request: ProxieRequest(
+        method: 'POST',
+        url: server.url('/echo'),
+        headers: const {
+          'content-type': ['text/plain'],
+        },
+        body: ProxieBody.from(
+          Uint8List.fromList(utf8.encode('again')),
+          'text/plain',
+        ),
+      ),
+      startedAt: DateTime(2026, 11, 3),
+    );
+
+    test('sends through the Dio adapter and records exactly once', () async {
+      final saved = _globalOverrides();
+      HttpOverrides.global = null;
+      final io = ProxieHttpOverridesAdapter()..attach(engine);
+      try {
+        final call = original();
+        final result = await replayCall(call, call.request, [
+          io,
+          interceptor,
+        ], engine: engine);
+        expect(result.viaFallback, isFalse);
+        expect(result.sentVia, 'Sent via dio');
+        expect(result.response.statusCode, 200);
+        expect(server.hitsFor('/echo'), 1);
+        final ids = {for (final c in sink.calls) c.id};
+        expect(ids, {result.callId});
+        expect(sink.calls.last.adapter, 'dio');
+        expect(sink.calls.last.tags, {CallTag.replayed});
+        expect(sink.calls.last.response!.statusCode, 200);
+      } finally {
+        io.detach();
+        HttpOverrides.global = saved;
+      }
+    });
+
+    test('a Dio timeout is recorded as a timeout', () async {
+      dio.httpClientAdapter = _FailingAdapter(
+        (options) => DioException.receiveTimeout(
+          timeout: const Duration(seconds: 1),
+          requestOptions: options,
+        ),
+      );
+      final call = original();
+      await expectLater(
+        replayCall(call, call.request, [interceptor], engine: engine),
+        throwsA(isA<DioException>()),
+      );
+      expect(sink.calls.last.error!.type, 'timeout');
+    });
+
+    test('a Dio connection error is recorded as network', () async {
+      dio.httpClientAdapter = _FailingAdapter(
+        (options) => DioException.connectionError(
+          requestOptions: options,
+          reason: 'refused',
+        ),
+      );
+      final call = original();
+      await expectLater(
+        replayCall(call, call.request, [interceptor], engine: engine),
+        throwsA(isA<DioException>()),
+      );
+      expect(sink.calls.last.error!.type, 'network');
+    });
+
+    test('a failure is recorded with the message a live call gets', () async {
+      DioException failure(RequestOptions options) => DioException(
+        requestOptions: options,
+        type: DioExceptionType.connectionError,
+        message: 'short reason',
+      );
+      dio.httpClientAdapter = _FailingAdapter(failure);
+      final call = original();
+      await expectLater(
+        replayCall(call, call.request, [interceptor], engine: engine),
+        throwsA(isA<DioException>()),
+      );
+      final replayed = sink.calls.last.error!;
+      await expectLater(dio.getUri<void>(server.url('/x')), throwsA(anything));
+      final live = sink.calls.last.error!;
+      expect(replayed.message, 'short reason');
+      expect(live.message, replayed.message);
+    });
+  });
+
   group('replay', () {
     ProxieRequest req(String path, {ProxieBody? body}) => ProxieRequest(
       method: 'POST',
@@ -1059,6 +1235,172 @@ void main() {
         () => ProxieDioInterceptor().replay(req('/echo')),
         throwsStateError,
       );
+    });
+  });
+
+  group('recording never breaks live traffic', () {
+    test('a failing onError still hands the error to the app', () async {
+      final broken = _BrokenRecording(_NullSink());
+      final dio = Dio();
+      ProxieDio.install(dio).attach(broken);
+      await expectLater(
+        dio
+            .get<void>('http://127.0.0.1:1/x')
+            .timeout(const Duration(seconds: 10)),
+        throwsA(isA<DioException>()),
+      );
+    });
+  });
+
+  group('when Proxie is compiled out', () {
+    test('install leaves the Dio as it found it', () {
+      final inner = _Answering();
+      final dio = Dio()..httpClientAdapter = inner;
+      final before = dio.interceptors.length;
+      final interceptor = installProxieDio(dio, enabled: false);
+      expect(dio.httpClientAdapter, same(inner));
+      expect(dio.interceptors.length, before);
+      expect(dio.interceptors, isNot(contains(interceptor)));
+      // Still safe to hand to Proxie.init, which does nothing then.
+      expect(interceptor.supportsReplay, isFalse);
+    });
+
+    test('a passed interceptor comes back', () {
+      final given = ProxieDioInterceptor();
+      expect(
+        installProxieDio(Dio(), interceptor: given, enabled: false),
+        given,
+      );
+    });
+  });
+
+  group('names', () {
+    test('default to dio; a custom one is recorded and replays through its '
+        'own Dio', () async {
+      final sink = _ListSink();
+      final engine = ProxieEngine(config: const ProxieConfig(), sink: sink);
+      addTearDown(engine.dispose);
+      final public = _Answering();
+      final auth = _Answering();
+      final a = ProxieDio.install(Dio()..httpClientAdapter = public);
+      final authDio = Dio()..httpClientAdapter = auth;
+      final b = ProxieDio.install(authDio, name: 'auth');
+      expect(a.name, 'dio');
+      expect(b.name, 'auth');
+      a.attach(engine);
+      b.attach(engine);
+
+      await authDio.get<void>('http://a.test/x');
+      final recorded = sink.calls.last;
+      expect(recorded.adapter, 'auth');
+
+      await replayCall(recorded, recorded.request, [a, b], engine: engine);
+      expect(auth.fetched, 2);
+      expect(public.fetched, 0);
+    });
+
+    test('an interceptor passed with a name is refused', () {
+      expect(
+        () => ProxieDio.install(
+          Dio(),
+          interceptor: ProxieDioInterceptor(),
+          name: 'auth',
+        ),
+        throwsArgumentError,
+      );
+    });
+  });
+
+  group('a response a custom decoder made is still JSON', () {
+    String encode(Object data) =>
+        utf8.decode(encodeResponseData(data, ResponseType.json));
+
+    test('an unknown value becomes its toString', () {
+      final at = DateTime.utc(2026);
+      expect(
+        encode({'password': 'hunter2', 'at': at}),
+        jsonEncode({'password': 'hunter2', 'at': '$at'}),
+      );
+    });
+
+    test('keys that are not strings keep their keys quoted', () {
+      expect(
+        encode({
+          1: {'password': 'hunter2'},
+          'password': 'x',
+        }),
+        '{"1":{"password":"hunter2"},"password":"x"}',
+      );
+    });
+
+    test('sets and other iterables are lists', () {
+      expect(
+        encode({
+          'a': {1, 2},
+        }),
+        '{"a":[1,2]}',
+      );
+      expect(encode({1, 2}), '[1,2]');
+    });
+
+    test('what still cannot be encoded is a placeholder', () {
+      final cycle = <String, Object?>{'password': 'hunter2'};
+      cycle['self'] = cycle;
+      final throwing = {'password': 'hunter2', 'x': _ThrowingToString()};
+      for (final data in [cycle, throwing]) {
+        final text = encode(data);
+        expect(text, isNot(contains('hunter2')));
+        expect(text, contains('not captured'));
+      }
+    });
+  });
+
+  group('encoding a response body stops near the cap', () {
+    test('a large list is cut, not encoded whole', () {
+      final data = List.generate(100000, (i) => {'i': i});
+      final bytes = encodeResponseData(data, ResponseType.json, limit: 1000);
+      expect(bytes.length, greaterThan(1000));
+      expect(bytes.length, lessThan(100000));
+      expect(
+        utf8.decode(bytes.sublist(0, 12)),
+        jsonEncode(data).substring(0, 12),
+      );
+    });
+
+    test('under the limit it is all there, as jsonEncode writes it', () {
+      final data = {
+        'a': [1, 2.5, 'é'],
+      };
+      expect(
+        encodeResponseData(data, ResponseType.json, limit: 1000),
+        utf8.encode(jsonEncode(data)),
+      );
+    });
+
+    test('a long string is cut too', () {
+      final bytes = encodeResponseData(
+        'x' * 5000,
+        ResponseType.plain,
+        limit: 100,
+      );
+      expect(bytes.length, 101);
+    });
+
+    test('the record is truncated, with the declared length', () async {
+      final sink = _ListSink();
+      final engine = ProxieEngine(
+        config: const ProxieConfig(teeCap: 100),
+        sink: sink,
+      );
+      addTearDown(engine.dispose);
+      final dio = Dio()..httpClientAdapter = _Answering(pad: 5000);
+      ProxieDio.install(dio).attach(engine);
+      final res = await dio.get<Map<String, dynamic>>('http://a.test/x');
+      expect((res.data!['pad']! as String).length, 5000);
+      final body = sink.calls.last.response!.body;
+      expect(body.truncated, isTrue);
+      expect(body.bytes.length, lessThanOrEqualTo(100));
+      expect(body.originalLength, 5000 + '{"pad":""}'.length);
     });
   });
 }

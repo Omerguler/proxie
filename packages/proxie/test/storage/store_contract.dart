@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:proxie/proxie.dart';
+import 'package:proxie/src/internal_api.dart';
 
 final _t0 = DateTime.utc(2026, 1, 1, 12);
 

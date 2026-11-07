@@ -1,15 +1,27 @@
+import 'dart:async';
 import 'dart:developer' as developer;
 
 import 'package:flutter/widgets.dart';
 
 import 'package:proxie/src/adapters/capture_adapter.dart';
+import 'package:proxie/src/adapters/http_client_adapter.dart';
+import 'package:proxie/src/adapters/http_overrides_stub.dart' as web_stub;
 import 'package:proxie/src/config.dart';
+import 'package:proxie/src/core/breakpoint_controller.dart';
 import 'package:proxie/src/core/engine.dart';
+import 'package:proxie/src/core/replay.dart';
 import 'package:proxie/src/navigation/navigation_adapter.dart';
 import 'package:proxie/src/navigation/overlay_navigation.dart';
+import 'package:proxie/src/ui/breakpoint/breakpoint_editor.dart';
 import 'package:proxie/src/ui/bubble.dart';
+import 'package:proxie/src/ui/detail/call_detail.dart';
+import 'package:proxie/src/ui/detail/copy_actions.dart';
+import 'package:proxie/src/ui/detail/resend_sheet.dart';
 import 'package:proxie/src/ui/inspector_shell.dart';
 import 'package:proxie/src/ui/list/call_list.dart';
+import 'package:proxie/src/ui/rules/rule_editor.dart';
+import 'package:proxie/src/ui/rules/rules_controller.dart';
+import 'package:proxie/src/ui/rules/rules_screen.dart';
 import 'package:proxie/src/worker/worker.dart';
 
 /// The runtime of the active Proxie, or null while inactive. Set by the
@@ -41,8 +53,14 @@ class ProxieRuntime {
     required this.controller,
     required this.navigation,
     required this.config,
-  }) : callCount = SessionCallCounter(engine.calls) {
+  }) : callCount = SessionCallCounter(engine.calls),
+       rules = RulesController(
+         worker: worker,
+         engine: engine,
+         rawEditableLimit: config.rawEditableLimit,
+       ) {
     controller.addListener(_sync);
+    _paused = engine.breakpoints.changes.listen(_onPaused);
   }
 
   /// Runs storage and heavy JSON work off the UI isolate.
@@ -65,7 +83,16 @@ class ProxieRuntime {
 
   /// The settings Proxie was started with.
   final ProxieConfig config;
+
+  /// Changes and stores [engine]'s rules for the rules screen and editors.
+  final RulesController rules;
   bool _disposed = false;
+  late final StreamSubscription<List<PausedCall>> _paused;
+  bool _hadPaused = false;
+  // Whether the inspector was opened for a pause and the user is still on
+  // its editor, so it closes again when the last paused call is resolved.
+  bool _openedForPause = false;
+  bool _drainCheck = false;
 
   /// Whether the inspector is drawn in Proxie's own overlay layer.
   bool get isOverlay => navigation is OverlayNavigationAdapter;
@@ -74,15 +101,30 @@ class ProxieRuntime {
   // the host dismissed closes the controller through onDismissed.
   void _sync() {
     if (_disposed) return;
+    if (!controller.isOpen) _openedForPause = false;
     if (controller.isOpen) {
       if (navigation.isShowing) return;
       try {
         navigation.show(
-          ProxieInspector(
-            controller: controller,
-            splitWidth: config.splitWidth,
-            themeMode: config.themeMode,
-            listBuilder: _buildList,
+          RulesScope(
+            controller: rules,
+            child: ProxieInspector(
+              controller: controller,
+              splitWidth: config.splitWidth,
+              themeMode: config.themeMode,
+              listBuilder: _buildList,
+              detailBuilder: _buildDetail,
+              rulesBuilder: (_) => const RulesScreen(),
+              shellBuilder: (_, shell) => BreakpointHost(
+                breakpoints: engine.breakpoints,
+                worker: worker,
+                rawEditableLimit: config.rawEditableLimit,
+                // Going back from the editor to stay in the inspector makes
+                // it the user's: it no longer closes when the queue drains.
+                onEditorLeft: () => _openedForPause = false,
+                child: shell,
+              ),
+            ),
           ),
           onDismissed: _onDismissed,
         );
@@ -99,15 +141,78 @@ class ProxieRuntime {
     }
   }
 
+  // The inspector opens when calls start pausing (its BreakpointHost shows
+  // the editor), and closes when they are all resolved, unless the user
+  // had it open or left the editor for it (P49b).
+  void _onPaused(List<PausedCall> pending) {
+    if (_disposed) return;
+    final had = _hadPaused;
+    _hadPaused = pending.isNotEmpty;
+    if (!had && pending.isNotEmpty && !controller.isOpen) {
+      controller.open();
+      _openedForPause = controller.isOpen;
+    } else if (had && pending.isEmpty && _openedForPause && !_drainCheck) {
+      // After the events delivered with this one: a call resolved and
+      // another paused at once must not close and reopen the inspector.
+      _drainCheck = true;
+      scheduleMicrotask(() {
+        _drainCheck = false;
+        if (_disposed || !_openedForPause) return;
+        if (engine.breakpoints.pending.isEmpty) controller.close();
+      });
+    }
+  }
+
   Widget _buildList(BuildContext context) {
     final inspector = ProxieInspectorController.of(context);
     return CallList(
       worker: worker,
       calls: engine.calls,
       renderCap: config.renderCap,
-      adapterNames: [for (final a in adapters) a.name],
+      // The web stand-in for dart:io can never capture a call.
+      adapterNames: [
+        for (final a in adapters)
+          if (a is! web_stub.ProxieHttpOverridesAdapter) a.name,
+      ],
+      // Neither is an attached adapter: Proxie.httpClient() clients attach
+      // themselves, and replays can fall back to a client of Proxie's own.
+      optionalAdapterNames: const [
+        ProxieHttpClient.adapterName,
+        kReplayFallbackAdapter,
+      ],
       selectedCallId: inspector.selectedCallId,
       onSelected: inspector.select,
+    );
+  }
+
+  Widget _buildDetail(BuildContext context, String callId) {
+    final rules = ruleDetailActions(context);
+    final inspector = ProxieInspectorController.of(context);
+    return CallDetail(
+      worker: worker,
+      calls: engine.calls,
+      callId: callId,
+      renderCap: config.renderCap,
+      actions: ProxieDetailActions(
+        onMapLocal: rules.onMapLocal,
+        onBreakpoint: rules.onBreakpoint,
+        onEditResend: (call) => unawaited(
+          openResendSheet(
+            context,
+            call: call,
+            worker: worker,
+            send: (original, edited, cancel) => replayCall(
+              original,
+              edited,
+              adapters,
+              engine: engine,
+              cancel: cancel,
+            ),
+            rawEditableLimit: config.rawEditableLimit,
+            onOpenCall: inspector.select,
+          ),
+        ),
+      ),
     );
   }
 
@@ -130,6 +235,7 @@ class ProxieRuntime {
   Future<void> dispose() async {
     _disposed = true;
     controller.removeListener(_sync);
+    unawaited(_paused.cancel());
     try {
       navigation.hide();
     } on Object catch (e, st) {
@@ -148,6 +254,10 @@ class ProxieRuntime {
       ..dispose();
     adapters.forEach(detachAdapter);
     callCount.dispose();
+    // The last rule change reaches the worker before it goes; bounded and
+    // logged by flush, so a stuck worker cannot hang shutdown.
+    await rules.flush();
+    rules.dispose();
     engine.dispose();
     await worker.dispose();
   }

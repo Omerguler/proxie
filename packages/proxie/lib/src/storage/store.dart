@@ -3,6 +3,13 @@ import 'package:proxie/src/core/rule.dart';
 import 'package:proxie/src/model/call.dart';
 import 'package:proxie/src/storage/call_query.dart';
 
+/// Whether [error], thrown while decoding a stored row, means the row no longer
+/// decodes. Rows are decoded with casts and enum names, so besides an
+/// [Exception] a bad one shows up as a [TypeError] or an [ArgumentError]
+/// (written by a newer version, say).
+bool isStoredRowError(Object error) =>
+    error is Exception || error is TypeError || error is ArgumentError;
+
 /// A recording session: one app run.
 class SessionInfo {
   /// Describes session [id].

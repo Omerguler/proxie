@@ -20,6 +20,9 @@ class _Adapter implements ProxieCaptureAdapter {
   @override
   Future<ProxieResponse> replay(ProxieRequest request) =>
       throw UnimplementedError();
+
+  @override
+  ProxieError classifyReplayError(Object error) => defaultReplayError(error);
 }
 
 void main() {
@@ -51,7 +54,7 @@ void main() {
     expect(ProxieBody.empty().kind, BodyKind.empty);
     expect(defaultBodyCap, engine.config.teeCap);
     const action = MapLocalAction(failure: SimulatedFailure.timeout);
-    expect(const Mock(action).action.failure, SimulatedFailure.timeout);
+    expect(const MockDecision(action).action.failure, SimulatedFailure.timeout);
     const err = ProxieError(type: 'aborted', message: 'm');
     expect(const AbortRequest(err).error, same(err));
     expect(const ProxieAbortedException(err).error, same(err));

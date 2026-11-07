@@ -3,7 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:proxie/proxie.dart';
+import 'package:proxie/src/internal_api.dart';
 
 import '../../support/io_harness.dart';
 
@@ -377,5 +377,46 @@ void main() {
     expect(res.statusCode, 302);
     expect(res.isRedirect, isTrue);
     await res.drain<void>();
+  });
+
+  test('an abort on an endless response at a response breakpoint closes the '
+      'connection', () async {
+    h.adapter.detach();
+    final e = ProxieEngine(
+      config: const ProxieConfig(
+        breakpointTimeout: Duration(milliseconds: 300),
+      ),
+      sink: h.sink,
+    )..rules = RuleSet([breakpointRule('*/stream', BreakpointPhase.response)]);
+    addTearDown(e.dispose);
+    h.adapter.attach(e);
+    final client = HttpClient();
+    addTearDown(() => client.close(force: true));
+    final req = await client.openUrl('GET', h.server.url('/stream'));
+    final res = req.close();
+    // After the response has arrived, while it is being buffered.
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    req.abort();
+    await expectLater(res, throwsA(anything));
+    await h.server.waitForNoStreams();
+  });
+
+  test('a response breakpoint past the capture cap streams through, keeping '
+      'every byte', () async {
+    h.adapter.detach();
+    final e = ProxieEngine(
+      config: const ProxieConfig(teeCap: 1024),
+      sink: h.sink,
+    )..rules = RuleSet([breakpointRule('*/stream', BreakpointPhase.response)]);
+    addTearDown(e.dispose);
+    h.adapter.attach(e);
+    final res = await h
+        .send('GET', '/stream')
+        .timeout(const Duration(seconds: 5));
+    expect(e.breakpoints.pending, isEmpty);
+    expect(res.statusCode, 200);
+    final first = await res.first;
+    expect(first, isNotEmpty);
+    await h.server.waitForNoStreams();
   });
 }

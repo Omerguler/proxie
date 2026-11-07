@@ -4,7 +4,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:proxie/proxie.dart';
+import 'package:proxie/src/internal_api.dart';
 
 import 'test_server.dart';
 
@@ -54,12 +54,11 @@ class IoHarness {
     });
   }
 
-  ProxieEngine makeEngine({ProxieConfig config = const ProxieConfig()}) =>
-      ProxieEngine(
-        config: config,
-        sink: sink,
-        breakpoints: BreakpointController(timeout: const Duration(seconds: 5)),
-      );
+  ProxieEngine makeEngine({
+    ProxieConfig config = const ProxieConfig(
+      breakpointTimeout: Duration(seconds: 5),
+    ),
+  }) => ProxieEngine(config: config, sink: sink);
 
   /// Sends [method] [path] with a fresh `HttpClient()`, closed (not forced)
   /// right after the request is closed, as apps commonly do, unless

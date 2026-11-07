@@ -5,7 +5,7 @@ import 'dart:typed_data';
 
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:proxie/proxie.dart';
+import 'package:proxie/src/internal_api.dart';
 
 class _Sink implements CallSink {
   final calls = <ProxieCall>[];
@@ -50,12 +50,8 @@ void main() {
 
   setUp(() {
     sink = _Sink();
-    bps = BreakpointController();
-    engine = ProxieEngine(
-      config: const ProxieConfig(),
-      sink: sink,
-      breakpoints: bps,
-    );
+    engine = ProxieEngine(config: const ProxieConfig(), sink: sink);
+    bps = engine.breakpoints;
   });
 
   test('config defaults', () {
@@ -85,7 +81,7 @@ void main() {
     expect(sink.last.tags, isEmpty);
   });
 
-  test('map-local rule: Mock and tagged mapLocal', () async {
+  test('map-local rule: MockDecision and tagged mapLocal', () async {
     final action = MapLocalAction(response: _res(404));
     engine.rules = RuleSet([
       ProxieRule(
@@ -97,7 +93,7 @@ void main() {
       ),
     ]);
     final d = await engine.onRequest('c1', 'http', _req());
-    expect((d as Mock).action, same(action));
+    expect((d as MockDecision).action, same(action));
     expect(sink.last.tags, contains(CallTag.mapLocal));
   });
 
@@ -115,6 +111,15 @@ void main() {
       expect(sink.last.tags, containsAll([CallTag.breakpoint, CallTag.edited]));
     },
   );
+
+  test('a form that only uppercases the method is not an edit', () async {
+    engine.rules = RuleSet([_bp(BreakpointPhase.request)]);
+    final f = engine.onRequest('c1', 'http', _req(method: 'get'));
+    await Future<void>.delayed(Duration.zero);
+    bps.resolve('c1', ExecuteRequest(_req()));
+    await f;
+    expect(sink.last.tags, isNot(contains(CallTag.edited)));
+  });
 
   test('ExecuteRequest identical to original is not tagged edited', () async {
     engine.rules = RuleSet([_bp(BreakpointPhase.request)]);
@@ -168,6 +173,24 @@ void main() {
       expect(seen.last.request.body.originalLength, r.body.bytes.length);
     },
   );
+
+  test('the stream copy masks query values and errors; the sink is raw and '
+      'the app gets the real URL', () async {
+    final seen = <ProxieCall>[];
+    engine.calls.listen(seen.add);
+    final req = _req().copyWith(url: Uri.parse('https://a.test/x?token=abc'));
+    final d = await engine.onRequest('c1', 'http', req);
+    expect((d as Proceed).request.url.query, 'token=abc');
+    engine.onError(
+      'c1',
+      const ProxieError(type: 'network', message: 'at /x?token=abc'),
+    );
+    await Future<void>.delayed(Duration.zero);
+    expect(seen.first.request.url.toString(), isNot(contains('abc')));
+    expect(seen.last.error!.message, 'at /x?token=$kMask');
+    expect(sink.last.request.url.query, 'token=abc');
+    expect(sink.last.error!.message, 'at /x?token=abc');
+  });
 
   test('onResponse works for mocked calls and calls stream emits', () async {
     final seen = <ProxieCall>[];
@@ -386,7 +409,7 @@ void main() {
     final f = engine.onRequest('c1', 'http', _req());
     await Future<void>.delayed(Duration.zero);
     bps.resolve('c1', ExecuteRequest(_req(path: '/other')));
-    expect(await f, isA<Mock>());
+    expect(await f, isA<MockDecision>());
   });
 
   test('mock goes through a response breakpoint', () async {
@@ -400,7 +423,7 @@ void main() {
         mapLocal: MapLocalAction(response: _res(404)),
       ),
     ]);
-    expect(await engine.onRequest('c1', 'http', _req()), isA<Mock>());
+    expect(await engine.onRequest('c1', 'http', _req()), isA<MockDecision>());
     final f = engine.onResponse('c1', _res(404));
     await Future<void>.delayed(Duration.zero);
     expect(bps.pending.single.phase, BreakpointPhase.response);

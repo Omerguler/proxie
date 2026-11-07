@@ -13,6 +13,9 @@ enum ProxieThemeMode {
   system,
 }
 
+/// The default of [ProxieConfig.rawEditableLimit]: 1 MB.
+const int defaultRawEditableLimit = 1024 * 1024;
+
 /// Tunable limits and behavior; defaults follow the global constraints.
 class ProxieConfig {
   /// Creates a configuration; every limit has a default.
@@ -22,7 +25,7 @@ class ProxieConfig {
     this.spillThreshold = 256 * 1024,
     this.renderCap = 5 * 1024 * 1024,
     this.teeCap = 5 * 1024 * 1024,
-    this.rawEditableLimit = 1024 * 1024,
+    this.rawEditableLimit = defaultRawEditableLimit,
     this.retentionCalls = 5000,
     this.retentionAge = const Duration(days: 7),
     this.breakpointTimeout = const Duration(seconds: 60),

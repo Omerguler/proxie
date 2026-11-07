@@ -2,11 +2,16 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:proxie/proxie.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
+import 'package:proxie/src/adapters/http_overrides_stub.dart' as web_stub;
+import 'package:proxie/src/internal_api.dart';
 import 'package:proxie/src/ui/list/call_list.dart';
 import 'package:proxie/src/ui/list/call_row.dart';
 import 'package:proxie/src/ui/list/list_controller.dart';
+import 'package:proxie/src/ui/list/scroll_anchor.dart';
 
+import '../support/semantics.dart';
 import '../support/ui_harness.dart';
 
 /// Runs commands straight against a [MemoryStore] and records them.
@@ -109,6 +114,29 @@ ProxieCall call(
   tags: tags,
 );
 
+class _NamedAdapter implements ProxieCaptureAdapter {
+  _NamedAdapter(this.name);
+
+  @override
+  final String name;
+
+  @override
+  bool get supportsReplay => false;
+
+  @override
+  void attach(ProxieEngine engine) {}
+
+  @override
+  void detach() {}
+
+  @override
+  Future<ProxieResponse> replay(ProxieRequest request) =>
+      throw UnsupportedError('no replay');
+
+  @override
+  ProxieError classifyReplayError(Object error) => defaultReplayError(error);
+}
+
 const _minute = Duration(minutes: 1);
 
 void main() {
@@ -134,6 +162,7 @@ void main() {
     WidgetTester tester, {
     Stream<ProxieCall>? stream,
     ValueChanged<String>? onSelected,
+    String? selectedCallId,
   }) async {
     addTearDown(tester.view.reset);
     setViewSize(tester, phoneSize);
@@ -146,6 +175,7 @@ void main() {
             calls: stream ?? calls.stream,
             renderCap: 5 * 1024 * 1024,
             onSelected: onSelected,
+            selectedCallId: selectedCallId,
           ),
         ),
       ),
@@ -211,6 +241,56 @@ void main() {
     expect(find.byType(CallRow), findsOneWidget);
   });
 
+  group('optional adapter chips', () {
+    final builtIn = find.widgetWithText(FilterChip, 'built-in');
+
+    Future<void> pumpChips(WidgetTester tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ProxieTheme.dark(),
+          home: Scaffold(
+            body: CallList(
+              worker: worker,
+              calls: calls.stream,
+              renderCap: 5 * 1024 * 1024,
+              adapterNames: const ['http'],
+              optionalAdapterNames: const ['built-in'],
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('hidden while no call is recorded under the name', (
+      tester,
+    ) async {
+      await store.upsert(call('a', at: clock));
+      await pumpChips(tester);
+      expect(builtIn, findsNothing);
+      expect(find.widgetWithText(FilterChip, 'http'), findsNothing);
+    });
+
+    testWidgets('shown for a call already stored, and filters', (tester) async {
+      await store.upsert(call('a', at: clock).copyWith(adapter: 'built-in'));
+      await pumpChips(tester);
+      expect(builtIn, findsOneWidget);
+      expect(find.widgetWithText(FilterChip, 'http'), findsOneWidget);
+      await tester.ensureVisible(builtIn);
+      await tester.tap(builtIn);
+      await tester.pumpAndSettle();
+      expect(worker.queried.last.adapters, {'built-in'});
+    });
+
+    testWidgets('appears when such a call arrives', (tester) async {
+      await pumpChips(tester);
+      expect(builtIn, findsNothing);
+      calls.add(call('a', at: clock).copyWith(adapter: 'built-in'));
+      await tester.pumpAndSettle();
+      expect(builtIn, findsOneWidget);
+    });
+  });
+
   testWidgets('other chips set their filters', (tester) async {
     await pumpList(tester);
     Future<CallQuery> tapChip(String label) async {
@@ -253,7 +333,9 @@ void main() {
     final rows = tester.widgetList<CallRow>(find.byType(CallRow)).toList();
     expect(rows.map((r) => r.call.id), ['new', 'old']);
     expect(rows.first.call.statusCode, isNull);
-    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    // A still mark: nothing in the list loops.
+    expect(find.byKey(const ValueKey('proxie-call-pending')), findsOneWidget);
+    expect(find.byType(ProgressIndicator), findsNothing);
 
     // Completing the call updates its row in place.
     engine.recordResponse('new', okResponse());
@@ -263,7 +345,7 @@ void main() {
       tester.widget<CallRow>(find.byType(CallRow).first).call.statusCode,
       200,
     );
-    expect(find.byType(CircularProgressIndicator), findsNothing);
+    expect(find.byKey(const ValueKey('proxie-call-pending')), findsNothing);
   });
 
   testWidgets('session header rows, including the previous session', (
@@ -487,6 +569,31 @@ void main() {
     expect(worker.queried.last.text, 'users');
   });
 
+  testWidgets('it says there are no requests only once it has looked', (
+    tester,
+  ) async {
+    worker.hold = true;
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ProxieTheme.dark(),
+        home: Scaffold(
+          body: CallList(
+            worker: worker,
+            calls: const Stream.empty(),
+            renderCap: defaultBodyCap,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.text('No requests yet'), findsNothing);
+    worker
+      ..hold = false
+      ..release();
+    await tester.pumpAndSettle();
+    expect(find.text('No requests yet'), findsOneWidget);
+  });
+
   testWidgets('a failed load shows an error with retry', (tester) async {
     await store.upsert(call('ok', session: 2, path: '/ok', at: clock));
     worker.failCounts = true;
@@ -578,7 +685,10 @@ void main() {
   ) async {
     await addItems(200);
     final engine = await pumpWithEngine(tester);
-    await tester.drag(find.byType(Scrollable).last, const Offset(0, -3000));
+    await tester.drag(
+      find.byType(Scrollable).last,
+      const Offset(0, -CallRow.height * 50),
+    );
     await tester.pump();
     await tester.pump();
     final anchor = find.text('/items/150');
@@ -632,7 +742,10 @@ void main() {
     await tester.tap(find.widgetWithText(FilterChip, 'Errors'));
     await tester.pump();
     await tester.pump();
-    await tester.drag(find.byType(Scrollable).last, const Offset(0, -3000));
+    await tester.drag(
+      find.byType(Scrollable).last,
+      const Offset(0, -CallRow.height * 50),
+    );
     await tester.pump();
     await tester.pump();
     final anchor = find.text('/items/150');
@@ -813,7 +926,10 @@ void main() {
     await tester.tap(post);
     await tester.pump();
     await tester.pump();
-    await tester.drag(find.byType(Scrollable).last, const Offset(0, -3000));
+    await tester.drag(
+      find.byType(Scrollable).last,
+      const Offset(0, -CallRow.height * 50),
+    );
     await tester.pumpAndSettle();
     expect(pixelsOf(tester), greaterThan(0));
 
@@ -828,6 +944,193 @@ void main() {
     expect(find.text('/items/999'), findsOneWidget);
   });
 
+  testWidgets('a tagged row stays one tappable node naming its tags', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
+    try {
+      await store.upsert(
+        call(
+          'tagged',
+          session: 2,
+          path: '/tagged',
+          at: clock,
+          tags: const {
+            CallTag.breakpoint,
+            CallTag.mapLocal,
+            CallTag.edited,
+            CallTag.replayed,
+          },
+        ),
+      );
+      await pumpList(tester, onSelected: (_) {});
+
+      final row = find.bySemanticsLabel(RegExp('/tagged'));
+      expect(row, findsOneWidget);
+      final label = tester.getSemantics(row).label;
+      for (final tag in ['BREAK', 'MAP', 'EDITED', 'REPLAY']) {
+        expect(label, contains(tag));
+      }
+      expect(tester.getSemantics(row), semanticsLike(hasTapAction: true));
+    } finally {
+      semantics.dispose();
+    }
+  });
+
+  testWidgets('a replayed row shows REPLAY; an edited one EDITED too', (
+    tester,
+  ) async {
+    await store.upsert(
+      call(
+        'replayed',
+        session: 2,
+        path: '/replayed',
+        at: clock,
+        tags: const {CallTag.replayed},
+      ),
+    );
+    await store.upsert(
+      call(
+        'edited',
+        session: 2,
+        path: '/edited',
+        at: clock.add(const Duration(seconds: 1)),
+        tags: const {CallTag.replayed, CallTag.edited},
+      ),
+    );
+    await pumpList(tester);
+    expect(find.text('REPLAY'), findsNWidgets(2));
+    expect(find.text('EDITED'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.ancestor(
+          of: find.text('/replayed'),
+          matching: find.byType(CallRow),
+        ),
+        matching: find.text('EDITED'),
+      ),
+      findsNothing,
+    );
+  });
+
+  testWidgets('the open call is the selected row for screen readers', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
+    try {
+      await store.upsert(call('a', session: 2, path: '/open', at: clock));
+      await store.upsert(
+        call(
+          'b',
+          session: 2,
+          path: '/other',
+          at: clock.add(const Duration(seconds: 1)),
+        ),
+      );
+      await pumpList(tester, onSelected: (_) {}, selectedCallId: 'a');
+
+      expect(
+        tester.getSemantics(find.bySemanticsLabel(RegExp('/open'))),
+        semanticsLike(isButton: true, hasSelectedState: true, isSelected: true),
+      );
+      expect(
+        tester.getSemantics(find.bySemanticsLabel(RegExp('/other'))),
+        semanticsLike(
+          isButton: true,
+          hasSelectedState: true,
+          isSelected: false,
+        ),
+      );
+    } finally {
+      semantics.dispose();
+    }
+  });
+
+  testWidgets('Proxie.httpClient() calls get a chip; the web stub gets none', (
+    tester,
+  ) async {
+    addTearDown(() => tester.runAsync(Proxie.shutdown));
+    addTearDown(tester.view.reset);
+    setViewSize(tester, tabletSize);
+    await tester.runAsync(
+      () => Proxie.init(
+        adapters: [
+          _NamedAdapter('other'),
+          web_stub.ProxieHttpOverridesAdapter(),
+        ],
+        config: memoryConfig,
+      ),
+    );
+    final client = Proxie.httpClient(
+      inner: MockClient((_) async => http.Response('{}', 200)),
+    );
+    await tester.pumpWidget(hostApp());
+    Proxie.open();
+    await tester.pumpAndSettle();
+
+    final httpChip = find.widgetWithText(FilterChip, 'http');
+    final otherChip = find.widgetWithText(FilterChip, 'other');
+    final row = find.text('/via-http');
+    Future<void> until(Finder finder, Matcher matcher) async {
+      for (var i = 0; i < 200 && !matcher.matches(finder, {}); i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 10)),
+        );
+        await tester.pump();
+      }
+      expect(finder, matcher);
+    }
+
+    // No such call yet, and one attached adapter is nothing to choose from.
+    expect(httpChip, findsNothing);
+    expect(otherChip, findsNothing);
+
+    await tester.runAsync(
+      () => client.get(Uri.parse('https://api.test/via-http')),
+    );
+    await until(httpChip, findsOneWidget);
+    await until(row, findsOneWidget);
+    expect(otherChip, findsOneWidget);
+    expect(find.widgetWithText(FilterChip, 'io'), findsNothing);
+
+    await tester.ensureVisible(otherChip);
+    await tester.pumpAndSettle();
+    await tester.tap(otherChip);
+    await until(row, findsNothing);
+    await tester.tap(otherChip);
+    await until(row, findsOneWidget);
+    await tester.ensureVisible(httpChip);
+    await tester.pumpAndSettle();
+    await tester.tap(httpChip);
+    await tester.pump();
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 50)),
+    );
+    await tester.pump();
+    await until(row, findsOneWidget);
+  });
+
+  testWidgets('a session header is not part of the row under it', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
+    try {
+      await store.upsert(call('n', session: 2, path: '/now', at: clock));
+      await pumpList(tester, onSelected: (_) {});
+
+      final row = tester.getSemantics(find.bySemanticsLabel(RegExp('/now')));
+      expect(row.label, isNot(contains('Today')));
+      expect(row, semanticsLike(isButton: true, hasTapAction: true));
+      expect(row.childrenCount, 0);
+      expect(
+        find.bySemanticsLabel(RegExp(r'^Today \d\d:\d\d — 1 call$')),
+        findsOneWidget,
+      );
+    } finally {
+      semantics.dispose();
+    }
+  });
+
   testWidgets('the inspector shows the call list', (tester) async {
     addTearDown(Proxie.shutdown);
     addTearDown(tester.view.reset);
@@ -837,6 +1140,205 @@ void main() {
     Proxie.open();
     await tester.pumpAndSettle();
     expect(find.byType(CallList), findsOneWidget);
-    expect(find.text('No requests yet'), findsOneWidget);
+  });
+
+  testWidgets('adapters sharing a name get one chip', (tester) async {
+    addTearDown(tester.view.reset);
+    setViewSize(tester, phoneSize);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ProxieTheme.dark(),
+        home: Scaffold(
+          body: CallList(
+            worker: worker,
+            calls: calls.stream,
+            renderCap: 5 * 1024 * 1024,
+            adapterNames: const ['dio', 'dio', 'http'],
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.widgetWithText(FilterChip, 'http'),
+      100,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.widgetWithText(FilterChip, 'dio'), findsOneWidget);
+  });
+
+  testWidgets('a single name, however many adapters, gets no chip', (
+    tester,
+  ) async {
+    addTearDown(tester.view.reset);
+    setViewSize(tester, const Size(4000, 800));
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ProxieTheme.dark(),
+        home: Scaffold(
+          body: CallList(
+            worker: worker,
+            calls: calls.stream,
+            renderCap: 5 * 1024 * 1024,
+            adapterNames: const ['dio', 'dio'],
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(FilterChip, 'dio'), findsNothing);
+  });
+
+  group('the list across data changes', () {
+    testWidgets('a row growing above the screen keeps the rows on it still', (
+      tester,
+    ) async {
+      addTearDown(tester.view.reset);
+      setViewSize(tester, phoneSize);
+      final anchor = ScrollAnchor(rowHeight: 50);
+      addTearDown(anchor.dispose);
+      var extra = 0.0;
+      late StateSetter update;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: StatefulBuilder(
+            builder: (context, setState) {
+              update = setState;
+              return CustomScrollView(
+                controller: anchor.scroll,
+                slivers: [
+                  AnchoredSliver(
+                    anchor: anchor,
+                    sliver: SliverList.builder(
+                      itemCount: 100,
+                      itemBuilder: (context, i) => ScrollAnchorRow(
+                        anchor: anchor,
+                        id: '$i',
+                        index: i,
+                        child: SizedBox(
+                          height: 50 + (i == 10 ? extra : 0),
+                          child: Text('row $i'),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
+      );
+      // Row 10 is above the screen but still laid out.
+      anchor.scroll.jumpTo(50 * 12);
+      await tester.pump();
+      final before = tester.getTopLeft(find.text('row 14')).dy;
+
+      // Row 10 gains a session header; no index changes.
+      anchor.update(added: 0, indexOf: int.parse);
+      update(() => extra = 28);
+      await tester.pump();
+      expect(tester.getTopLeft(find.text('row 14')).dy, before);
+    });
+
+    testWidgets('the pill counts down as the new rows come into view', (
+      tester,
+    ) async {
+      await addItems(200);
+      final engine = await pumpWithEngine(tester);
+      final list = find.byType(Scrollable).last;
+      await tester.drag(list, const Offset(0, -CallRow.height * 50));
+      await tester.pump();
+      await tester.pump();
+      for (var i = 0; i < 5; i++) {
+        await engine.onRequest('n$i', 'http', getRequest('/n$i'));
+        engine.recordResponse('n$i', okResponse());
+      }
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pump();
+      expect(find.text('5 new'), findsOneWidget);
+
+      // Scrolled back to where only two rows are left above the screen.
+      final position = tester.state<ScrollableState>(list).position
+        ..jumpTo(CallRow.height * 2 + 1);
+      await tester.pump();
+      expect(find.text('2 new'), findsOneWidget);
+      // It never counts back up.
+      position.jumpTo(CallRow.height * 4 + 1);
+      await tester.pump();
+      expect(find.text('2 new'), findsOneWidget);
+      position.jumpTo(0);
+      await tester.pump();
+      expect(find.textContaining(' new'), findsNothing);
+    });
+
+    testWidgets('another worker shows its list from the top', (tester) async {
+      await addItems(200);
+      await pumpList(tester);
+      await tester.pump();
+      final list = find.byType(Scrollable).last;
+      await tester.drag(list, const Offset(0, -500));
+      await tester.pumpAndSettle();
+      expect(
+        tester.state<ScrollableState>(list).position.pixels,
+        greaterThan(0),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ProxieTheme.dark(),
+          home: Scaffold(
+            body: CallList(
+              worker: FakeWorker(store, 1),
+              calls: calls.stream,
+              renderCap: 5 * 1024 * 1024,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(tester.state<ScrollableState>(list).position.pixels, 0);
+    });
+  });
+
+  testWidgets('in the shell, tapping a call while its detail goes back '
+      'throws nothing', (tester) async {
+    addTearDown(tester.view.reset);
+    setViewSize(tester, phoneSize);
+    await store.upsert(call('a', at: clock, session: worker.sessionId));
+    final controller = ProxieInspectorController();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ProxieTheme.dark(),
+        home: InspectorShell(
+          controller: controller,
+          listBuilder: (context) => CallList(
+            worker: worker,
+            calls: calls.stream,
+            renderCap: 5 * 1024 * 1024,
+            onSelected: controller.select,
+          ),
+          detailBuilder: (context, id) => Text('detail $id'),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byType(CallRow));
+    await tester.pumpAndSettle();
+    expect(find.text('detail a'), findsOneWidget);
+
+    await tester.tap(find.byType(BackButton));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(controller.selectedCallId, isNull);
+
+    await tester.tap(find.byType(CallRow));
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    expect(controller.selectedCallId, 'a');
+    expect(find.text('detail a'), findsOneWidget);
   });
 }

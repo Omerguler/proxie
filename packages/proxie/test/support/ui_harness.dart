@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:proxie/proxie.dart';
+import 'package:proxie/src/internal_api.dart';
+import 'package:proxie/src/ui/list/call_list.dart';
 
 // Widget tests run the real worker isolate (in-memory store, no files) via
 // `tester.runAsync`: isolate spawn and its messages need real async, while
@@ -68,4 +69,4 @@ final Finder bubbleButton = find.descendant(
 final Finder shellFinder = find.byType(InspectorShell);
 
 ProxieInspectorController controllerIn(WidgetTester tester) =>
-    ProxieInspectorController.of(tester.element(find.text('No requests yet')));
+    ProxieInspectorController.of(tester.element(find.byType(CallList)));

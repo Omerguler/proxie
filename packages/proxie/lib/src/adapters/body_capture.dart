@@ -1,7 +1,23 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 import 'dart:typed_data';
 
 import 'package:proxie/src/model/body.dart';
+
+/// Runs [record], a step that records a call and is not needed by the app,
+/// and logs what it throws: recording must never break live traffic.
+void guardRecording(void Function() record) {
+  try {
+    record();
+  } on Object catch (e, st) {
+    developer.log(
+      'Proxie capture failed',
+      name: 'proxie',
+      error: e,
+      stackTrace: st,
+    );
+  }
+}
 
 /// Streams [source] through unchanged while keeping a copy of its first
 /// bytes for capture.
@@ -11,7 +27,8 @@ import 'package:proxie/src/model/body.dart';
 /// [teedBody]). When [source] ends, [onDone] gets the copy and the total
 /// byte count. A stream error (type `stream_error`, forwarded to the
 /// listener afterwards) or the listener cancelling early (type `cancelled`,
-/// which also cancels [source]) calls [onFail] once instead.
+/// which also cancels [source]) calls [onFail] once instead. What [onDone] and
+/// [onFail] throw is logged and otherwise ignored.
 ///
 /// Pause and resume are forwarded, so back-pressure still reaches [source].
 Stream<List<int>> teeStream(
@@ -30,7 +47,7 @@ Stream<List<int>> teeStream(
   void fail(String type, String message) {
     if (finished) return;
     finished = true;
-    onFail(type, message, kept.toBytes(), total);
+    guardRecording(() => onFail(type, message, kept.toBytes(), total));
   }
 
   late final StreamController<List<int>> controller;
@@ -52,7 +69,7 @@ Stream<List<int>> teeStream(
         onDone: () {
           if (!finished) {
             finished = true;
-            onDone(kept.toBytes(), total);
+            guardRecording(() => onDone(kept.toBytes(), total));
           }
           unawaited(controller.close());
         },
@@ -66,6 +83,62 @@ Stream<List<int>> teeStream(
     },
   );
   return controller.stream;
+}
+
+/// Reads [source] for a response breakpoint, which needs the whole body.
+///
+/// Gives the `body` when [source] ends holding at most [cap] bytes within
+/// [timeout]. Otherwise it may never end (server-sent events, say) and a pause
+/// could not start: gives up and hands back `rest`, which is every byte of
+/// [source], those read so far first, for streaming on as usual. A stream
+/// error before that fails the returned future.
+Future<({Uint8List? body, Stream<List<int>>? rest})> bufferForPause(
+  Stream<List<int>> source, {
+  required int cap,
+  required Duration timeout,
+}) {
+  final result = Completer<({Uint8List? body, Stream<List<int>>? rest})>();
+  final held = BytesBuilder(copy: false);
+  late final StreamSubscription<List<int>> upstream;
+  late final Timer timer;
+  void giveUp() {
+    timer.cancel();
+    upstream.pause();
+    late final StreamController<List<int>> rest;
+    rest = StreamController<List<int>>(
+      onListen: () {
+        final kept = held.takeBytes();
+        if (kept.isNotEmpty) rest.add(kept);
+        upstream
+          ..onData(rest.add)
+          ..onError(rest.addError)
+          ..onDone(() => unawaited(rest.close()))
+          ..resume();
+      },
+      onPause: upstream.pause,
+      onResume: upstream.resume,
+      onCancel: upstream.cancel,
+    );
+    result.complete((body: null, rest: rest.stream));
+  }
+
+  timer = Timer(timeout, giveUp);
+  upstream = source.listen(
+    (chunk) {
+      held.add(chunk);
+      if (held.length > cap) giveUp();
+    },
+    onError: (Object e, StackTrace st) {
+      timer.cancel();
+      unawaited(upstream.cancel());
+      result.completeError(e, st);
+    },
+    onDone: () {
+      timer.cancel();
+      result.complete((body: held.takeBytes(), rest: null));
+    },
+  );
+  return result.future;
 }
 
 /// The stored body for a [teeStream] copy of a [total]-byte stream.

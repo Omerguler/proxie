@@ -4,7 +4,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:proxie/proxie.dart';
+import 'package:proxie/src/internal_api.dart';
 import 'package:proxie/src/storage/sqlite_store.dart';
 import 'package:sqlite3/sqlite3.dart';
 

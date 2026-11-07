@@ -2,7 +2,10 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:proxie/proxie.dart';
+import 'package:proxie/src/core/masking.dart'
+    show kFormType, kMaskInUrl, maskedFormFields;
+import 'package:proxie/src/internal_api.dart';
+import 'package:proxie/src/ui/rules/message_draft.dart' show CountMasked;
 
 ProxieBody _json(String s) =>
     ProxieBody.from(Uint8List.fromList(utf8.encode(s)), 'application/json');
@@ -154,7 +157,7 @@ void main() {
     expect(decoded, {'access_token': kMask, 'ok': true});
   });
 
-  test('pretty-printed json stays pretty-printed after masking', () {
+  test('masking keeps the formatting around the masked value', () {
     final pretty = [
       '{',
       '  "password": "x",',
@@ -162,13 +165,7 @@ void main() {
       '}',
     ].join(String.fromCharCode(10));
     final out = masking.maskRequest(_req(body: _json(pretty)));
-    expect(
-      out.body.text,
-      const JsonEncoder.withIndent('  ').convert({
-        'password': kMask,
-        'a': [1, 2],
-      }),
-    );
+    expect(out.body.text, pretty.replaceFirst('"x"', '"$kMask"'));
     final compact = masking.maskRequest(_req(body: _json('{"password":"x"}')));
     expect(compact.body.text, '{"password":"$kMask"}');
   });
@@ -249,22 +246,514 @@ void main() {
     expect(out.originalLength, src.originalLength);
   });
 
-  test('minified json with a trailing newline stays minified', () {
+  test('a trailing newline stays', () {
     final nl = String.fromCharCode(10);
     final out = masking.maskRequest(
       _req(body: _json('{"password":"x","a":1}$nl')),
     );
-    expect(out.body.text, '{"password":"$kMask","a":1}');
-    final pretty = masking.maskRequest(
-      _req(body: _json('{$nl  "password": "x"$nl}')),
-    );
-    expect(pretty.body.text, contains('$nl  "password"'));
+    expect(out.body.text, '{"password":"$kMask","a":1}$nl');
   });
 
-  test('json with a newline only between tokens stays multi-line', () {
-    final nl = String.fromCharCode(10);
-    final out = masking.maskRequest(_req(body: _json('{$nl"a":1$nl}')));
-    expect(out.body.text, contains(nl));
-    expect(jsonDecode(out.body.text!), {'a': 1});
+  group('a body without a sensitive key is byte for byte the same', () {
+    for (final text in [
+      r'{"price":10.50,"e":1e3,"p":"a\/b"}',
+      '{"id":12345678901234567890}',
+      '{"a":1,"a":2}',
+      '{ "spaced" :  [ 1 , 2 ] }',
+      r'{"é":"\u00e9"}',
+    ]) {
+      test(text, () {
+        final body = _json(text);
+        expect(
+          identical(masking.maskRequest(_req(body: body)).body, body),
+          isTrue,
+        );
+      });
+    }
+  });
+
+  test('masking off leaves bodies alone, sensitive keys included', () {
+    const off = ProxieMasking(headers: {}, jsonKeys: {});
+    final body = _json('{"password":"x","n":10.50}');
+    expect(identical(off.maskRequest(_req(body: body)).body, body), isTrue);
+  });
+
+  test('only the masked values change: lexemes and duplicates stay', () {
+    final out = masking.maskRequest(
+      _req(
+        body: _json(
+          '{"id":12345678901234567890,"p":10.50,"password":"x",'
+          r'"token":1,"token":{"a":[1]},"a":1,"a":"\/"}',
+        ),
+      ),
+    );
+    expect(
+      out.body.text,
+      '{"id":12345678901234567890,"p":10.50,"password":"$kMask",'
+      '"token":"$kMask","token":"$kMask","a":1,"a":"\\/"}',
+    );
+  });
+
+  test('a sensitive key inside a masked value is not spliced twice', () {
+    final out = masking.maskRequest(
+      _req(body: _json('{"token":{"password":"x"},"a":[{"secret":1}]}')),
+    );
+    expect(out.body.text, '{"token":"$kMask","a":[{"secret":"$kMask"}]}');
+  });
+
+  test('a key spelled with an escape is masked', () {
+    final out = masking.maskRequest(
+      _req(body: _json(r'{"pass\u0077ord":"x"}')),
+    );
+    expect(out.body.text, endsWith('0077ord":"$kMask"}'));
+  });
+
+  test('a string equal to a sensitive key in an array stays', () {
+    final body = _json('["password","x"]');
+    expect(identical(masking.maskRequest(_req(body: body)).body, body), isTrue);
+  });
+
+  group('JSON that is not valid UTF-8 still masks (fails closed)', () {
+    for (final type in [
+      'application/json',
+      'application/json; charset=iso-8859-1',
+    ]) {
+      test(type, () {
+        final bytes = Uint8List.fromList([
+          ...utf8.encode('{"password":"hunter2","n":"'),
+          0xE9,
+          ...utf8.encode('"}'),
+        ]);
+        final body = ProxieBody.from(bytes, type);
+        expect(body.text, isNull);
+        final out = masking.maskRequest(_req(body: body)).body;
+        expect(latin1.decode(out.bytes), isNot(contains('hunter2')));
+        // Everything else is the same bytes.
+        expect(out.bytes.sublist(out.bytes.length - 3), [0xE9, 0x22, 0x7D]);
+        expect(utf8.decode(out.bytes, allowMalformed: true), contains(kMask));
+        expect(out.kind, body.kind);
+        expect(out.originalLength, bytes.length);
+      });
+    }
+  });
+
+  test('20,000 levels of nesting are masked, not lost', () {
+    const depth = 20000;
+    final text = '${'[' * depth}{"password":"hunter2"}${']' * depth}';
+    final out = masking.maskRequest(_req(body: _json(text))).body;
+    expect(out.text, isNot(contains('hunter2')));
+    expect(out.text, contains('"password":"$kMask"'));
+  });
+
+  group('JSON under another text content type', () {
+    ProxieBody text(String s, [String type = 'text/plain']) =>
+        ProxieBody.from(Uint8List.fromList(utf8.encode(s)), type);
+
+    test('is masked when it parses', () {
+      final out = masking.maskRequest(
+        _req(body: text('{"password":"hunter2","n":1.50}')),
+      );
+      expect(out.body.text, '{"password":"$kMask","n":1.50}');
+      expect(out.body.kind, BodyKind.text);
+    });
+
+    test('is left alone when it does not parse', () {
+      final body = text('{"password": not json}');
+      expect(
+        identical(masking.maskRequest(_req(body: body)).body, body),
+        isTrue,
+      );
+    });
+
+    test('cut at the cap, it is masked as far as it goes', () {
+      final bytes = Uint8List.fromList(
+        utf8.encode('{"password":"hunter2","pad":"${'x' * 50}"}'),
+      );
+      final body = ProxieBody.from(bytes, 'text/plain', cap: 40);
+      expect(body.truncated, isTrue);
+      final out = masking.maskRequest(_req(body: body)).body;
+      expect(out.text, isNot(contains('hunter2')));
+    });
+
+    test('stringified JSON inside a value stays (documented)', () {
+      final body = _json(r'{"data":"{\"token\":\"abc\"}"}');
+      expect(
+        identical(masking.maskRequest(_req(body: body)).body, body),
+        isTrue,
+      );
+    });
+  });
+
+  group('query parameters', () {
+    ProxieRequest url(String u) => _req().copyWith(url: Uri.parse(u));
+
+    test('a sensitive one is masked; the rest keep their encoding', () {
+      final out = masking.maskRequest(
+        url('https://a.com/x?a=b%20c+d&Token=abc&e&f=#frag?token=keep'),
+      );
+      expect(
+        out.url.toString(),
+        'https://a.com/x?a=b%20c+d&Token=$kMaskInUrl&e&f=#frag?token=keep',
+      );
+      expect(out.url.queryParameters['Token'], kMask);
+    });
+
+    test('a URL with nothing to mask is the same object', () {
+      final r = url('https://a.com/x?a=1&token=&password');
+      expect(identical(masking.maskRequest(r).url, r.url), isTrue);
+    });
+
+    test('names match encoded, in brackets and after a semicolon', () {
+      final out = masking.maskRequest(
+        url('https://a.com/?to%6Ben=1&user[password]=2&secret[]=3&a=1;token=4'),
+      );
+      final query = out.url.query;
+      expect(query, isNot(contains('=1&')));
+      expect(query.split(kMaskInUrl).length - 1, 4);
+      expect(query, contains('a=1;token=$kMaskInUrl'));
+    });
+
+    test('a malformed name or value does not throw', () {
+      final uri = Uri(
+        scheme: 'https',
+        host: 'a.com',
+        query: 'x%zz=1&token=%zz',
+      );
+      final r = _req().copyWith(url: uri);
+      expect(masking.maskRequest(r).url.query, contains('token=$kMaskInUrl'));
+    });
+
+    test('custom keys apply, defaults then do not', () {
+      const custom = ProxieMasking(jsonKeys: {'pin'});
+      final out = custom.maskRequest(url('https://a.com/?PIN=1&token=2'));
+      expect(out.url.query, 'PIN=$kMaskInUrl&token=2');
+    });
+  });
+
+  group('form fields', () {
+    ProxieBody form(String s, {String type = kFormType, int? cap}) {
+      final bytes = Uint8List.fromList(utf8.encode(s));
+      return ProxieBody.from(bytes, type, cap: cap ?? bytes.length);
+    }
+
+    test('a sensitive one is masked; other bytes stay', () {
+      final out = masking.maskRequest(
+        _req(body: form('a=b+c%21&PassWord=hunter%32&user%5Bsecret%5D=x&e')),
+      );
+      expect(
+        out.body.text,
+        'a=b+c%21&PassWord=$kMask&user%5Bsecret%5D=$kMask&e',
+      );
+      expect(out.body.kind, BodyKind.text);
+    });
+
+    test('a charset parameter does not hide the type', () {
+      final out = masking.maskRequest(
+        _req(body: form('token=1', type: '$kFormType; charset=UTF-8')),
+      );
+      expect(out.body.text, 'token=$kMask');
+    });
+
+    test('a truncated form still masks what was kept', () {
+      final body = form('token=abcdefghij&a=1', cap: 10);
+      expect(body.truncated, isTrue);
+      final out = masking.maskRequest(_req(body: body)).body;
+      expect(out.text, 'token=$kMask');
+      expect(out.truncated, isTrue);
+      expect(out.originalLength, 20);
+    });
+
+    test('no sensitive field: the same object', () {
+      final body = form('a=1&token=');
+      expect(
+        identical(masking.maskRequest(_req(body: body)).body, body),
+        isTrue,
+      );
+    });
+
+    test('a form field shape in plain text stays', () {
+      final body = ProxieBody.from(
+        Uint8List.fromList(utf8.encode('password=x')),
+        'text/plain',
+      );
+      expect(
+        identical(masking.maskRequest(_req(body: body)).body, body),
+        isTrue,
+      );
+    });
+  });
+
+  group('errors and headers holding URLs', () {
+    test('an error message keeps its text but not the value', () {
+      final out = masking.maskError(
+        const ProxieError(
+          type: 'network',
+          message:
+              'Failed, uri=https://a.com/x?a=1&token=abc later "?secret=z"',
+        ),
+      );
+      expect(out.type, 'network');
+      expect(
+        out.message,
+        'Failed, uri=https://a.com/x?a=1&token=$kMask later "?secret=$kMask',
+      );
+    });
+
+    test('a redirect target is masked, other headers are not', () {
+      final out = masking.maskResponse(
+        ProxieResponse(
+          statusCode: 302,
+          headers: {
+            'Location': ['https://a.com/cb?code=1&access_token=abc'],
+            'X-Note': ['see ?token=abc'],
+          },
+          body: ProxieBody.empty(),
+        ),
+      );
+      expect(out.headers['location'], [
+        'https://a.com/cb?code=1&access_token=$kMask',
+      ]);
+      expect(out.headers['x-note'], ['see ?token=abc']);
+    });
+  });
+
+  test('ProxieMasking(headers: {}, jsonKeys: {}) turns all of it off', () {
+    const off = ProxieMasking(headers: {}, jsonKeys: {});
+    final body = ProxieBody.from(
+      Uint8List.fromList(utf8.encode('token=1')),
+      kFormType,
+    );
+    final r = ProxieRequest(
+      method: 'POST',
+      url: Uri.parse('https://a.com/?token=1'),
+      headers: const {
+        'authorization': ['x'],
+        'referer': ['https://a.com/?token=1'],
+      },
+      body: body,
+    );
+    final out = off.maskRequest(r);
+    expect(out.url.toString(), 'https://a.com/?token=1');
+    expect(out.headers, r.headers);
+    expect(identical(out.body, body), isTrue);
+    const e = ProxieError(type: 'x', message: 'https://a.com/?token=1');
+    expect(off.maskError(e).message, e.message);
+  });
+
+  group('JSON under a form content type', () {
+    ProxieBody form(String s, {int? cap}) {
+      final bytes = Uint8List.fromList(utf8.encode(s));
+      return ProxieBody.from(bytes, kFormType, cap: cap ?? bytes.length);
+    }
+
+    test('is masked as JSON', () {
+      final out = masking.maskRequest(
+        _req(body: form('{"password":"hunter2","n":1.50}')),
+      );
+      expect(out.body.text, '{"password":"$kMask","n":1.50}');
+    });
+
+    test('a value holding = changes nothing', () {
+      final out = masking.maskRequest(
+        _req(body: form('{"password":"a=b","x":1}')),
+      );
+      expect(out.body.text, '{"password":"$kMask","x":1}');
+    });
+
+    test('with nothing to mask it is the same object', () {
+      final body = form('{"a":"b=c"}');
+      expect(
+        identical(masking.maskRequest(_req(body: body)).body, body),
+        isTrue,
+      );
+    });
+
+    test('cut at the cap it is still masked', () {
+      final body = form('{"password":"hunter2","pad":"${'x' * 50}"}', cap: 40);
+      expect(body.truncated, isTrue);
+      final out = masking.maskRequest(_req(body: body)).body;
+      expect(out.text, isNot(contains('hunter2')));
+    });
+
+    test('a real form that starts with a bracket goes on as a form', () {
+      final out = masking.maskRequest(_req(body: form('[a]=1&token=x'))).body;
+      expect(out.text, '[a]=1&token=$kMask');
+    });
+
+    test('holds no form field, so Edit & resend treats it as JSON', () {
+      expect(maskedFormFields('{"password":"$kMask","x":1}'), isEmpty);
+    });
+
+    test('its masked values are counted for Edit & resend', () async {
+      final ctx = WorkerContext(
+        store: MemoryStore(),
+        config: const ProxieConfig(),
+      );
+      const text = '{"password":"$kMask","x":1}';
+      expect(await const CountMasked.text(text, form: true).execute(ctx), 1);
+      expect(
+        await CountMasked(
+          Uint8List.fromList(utf8.encode(text)),
+          form: true,
+        ).execute(ctx),
+        1,
+      );
+      expect(
+        await const CountMasked.text(
+          'a=1&password=$kMask',
+          form: true,
+        ).execute(ctx),
+        1,
+      );
+    });
+
+    test('a broken one is scanned as JSON and as a form', () {
+      final out = masking
+          .maskRequest(_req(body: form('{"password":"hunter2",}&token=x')))
+          .body;
+      expect(out.text, '{"password":"$kMask",}&token=$kMask');
+    });
+  });
+
+  group('a raw ; in a masked value', () {
+    test('in a query, the value ends at the next &', () {
+      final out = masking.maskUrl(Uri.parse('https://x/p?token=abc;def&b=2'));
+      expect(out.query, 'token=$kMaskInUrl&b=2');
+    });
+
+    test('in a form, the value ends at the next &', () {
+      final body = ProxieBody.from(
+        Uint8List.fromList(utf8.encode('password=abc;def&b=2')),
+        kFormType,
+      );
+      final out = masking.maskRequest(_req(body: body)).body;
+      expect(out.text, 'password=$kMask&b=2');
+    });
+
+    test('; still separates names', () {
+      expect(
+        masking.maskUrl(Uri.parse('https://x/?a=1;token=x&b=2')).query,
+        'a=1;token=$kMaskInUrl&b=2',
+      );
+    });
+
+    test('a masked field after a ; is found for Edit & resend', () {
+      expect(maskedFormFields('a=1;password=$kMask&b=2'), ['password']);
+      expect(maskedFormFields('password=$kMask&b=2'), ['password']);
+      expect(maskedFormFields('a=1&b=2'), isEmpty);
+    });
+  });
+
+  group('URLs in headers and errors', () {
+    String location(String v) => masking
+        .maskResponse(
+          ProxieResponse(
+            statusCode: 302,
+            headers: {
+              'Location': [v],
+            },
+            body: ProxieBody.empty(),
+          ),
+        )
+        .headers['location']!
+        .single;
+
+    test('a header value ends only at & or #', () {
+      expect(
+        location('https://x/cb?token=abc,def&y=1'),
+        'https://x/cb?token=$kMask&y=1',
+      );
+      expect(
+        location("https://x/?secret=ab)cd'ef"),
+        'https://x/?secret=$kMask',
+      );
+      expect(
+        location('https://x/cb?token=abc;def'),
+        'https://x/cb?token=$kMask',
+      );
+      expect(
+        location('https://x/cb?a=1;token=abc#token=frag'),
+        'https://x/cb?a=1;token=$kMask#token=frag',
+      );
+      expect(location('https://x/cb?a=1'), 'https://x/cb?a=1');
+    });
+
+    test('an error value ends only at &, # or whitespace', () {
+      String err(String m) =>
+          masking.maskError(ProxieError(type: 't', message: m)).message;
+      expect(
+        err('uri=https://x/?token=abc,def and more'),
+        'uri=https://x/?token=$kMask and more',
+      );
+      expect(err('at ?a=1;token=x y'), 'at ?a=1;token=$kMask y');
+      expect(err('at ?token=a#b'), 'at ?token=$kMask#b');
+      expect(err('no url here'), 'no url here');
+    });
+  });
+
+  group('JSON-looking bodies classified binary', () {
+    Uint8List latinBody(String head) =>
+        Uint8List.fromList([...utf8.encode(head), 0xE9, ...utf8.encode('"}')]);
+
+    for (final type in [null, 'text/plain', 'application/octet-stream']) {
+      test('under $type', () {
+        final body = ProxieBody.from(
+          latinBody('{"password":"hunter2","n":"'),
+          type,
+        );
+        expect(body.kind, BodyKind.binary);
+        final out = masking.maskRequest(_req(body: body)).body;
+        expect(latin1.decode(out.bytes), isNot(contains('hunter2')));
+        expect(out.bytes.sublist(out.bytes.length - 3), [0xE9, 0x22, 0x7D]);
+      });
+    }
+
+    test('other binary is the same object', () {
+      final body = ProxieBody.from(
+        Uint8List.fromList([0x7B, 0, 1, 2, 0xFF]),
+        'application/octet-stream',
+      );
+      expect(
+        identical(masking.maskRequest(_req(body: body)).body, body),
+        isTrue,
+      );
+    });
+  });
+
+  group('values the text scan does not recognise fail closed', () {
+    String scan(String s) =>
+        masking.maskRequest(_req(body: _json(s))).body.text!;
+
+    test('single quotes', () {
+      expect(scan("{\"password\":'hunter2'}"), '{"password":"$kMask"}');
+      expect(scan("{\"password\":'a,b',\"c\":1"), '{"password":"$kMask","c":1');
+    });
+
+    test('a number with junk after it', () {
+      expect(scan('{"token":123abc}'), '{"token":"$kMask"}');
+    });
+
+    test('a bare word', () {
+      expect(scan('{"token":abc,"a":1'), '{"token":"$kMask","a":1');
+    });
+
+    test('a literal cut short', () {
+      expect(scan('{"token":tr'), '{"token":"$kMask"');
+    });
+
+    test('no value at all is left alone', () {
+      expect(scan('{"token":,"a":1'), '{"token":,"a":1');
+      expect(scan('{"token":'), '{"token":');
+    });
+  });
+
+  test('pairs without = scan in linear time', () {
+    final body = ProxieBody.from(
+      Uint8List.fromList(utf8.encode('a&' * 200000)),
+      kFormType,
+    );
+    final sw = Stopwatch()..start();
+    expect(identical(masking.maskRequest(_req(body: body)).body, body), isTrue);
+    expect(sw.elapsed, lessThan(const Duration(seconds: 5)));
   });
 }

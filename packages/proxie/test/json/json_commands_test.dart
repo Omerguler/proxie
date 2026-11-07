@@ -2,7 +2,8 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:proxie/proxie.dart';
+import 'package:proxie/src/internal_api.dart';
+import 'package:proxie/src/ui/json/text_lines.dart';
 import 'package:proxie/src/worker/isolate_worker.dart';
 
 ProxieBody _body(String s, {String type = 'application/json', int? cap}) =>
@@ -51,6 +52,38 @@ void main() {
       OpenJson(id, side).execute(ctx);
 
   Iterable<JsonDocument> openDocs() => ctx.resources.values.whereType();
+
+  test(
+    'a close from an earlier open leaves a document reopened since',
+    () async {
+      final bytes = Uint8List.fromList(utf8.encode('{"a":1}'));
+      OpenJson open() =>
+          OpenJson('c', JsonBodySide.request, scope: 'editor', bytes: bytes);
+      final first = await open().execute(ctx);
+      final second = await open().execute(ctx);
+      expect(second.docId, first.docId, reason: 'reused');
+      await CloseJson(first.docId, openToken: first.openToken).execute(ctx);
+      expect(openDocs(), hasLength(1));
+      await CloseJson(second.docId, openToken: second.openToken).execute(ctx);
+      expect(openDocs(), isEmpty);
+    },
+  );
+
+  test('live bytes open in an editor scope without a stored call, never '
+      'in the view scope', () async {
+    final bytes = Uint8List.fromList(utf8.encode('{"a":1}'));
+    final h = await OpenJson(
+      'live',
+      JsonBodySide.request,
+      scope: 'breakpoint:live:request',
+      bytes: bytes,
+    ).execute(ctx);
+    expect(h.parseError, isNull);
+    expect(
+      () => OpenJson('live', JsonBodySide.request, bytes: bytes).execute(ctx),
+      throwsA(isA<ArgumentError>()),
+    );
+  });
 
   test('open, page, toggle and close a request body', () async {
     await store.upsert(_call('c1', response: _body('{"ok":true}')));
@@ -388,5 +421,89 @@ void main() {
         ),
       ),
     );
+  });
+
+  test('visible count and whole scalar text', () async {
+    // A JSON escape, so the string is decoded from its source text.
+    final long = 'é\\n${'x' * 300}';
+    await store.upsert(
+      _call(
+        'c1',
+        response: _body(
+          '{"list":[{"s":"$long","n":12345678901234567890,"b":false,'
+          '"z":null}]}',
+        ),
+      ),
+    );
+    final h = await open('c1', JsonBodySide.response);
+    expect(await JsonVisibleCount(h.docId).execute(ctx), 1);
+    // Nodes: root 0, list 1, item 2, then s 3, n 4, b 5, z 6.
+    expect(await JsonReveal(h.docId, 3).execute(ctx), 2);
+    expect(await JsonVisibleCount(h.docId).execute(ctx), 6);
+    Future<String> text(int id) => JsonScalarText(h.docId, id).execute(ctx);
+    expect(await text(3), 'é\n${'x' * 300}');
+    expect(await text(4), '12345678901234567890');
+    expect(await text(5), 'false');
+    expect(await text(6), 'null');
+    await expectLater(text(2), throwsArgumentError);
+    await JsonApply(h.docId, const SetValue(3, 'new')).execute(ctx);
+    await JsonApply(
+      h.docId,
+      const SetValue(4, JsonNumber('1e400')),
+    ).execute(ctx);
+    expect(await text(3), 'new');
+    expect(await text(4), '1e400');
+  });
+
+  test('documents are kept per scope; a reopen reports dirty', () async {
+    await store.upsert(_call('c1', response: _body('[1]')));
+    final view = await open('c1', JsonBodySide.response);
+    final edit = await const OpenJson(
+      'c1',
+      JsonBodySide.response,
+      scope: 'edit:rule',
+    ).execute(ctx);
+    expect(edit.docId, isNot(view.docId));
+    await JsonApply(edit.docId, const DuplicateItem(1)).execute(ctx);
+    final viewAgain = await open('c1', JsonBodySide.response);
+    expect(viewAgain.docId, view.docId);
+    expect(viewAgain.dirty, isFalse);
+    expect(viewAgain.visibleCount, 1);
+    final editAgain = await const OpenJson(
+      'c1',
+      JsonBodySide.response,
+      scope: 'edit:rule',
+    ).execute(ctx);
+    expect(editAgain.docId, edit.docId);
+    expect(editAgain.dirty, isTrue);
+    expect(editAgain.visibleCount, 2);
+  });
+
+  test('root row and value of a document', () async {
+    await store.upsert(
+      _call('c1', response: _body('{"n":12345678901234567890,"l":[true]}')),
+    );
+    final h = await open('c1', JsonBodySide.response);
+    final root = await JsonRootRow(h.docId).execute(ctx);
+    expect(root!.nodeId, 0);
+    expect(root.kind, JsonKind.object);
+    expect(root.preview, '{2 keys}');
+    final doc = openDocs().single;
+    expect(doc.valueOf(0), {
+      'n': const JsonNumber('12345678901234567890'),
+      'l': [true],
+    });
+  });
+
+  test('raw text lines cross the isolate boundary', () async {
+    final worker = await IsolateWorker.spawn(
+      const ProxieConfig(persistHistory: false),
+      MemoryStore.new,
+    );
+    addTearDown(worker.dispose);
+    final lines = await worker.run(
+      RawTextLines(Uint8List.fromList(utf8.encode('[1]')), prettyJson: true),
+    );
+    expect(lines, ['[\n', '  1\n', ']']);
   });
 }

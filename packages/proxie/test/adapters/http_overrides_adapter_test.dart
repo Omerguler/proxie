@@ -3,8 +3,8 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:proxie/proxie.dart';
 import 'package:proxie/src/adapters/http_overrides_stub.dart' as stub;
+import 'package:proxie/src/internal_api.dart';
 
 import '../support/io_harness.dart';
 

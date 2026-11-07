@@ -11,7 +11,8 @@ enum BodyKind {
   /// No content.
   empty,
 
-  /// Valid JSON, shown as a tree.
+  /// Declared as JSON, or starting like JSON with no such declaration; it may
+  /// still not parse. Shown as a tree when it does.
   json,
 
   /// Readable text, shown as is.
@@ -57,6 +58,8 @@ class ProxieBody {
       while (end > 0 && (bytes[end] & 0xC0) == 0x80) {
         end--;
       }
+      // Nothing is left of a cut through the first character.
+      if (end == 0) kind = BodyKind.empty;
     }
     var body = ProxieBody(
       // An owned copy, so later changes to the caller's buffer do not leak in.

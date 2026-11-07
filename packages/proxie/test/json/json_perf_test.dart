@@ -5,7 +5,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:proxie/proxie.dart';
+import 'package:proxie/src/internal_api.dart';
 import 'package:proxie/src/json/json_nodes.dart' show jsonBytesPerNode;
 
 const _items = 40000;
@@ -118,6 +118,22 @@ void main() {
     expect(doc.parseError, isNull);
     expect(doc.visibleCount, _items);
     expect(t, lessThan(1500 * 1000));
+  });
+
+  test('appending 22k items one by one < 500 ms', () {
+    final doc = JsonDocument.tryParse(
+      Uint8List.fromList(utf8.encode('{"l":[]}')),
+    );
+    final l = doc.rows(0, 1).single.nodeId;
+    doc.toggle(l);
+    final sw = Stopwatch()..start();
+    for (var i = 0; i < 20000; i++) {
+      doc.apply(AddItem(l, i));
+    }
+    for (var i = 0; i < 2000; i++) {
+      doc.apply(AddKey(0, 'k$i', i));
+    }
+    expect(sw.elapsedMilliseconds, lessThan(500));
   });
 
   test('rows(20000, 60) < 5 ms', () {

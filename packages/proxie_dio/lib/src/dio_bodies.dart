@@ -88,25 +88,84 @@ ProxieBody _placeholder(String text, int originalLength) => ProxieBody(
 /// The bytes behind a decoded Dio response [data] (not a stream).
 ///
 /// Maps and lists (decoded JSON) are encoded back to JSON, strings to UTF-8;
-/// with [ResponseType.bytes] the data is the body itself.
-Uint8List encodeResponseData(Object? data, ResponseType type) {
+/// with [ResponseType.bytes] the data is the body itself. A custom
+/// responseDecoder may leave values JSON cannot hold: they become their
+/// `toString`, so that the keys around them stay JSON and get masked. What
+/// still cannot be encoded becomes a placeholder, never `Map.toString`, whose
+/// unquoted keys masking would not find.
+///
+/// Encoding runs on the app's isolate, so it stops once more than [limit]
+/// bytes are out, when one is given: what is past the capture cap would be
+/// thrown away anyway.
+Uint8List encodeResponseData(Object? data, ResponseType type, {int? limit}) {
   if (data == null) return Uint8List(0);
   if (data is Uint8List) return data;
-  if (data is String) return utf8.encode(data);
+  if (data is String) {
+    // A character takes at least one byte.
+    return utf8.encode(
+      limit != null && data.length > limit
+          ? data.substring(0, limit + 1)
+          : data,
+    );
+  }
   if (type == ResponseType.bytes && data is List<int>) {
     return Uint8List.fromList(data);
   }
-  if (data is Map || data is List || data is num || data is bool) {
+  if (data is Map || data is Iterable || data is num || data is bool) {
     try {
-      return utf8.encode(jsonEncode(data));
-      // jsonEncode reports an unencodable object only with this Error, so it
-      // is caught to fall back to the toString() form below.
+      return _encodeJson(data, limit);
+      // The encoder reports an unencodable object only with this Error: a
+      // cycle, or a toString that throws.
       // ignore: avoid_catching_errors
     } on JsonUnsupportedObjectError {
-      // A custom responseDecoder may produce objects JSON cannot hold.
+      return utf8.encode('body not captured: not encodable as JSON');
     }
   }
   return utf8.encode('$data');
+}
+
+/// What the JSON encoder writes in place of a value it cannot hold.
+Object? _toEncodable(Object? value) => switch (value) {
+  final Map<Object?, Object?> map => {
+    for (final e in map.entries) '${e.key}': e.value,
+  },
+  final Iterable<Object?> items => items.toList(),
+  _ => value.toString(),
+};
+
+Uint8List _encodeJson(Object data, int? limit) {
+  final out = BytesBuilder(copy: false);
+  final sink = _LimitedSink(out, limit);
+  try {
+    JsonUtf8Encoder(null, _toEncodable, 64 * 1024).startChunkedConversion(sink)
+      ..add(data)
+      ..close();
+  } on _LimitReached {
+    // Enough for the capture.
+  }
+  return out.takeBytes();
+}
+
+/// Thrown by [_LimitedSink] to stop the encoder, which has no other way out.
+class _LimitReached implements Exception {
+  const _LimitReached();
+}
+
+class _LimitedSink implements Sink<List<int>> {
+  _LimitedSink(this._out, this._limit);
+
+  final BytesBuilder _out;
+  final int? _limit;
+
+  @override
+  void add(List<int> chunk) {
+    _out.add(chunk);
+    final limit = _limit;
+    if (limit != null && _out.length > limit) throw const _LimitReached();
+  }
+
+  @override
+  void close() {}
 }
 
 /// The stored body for a [ResponseType.stream] response: not read, so empty

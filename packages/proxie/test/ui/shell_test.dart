@@ -1,10 +1,87 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:proxie/proxie.dart';
+import 'package:proxie/src/internal_api.dart';
+import 'package:proxie/src/ui/list/call_list.dart';
 
 import '../support/ui_harness.dart';
 
+final Finder _listFinder = find.byType(CallList);
+
+/// Holds state a remount would lose.
+class _Stateful extends StatefulWidget {
+  const _Stateful(this.name);
+
+  final String name;
+
+  static int created = 0;
+
+  @override
+  State<_Stateful> createState() => _StatefulState();
+}
+
+class _StatefulState extends State<_Stateful> {
+  final _text = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _Stateful.created++;
+  }
+
+  @override
+  void dispose() {
+    _text.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      TextField(key: ValueKey(widget.name), controller: _text);
+}
+
 void main() {
+  testWidgets('crossing the split width keeps list and detail state', (
+    tester,
+  ) async {
+    addTearDown(tester.view.reset);
+    _Stateful.created = 0;
+    setViewSize(tester, const Size(1000, 800));
+    final controller = ProxieInspectorController()..select('c1');
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: InspectorShell(
+          controller: controller,
+          listBuilder: (_) => const _Stateful('list'),
+          detailBuilder: (_, id) => _Stateful('detail-$id'),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(_Stateful.created, 2);
+    await tester.enterText(find.byKey(const ValueKey('list')), 'kept');
+    await tester.enterText(find.byKey(const ValueKey('detail-c1')), 'also');
+
+    setViewSize(tester, phoneSize);
+    await tester.pumpAndSettle();
+    expect(_Stateful.created, 2);
+    expect(find.text('also'), findsOneWidget);
+
+    setViewSize(tester, const Size(1000, 800));
+    await tester.pumpAndSettle();
+    expect(_Stateful.created, 2);
+    expect(find.text('kept'), findsOneWidget);
+    expect(find.text('also'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    // Another call is a new detail; the list stays.
+    controller.select('c2');
+    await tester.pumpAndSettle();
+    expect(_Stateful.created, 3);
+    expect(find.text('also'), findsNothing);
+    expect(find.text('kept'), findsOneWidget);
+  });
+
   tearDown(() async {
     await Proxie.shutdown();
   });
@@ -114,6 +191,99 @@ void main() {
       expect(controller.selectedCallId, 'b');
       expect(find.text('detail b'), findsOneWidget);
       expect(find.text('detail a'), findsNothing);
+    });
+
+    group('tapping a call while its detail is on its way out', () {
+      Widget tappable() => MaterialApp(
+        home: InspectorShell(
+          controller: controller,
+          listBuilder: (context) => Center(
+            child: TextButton(
+              onPressed: () => controller.select('a'),
+              child: const Text('row a'),
+            ),
+          ),
+          // Depends on the view size, so a resize rebuilds it in place.
+          detailBuilder: (context, id) =>
+              Text('detail $id ${MediaQuery.sizeOf(context).width}'),
+        ),
+      );
+
+      Finder detailA() => find.textContaining('detail a');
+
+      Future<void> openThenBack(WidgetTester tester) async {
+        addTearDown(tester.view.reset);
+        setViewSize(tester, phoneSize);
+        await tester.pumpWidget(tappable());
+        await tester.tap(find.text('row a'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byType(BackButton));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(controller.selectedCallId, isNull);
+      }
+
+      testWidgets('opens it again without a duplicate key', (tester) async {
+        await openThenBack(tester);
+        await tester.tap(find.text('row a'));
+        await tester.pump();
+        expect(tester.takeException(), isNull);
+        await tester.pump(const Duration(milliseconds: 50));
+        expect(tester.takeException(), isNull);
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+        expect(controller.selectedCallId, 'a');
+        expect(detailA(), findsOneWidget);
+      });
+
+      testWidgets('the route on its way out may rebuild meanwhile', (
+        tester,
+      ) async {
+        await openThenBack(tester);
+        await tester.tap(find.text('row a'));
+        await tester.pump();
+        expect(detailA(), findsNWidgets(2));
+        setViewSize(tester, Size(phoneSize.width - 10, phoneSize.height));
+        await tester.pump();
+        expect(tester.takeException(), isNull);
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+        expect(detailA(), findsOneWidget);
+      });
+
+      testWidgets('and goes back again, over and over', (tester) async {
+        await openThenBack(tester);
+        for (var i = 0; i < 3; i++) {
+          await tester.tap(find.text('row a'));
+          await tester.pump();
+          await tester.pump(const Duration(milliseconds: 100));
+          await tester.tap(find.byType(BackButton).last);
+          await tester.pump();
+          await tester.pump(const Duration(milliseconds: 100));
+          expect(tester.takeException(), isNull);
+        }
+        await tester.pumpAndSettle();
+        expect(controller.selectedCallId, isNull);
+        expect(detailA(), findsNothing);
+      });
+
+      testWidgets('a selection cleared from outside drops the key too', (
+        tester,
+      ) async {
+        addTearDown(tester.view.reset);
+        setViewSize(tester, phoneSize);
+        await tester.pumpWidget(tappable());
+        controller.select('a');
+        await tester.pumpAndSettle();
+        controller.select(null);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+        controller.select('a');
+        await tester.pump();
+        expect(tester.takeException(), isNull);
+        await tester.pumpAndSettle();
+        expect(detailA(), findsOneWidget);
+      });
     });
 
     testWidgets('resizing switches layouts live and keeps the selection', (
@@ -265,13 +435,13 @@ void main() {
       await tester.pumpAndSettle();
       final controller = controllerIn(tester)..select('a');
       await tester.pumpAndSettle();
-      expect(find.text('No requests yet'), findsNothing);
+      expect(_listFinder, findsNothing);
 
       await tester.binding.handlePopRoute();
       await tester.pumpAndSettle();
       expect(shellFinder, findsOneWidget);
       expect(controller.selectedCallId, isNull);
-      expect(find.text('No requests yet'), findsOneWidget);
+      expect(_listFinder, findsOneWidget);
 
       await tester.binding.handlePopRoute();
       await tester.pumpAndSettle();
@@ -286,7 +456,7 @@ void main() {
       await tester.pumpWidget(hostApp());
       Proxie.open();
       await tester.pumpAndSettle();
-      expect(find.text('No requests yet'), findsOneWidget);
+      expect(_listFinder, findsOneWidget);
       expect(find.text('Select a request'), findsOneWidget);
       await tester.runAsync(Proxie.shutdown);
     });
@@ -301,7 +471,7 @@ void main() {
       await tester.pumpWidget(hostApp());
       Proxie.open();
       await tester.pumpAndSettle();
-      expect(find.text('No requests yet'), findsOneWidget);
+      expect(_listFinder, findsOneWidget);
       expect(find.text('Select a request'), findsNothing);
       await tester.runAsync(Proxie.shutdown);
     });
@@ -329,7 +499,7 @@ void main() {
       expect(host.colorScheme.primary, hostTheme.colorScheme.primary);
       expect(host.extension<ProxieColors>(), isNull);
 
-      final proxie = Theme.of(tester.element(find.text('No requests yet')));
+      final proxie = Theme.of(tester.element(_listFinder));
       expect(proxie.brightness, Brightness.dark);
       expect(
         proxie.colorScheme.primary,
@@ -390,6 +560,12 @@ void main() {
           pausedAt: DateTime.now(),
         ),
       );
+      // The pause opens the inspector on its editor; back closes both.
+      await tester.pumpAndSettle();
+      expect(bubbleFinder, findsNothing);
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      await tester.binding.handlePopRoute();
       await tester.pump();
       // The first frame starts the ticker; the next one advances it.
       await tester.pump(const Duration(milliseconds: 100));
@@ -447,16 +623,17 @@ void main() {
       await tester.pumpAndSettle();
       expect(shellFinder, findsOneWidget);
       expect(key.currentState!.canPop(), isTrue);
-      final route = ModalRoute.of(tester.element(shellFinder))!;
+      // The inspector page is the host route; pages opened from it go on
+      // the inspector's own navigator inside it.
+      final route = ModalRoute.of(
+        tester.element(find.byType(ProxieInspector)),
+      )!;
       expect(route.navigator, same(key.currentState));
       expect(route, isA<MaterialPageRoute<void>>());
       expect((route as MaterialPageRoute<void>).fullscreenDialog, isTrue);
       expect(bubbleFinder, findsNothing);
       // Themed with Proxie's theme, not the host's.
-      expect(
-        Theme.of(tester.element(find.text('No requests yet'))).brightness,
-        Brightness.dark,
-      );
+      expect(Theme.of(tester.element(_listFinder)).brightness, Brightness.dark);
 
       await tester.tap(find.byTooltip('Close'));
       await tester.pumpAndSettle();

@@ -364,11 +364,12 @@ int jsonNumberEnd(Uint8List b, int start) {
 }
 
 /// Decodes the valid JSON string at [quote], stopping once at least
-/// [maxUnits] UTF-16 code units have been produced.
+/// [maxUnits] UTF-16 code units have been produced. The default must stay
+/// within 32 bits: dart2js shifts in 32 bits, so `1 << 50` is 0 there.
 String decodeJsonString(
   Uint8List b,
   int quote, {
-  int maxUnits = 1 << 50,
+  int maxUnits = 0x7FFFFFFF,
   bool escaped = true,
 }) {
   final start = quote + 1;

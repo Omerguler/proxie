@@ -26,9 +26,15 @@ enum JsonBodySide {
 }
 
 /// The document named by [docId] was closed, evicted or never opened.
-class JsonDocumentClosed implements Exception {
+class JsonDocumentClosed implements Exception, CodedWorkerError {
   /// Creates the error for the document [docId].
   const JsonDocumentClosed(this.docId);
+
+  /// The [ProxieWorkerException.code] of this error.
+  static const errorCode = 'json_document_closed';
+
+  @override
+  String get code => errorCode;
 
   /// The id that named no open document.
   final String docId;
@@ -45,6 +51,8 @@ class JsonHandle {
     required this.visibleCount,
     required this.truncated,
     this.parseError,
+    this.dirty = false,
+    this.openToken = 0,
   });
 
   /// Names the document in later commands; valid until [CloseJson] or
@@ -59,21 +67,44 @@ class JsonHandle {
 
   /// Whether the body was cut at capture.
   final bool truncated;
+
+  /// Whether the document returned already holds edits (it was reopened
+  /// in the same scope after edits; see [OpenJson.scope]).
+  final bool dirty;
+
+  /// Names this open of the document: a [CloseJson] passing it closes the
+  /// document only if nobody opened it again since.
+  final int openToken;
 }
 
 /// Parses the [side] body of call [callId] into a document held by the
 /// worker. Bodies of any kind are attempted, since JSON is often
-/// mislabeled. Reopening an unchanged body returns the document already
-/// open for it, expansion state included.
+/// mislabeled. Documents are kept per (callId, side, [scope]): reopening
+/// an unchanged body in the same scope returns the document already open
+/// for it, edits and expansion state included, while another scope gets
+/// its own copy.
 class OpenJson extends WorkerCommand<JsonHandle> {
-  /// Creates a command that opens the [side] body of call [callId].
-  const OpenJson(this.callId, this.side);
+  /// Creates a command that opens the [side] body of call [callId] in
+  /// [scope]; with [bytes], those instead of the stored body.
+  const OpenJson(this.callId, this.side, {this.scope = viewScope, this.bytes});
+
+  /// The scope read-only views share.
+  static const viewScope = 'view';
+
+  /// Which copy of the document to open: read-only views share
+  /// [viewScope]; each editor uses its own, so its edits stay in it.
+  final String scope;
 
   /// The id of the call whose body is opened.
   final String callId;
 
   /// Which of the call's bodies is opened.
   final JsonBodySide side;
+
+  /// A whole body to open instead of the stored one, such as a paused
+  /// call's live body (not stored yet, and stored masked once it is).
+  /// Refused in [viewScope] with an [ArgumentError].
+  final Uint8List? bytes;
 
   /// The parse error reported for a body that was cut at capture, since
   /// its tail, not the JSON, is what is missing.
@@ -82,6 +113,34 @@ class OpenJson extends WorkerCommand<JsonHandle> {
 
   @override
   Future<JsonHandle> execute(WorkerContext ctx) async {
+    final live = this.bytes;
+    // The view scope is shared by the read-only detail, which must only
+    // ever show the stored (masked) body.
+    if (live != null && scope == viewScope) {
+      throw ArgumentError.value(scope, 'scope', 'Live bytes need own scope');
+    }
+    final (bytes, truncated) = live != null
+        ? (live, false)
+        : await _stored(ctx);
+    final docs = _JsonDocs.of(ctx);
+    final source = '$callId\u0000${side.name}\u0000$scope';
+    final (docId, doc) =
+        docs.reuse(source, bytes) ??
+        docs.add(source, bytes, JsonDocument.tryParse(bytes));
+    return JsonHandle(
+      docId: docId,
+      visibleCount: doc.visibleCount,
+      parseError: doc.parseError == null
+          ? null
+          : (truncated ? truncatedError : doc.parseError),
+      truncated: truncated,
+      dirty: doc.dirty,
+      openToken: docs.touchOpen(docId),
+    );
+  }
+
+  /// The stored body's bytes and whether it was cut at capture.
+  Future<(Uint8List, bool)> _stored(WorkerContext ctx) async {
     final call = await ctx.store.get(callId);
     if (call == null) throw StateError('No call $callId');
     final ProxieBody body;
@@ -93,19 +152,7 @@ class OpenJson extends WorkerCommand<JsonHandle> {
         if (response == null) throw StateError('Call $callId has no response');
         body = response.body;
     }
-    final docs = _JsonDocs.of(ctx);
-    final source = '$callId\u0000${side.name}';
-    final (docId, doc) =
-        docs.reuse(source, body.bytes) ??
-        docs.add(source, body.bytes, JsonDocument.tryParse(body.bytes));
-    return JsonHandle(
-      docId: docId,
-      visibleCount: doc.visibleCount,
-      parseError: doc.parseError == null
-          ? null
-          : (body.truncated ? truncatedError : doc.parseError),
-      truncated: body.truncated,
-    );
+    return (body.bytes, body.truncated);
   }
 }
 
@@ -248,23 +295,77 @@ class JsonReveal extends WorkerCommand<int> {
       _JsonDocs.of(ctx).get(docId).reveal(nodeId);
 }
 
+/// The number of rows document [docId] shows now, e.g. after [JsonReveal]
+/// expanded some.
+class JsonVisibleCount extends WorkerCommand<int> {
+  /// Creates a command that counts the visible rows of [docId].
+  const JsonVisibleCount(this.docId);
+
+  /// The document to count.
+  final String docId;
+
+  @override
+  Future<int> execute(WorkerContext ctx) async =>
+      _JsonDocs.of(ctx).get(docId).visibleCount;
+}
+
+/// The whole value of scalar [nodeId]; see [JsonDocument.scalarText].
+class JsonScalarText extends WorkerCommand<String> {
+  /// Creates a command that reads scalar [nodeId] of document [docId].
+  const JsonScalarText(this.docId, this.nodeId);
+
+  /// The document holding the node.
+  final String docId;
+
+  /// The scalar node to read.
+  final int nodeId;
+
+  @override
+  Future<String> execute(WorkerContext ctx) async =>
+      _JsonDocs.of(ctx).get(docId).scalarText(nodeId);
+}
+
+/// The top-level value of document [docId] as a row (depth 0, no key or
+/// index), so a view can show a header for a root object or array; see
+/// [JsonDocument.rootRow].
+class JsonRootRow extends WorkerCommand<JsonRow?> {
+  /// Creates a command that reads the root of document [docId].
+  const JsonRootRow(this.docId);
+
+  /// The document to read.
+  final String docId;
+
+  @override
+  Future<JsonRow?> execute(WorkerContext ctx) async =>
+      _JsonDocs.of(ctx).get(docId).rootRow();
+}
+
 /// Releases a document; unknown ids are ignored.
 class CloseJson extends WorkerCommand<void> {
-  /// Creates a command that closes document [docId].
-  const CloseJson(this.docId);
+  /// Creates a command that closes document [docId]; with [openToken]
+  /// (see [JsonHandle.openToken]) only if it was not opened again since.
+  const CloseJson(this.docId, {this.openToken});
 
   /// The document to release.
   final String docId;
 
+  /// The open this close belongs to; null closes unconditionally.
+  final int? openToken;
+
   @override
-  Future<void> execute(WorkerContext ctx) async =>
-      _JsonDocs.of(ctx).remove(docId);
+  Future<void> execute(WorkerContext ctx) async {
+    final docs = _JsonDocs.of(ctx);
+    final token = openToken;
+    // A later open (the same scope reused by a newer editor) owns it now.
+    if (token != null && docs.lastOpen(docId) != token) return;
+    docs.remove(docId);
+  }
 }
 
 class _Entry {
   _Entry(this.source, this.bytes, this.nodes);
 
-  /// `callId \0 side`.
+  /// `callId \0 side \0 scope`.
   final String source;
 
   /// The body; null when it did not parse, as nothing needs it then.
@@ -272,6 +373,9 @@ class _Entry {
 
   /// Nodes charged to the budget for this document.
   int nodes;
+
+  /// The token of the latest open; see [JsonHandle.openToken].
+  int lastOpen = 0;
 }
 
 /// Open documents, stored in [WorkerContext.resources] as `json:<docId>`,
@@ -290,9 +394,10 @@ class _JsonDocs {
   /// Open doc ids, least recently used first.
   final Map<String, _Entry> _open = {};
 
-  /// Doc id per `callId \0 side`.
+  /// Doc id per `callId \0 side \0 scope`.
   final Map<String, String> _bySource = {};
   int _nextId = 0;
+  int _openCount = 0;
   int _nodes = 0;
 
   JsonDocument _doc(String docId) => _resources['json:$docId']! as JsonDocument;
@@ -311,7 +416,7 @@ class _JsonDocs {
   }
 
   (String, JsonDocument) add(String source, Uint8List bytes, JsonDocument doc) {
-    final nodes = doc.storedCapacity;
+    final nodes = doc.chargedNodes;
     doc.maxCapacity = maxOpenJsonNodes;
     while (_open.isNotEmpty &&
         (_open.length >= maxOpenJsonDocs ||
@@ -326,6 +431,12 @@ class _JsonDocs {
     return (id, doc);
   }
 
+  /// Records another open of [docId] and returns its token.
+  int touchOpen(String docId) => _open[docId]!.lastOpen = ++_openCount;
+
+  /// The token of the latest open of [docId]; null when it is not open.
+  int? lastOpen(String docId) => _open[docId]?.lastOpen;
+
   /// The body [docId] was opened from; null when it did not parse.
   Uint8List? bytes(String docId) => _open[docId]?.bytes;
 
@@ -334,7 +445,7 @@ class _JsonDocs {
   /// [maxOpenJsonNodes].
   void recharge(String docId) {
     final entry = _open[docId]!;
-    final nodes = _doc(docId).storedCapacity;
+    final nodes = _doc(docId).chargedNodes;
     _nodes += nodes - entry.nodes;
     entry.nodes = nodes;
     while (_nodes > maxOpenJsonNodes && _open.keys.first != docId) {

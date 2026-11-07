@@ -204,7 +204,8 @@ queries/indexes), Isar (unmaintained), Drift (codegen, no speed gain).
 - Filter chips: All, JSON, Errors (≥400 or failed), Hide > N MB, Hide binary,
   per-method, per-adapter.
 - Row: method badge, path (host on second line or tooltip), status color,
-  duration, size, tags (`BREAK`, `MAP`, `EDITED`).
+  duration, size, tags (`BREAK`, `MAP`, `REPLAY`, `EDITED`). `REPLAY` was added
+  during implementation, so a resent call can be told apart in the list.
 - Grouped by session ("Today 14:02 — 312 calls"); previous sessions available
   after restart.
 
@@ -311,8 +312,9 @@ highlighting.
 - **Existing HttpOverrides**: Proxie chains to any `HttpOverrides.current`
   present at init (keeps the app's pinning/proxy settings), never replaces it.
 - **Web**: best-effort. No worker isolate on web in v1; heavy work runs on the
-  main thread in chunks (yielding between batches). The 60 fps / 10 MB target
-  applies to native platforms. A web-worker backend can be added later behind
+  main thread, one command at a time and not chunked (amended before 0.1.0, as
+  chunking was not built: a large body can stall a frame, which the README
+  states). The 60 fps / 10 MB target applies to native platforms. A web-worker backend can be added later behind
   the same worker interface.
 - **Edit & resend**: replays through the original adapter when it supports
   replay (Dio and http adapters keep a reference to their client, so app

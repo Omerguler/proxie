@@ -60,8 +60,10 @@ final _defaultTransformer = SyncTransformer();
 ///   answers from its cache. Add such interceptors before installing.
 class ProxieDioInterceptor extends Interceptor implements ProxieCaptureAdapter {
   /// Creates the interceptor; [replay] sends with [replayClient] when given,
-  /// otherwise with the Dio given to [ProxieDio.install].
-  ProxieDioInterceptor({Dio? replayClient}) : _replayClient = replayClient;
+  /// otherwise with the Dio given to [ProxieDio.install]. Calls are recorded
+  /// under [name]; see [ProxieDio.install].
+  ProxieDioInterceptor({Dio? replayClient, this.name = 'dio'})
+    : _replayClient = replayClient;
 
   final Dio? _replayClient;
 
@@ -70,7 +72,7 @@ class ProxieDioInterceptor extends Interceptor implements ProxieCaptureAdapter {
   ProxieEngine? _engine;
 
   @override
-  String get name => 'dio';
+  final String name;
 
   /// True when a Dio to replay with is known: `replayClient` or the one
   /// given to [ProxieDio.install].
@@ -144,7 +146,7 @@ class ProxieDioInterceptor extends Interceptor implements ProxieCaptureAdapter {
         case AbortRequest(:final error):
           _finish(options);
           handler.reject(_aborted(options, error), true);
-        case Mock(:final action):
+        case MockDecision(:final action):
           await _mock(engine, callId, options, action, handler);
         case Proceed(request: final proceeded):
           if (!identical(proceeded, captured)) {
@@ -271,14 +273,16 @@ class ProxieDioInterceptor extends Interceptor implements ProxieCaptureAdapter {
     }
 
     _finish(options);
-    engine.onError(
-      callId,
-      ProxieError(
-        type: _errorType(err.type),
-        message: err.message ?? err.error?.toString() ?? err.type.name,
-      ),
-      response: response == null ? null : _snapshot(engine, response),
-    );
+    // Recording must never keep the error from the app.
+    try {
+      engine.onError(
+        callId,
+        _recordedError(err),
+        response: response == null ? null : _snapshot(engine, response),
+      );
+    } on Object catch (e, st) {
+      developer.log('Proxie error capture failed', error: e, stackTrace: st);
+    }
     handler.next(err);
   }
 
@@ -334,6 +338,11 @@ class ProxieDioInterceptor extends Interceptor implements ProxieCaptureAdapter {
       ),
     );
   }
+
+  /// A [DioException] is recorded the same way as a live call's.
+  @override
+  ProxieError classifyReplayError(Object error) =>
+      error is DioException ? _recordedError(error) : defaultReplayError(error);
 
   /// Answers [options] per [action] without the network.
   Future<void> _mock(
@@ -449,20 +458,36 @@ class ProxieDioInterceptor extends Interceptor implements ProxieCaptureAdapter {
     return out;
   }
 
-  ProxieResponse _snapshot(ProxieEngine engine, Response<dynamic> response) =>
-      ProxieResponse(
-        statusCode: response.statusCode ?? 0,
-        reasonPhrase: response.statusMessage,
-        headers: response.headers.map,
-        body: ProxieBody.from(
-          encodeResponseData(
-            response.data,
-            response.requestOptions.responseType,
-          ),
-          response.headers.value(Headers.contentTypeHeader),
-          cap: engine.config.teeCap,
-        ),
-      );
+  ProxieResponse _snapshot(ProxieEngine engine, Response<dynamic> response) {
+    final cap = engine.config.teeCap;
+    final body = ProxieBody.from(
+      encodeResponseData(
+        response.data,
+        response.requestOptions.responseType,
+        limit: cap,
+      ),
+      response.headers.value(Headers.contentTypeHeader),
+      cap: cap,
+    );
+    // Encoding stopped near the cap, so only the server knows the length.
+    final declared = int.tryParse(
+      response.headers.value(Headers.contentLengthHeader) ?? '',
+    );
+    return ProxieResponse(
+      statusCode: response.statusCode ?? 0,
+      reasonPhrase: response.statusMessage,
+      headers: response.headers.map,
+      body: body.truncated && declared != null && declared > body.originalLength
+          ? ProxieBody(
+              bytes: body.bytes,
+              contentType: body.contentType,
+              kind: body.kind,
+              truncated: true,
+              originalLength: declared,
+            )
+          : body,
+    );
+  }
 
   /// Writes the parts of [out] edited at a breakpoint into [response].
   Future<void> _applyResponse(
@@ -613,6 +638,12 @@ Headers _dioHeaders(RequestOptions options, Map<String, List<String>> h) =>
     Headers.fromMap({
       for (final e in h.entries) e.key: List.of(e.value),
     }, preserveHeaderCase: options.preserveHeaderCase);
+
+/// What [err] is recorded as, for live calls and replays alike.
+ProxieError _recordedError(DioException err) => ProxieError(
+  type: _errorType(err.type),
+  message: err.message ?? err.error?.toString() ?? err.type.name,
+);
 
 String _errorType(DioExceptionType type) => switch (type) {
   DioExceptionType.connectionTimeout ||

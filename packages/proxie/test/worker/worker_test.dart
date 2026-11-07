@@ -7,7 +7,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
-import 'package:proxie/proxie.dart';
+import 'package:proxie/src/internal_api.dart';
 import 'package:proxie/src/worker/in_process_worker.dart';
 import 'package:proxie/src/worker/isolate_worker.dart';
 import 'package:proxie/src/worker/worker_factory_web.dart' as web;
@@ -51,6 +51,16 @@ ProxieCall _call(
   ),
   startedAt: startedAt ?? DateTime.now().toUtc(),
 );
+
+/// Trims fine at startup, then fails.
+class _TrimFails extends MemoryStore {
+  var _trims = 0;
+
+  @override
+  Future<void> trim({required int maxCalls, required Duration maxAge}) async {
+    if (_trims++ > 0) throw StateError('disk full');
+  }
+}
 
 /// Throws inside the worker.
 class _Boom extends WorkerCommand<void> {
@@ -231,6 +241,35 @@ void _contract(
       expect(body['user'], 'bob');
     });
 
+    test('upsert masks query values and error messages, and they cannot '
+        'be found', () async {
+      const secret = 'hunter2value';
+      worker.upsert(
+        ProxieCall(
+          id: 'q',
+          sessionId: 1,
+          adapter: 'test',
+          request: ProxieRequest(
+            method: 'GET',
+            url: Uri.parse('https://api.test/q?token=$secret&page=2'),
+            headers: const {},
+            body: ProxieBody.empty(),
+          ),
+          error: const ProxieError(
+            type: 'network',
+            message: 'Failed: https://api.test/q?token=$secret',
+          ),
+          startedAt: DateTime.now().toUtc(),
+        ),
+      );
+      final got = (await worker.run(const GetCall('q')))!;
+      expect(got.request.url.toString(), isNot(contains(secret)));
+      expect(got.request.url.queryParameters['page'], '2');
+      expect(got.error!.message, isNot(contains(secret)));
+      expect(got.error!.type, 'network');
+      expect(await worker.run(const CountCalls(CallQuery(text: secret))), 0);
+    });
+
     test('rules and presets round-trip', () async {
       final rule = ProxieRule(
         id: 'r1',
@@ -297,6 +336,27 @@ void _contract(
 }
 
 void main() {
+  test('wrap gives known errors a stable code', () {
+    final st = StackTrace.current;
+    expect(
+      ProxieWorkerException.wrap(ArgumentError('x'), st).code,
+      ProxieWorkerException.argumentCode,
+    );
+    expect(
+      ProxieWorkerException.wrap(RangeError.range(5, 0, 1), st).code,
+      ProxieWorkerException.argumentCode,
+    );
+    expect(
+      ProxieWorkerException.wrap(StateError('x'), st).code,
+      ProxieWorkerException.stateCode,
+    );
+    expect(
+      ProxieWorkerException.wrap(const JsonDocumentClosed('1'), st).code,
+      JsonDocumentClosed.errorCode,
+    );
+    expect(ProxieWorkerException.wrap(Exception('x'), st).code, isNull);
+  });
+
   tearDownAll(() async {
     for (final d in _dirs) {
       await deleteTempDir(d);
@@ -416,9 +476,10 @@ void main() {
         MemoryStore.new,
         disposeTimeout: const Duration(milliseconds: 200),
       );
-      final stalled = w.run(const _Hang());
+      // Listening first: the failure may arrive while dispose is awaited.
+      final stalled = expectLater(w.run(const _Hang()), throwsStateError);
       await w.dispose().timeout(const Duration(seconds: 10));
-      await expectLater(stalled, throwsStateError);
+      await stalled;
     });
 
     test('stores proxie.db and spill under <supportDir>/proxie', () async {
@@ -544,6 +605,38 @@ void main() {
       );
       expect(await w.run(const CountCalls()), 0);
       await w.dispose();
+    });
+  });
+
+  group('retention during a session', () {
+    const config = ProxieConfig(retentionCalls: 10, persistHistory: false);
+    const snapshots = InProcessWorker.trimEvery * 2 + 5;
+
+    Future<void> runs(ProxieWorker worker) async {
+      addTearDown(worker.dispose);
+      for (var i = 0; i < snapshots; i++) {
+        worker.upsert(_call('c$i'));
+      }
+      final left = await worker.run(const CountCalls());
+      expect(left, lessThanOrEqualTo(10 + InProcessWorker.trimEvery));
+      expect(left, greaterThanOrEqualTo(10));
+    }
+
+    test('in process, as on web', () async {
+      await runs(await InProcessWorker.start(MemoryStore(), config));
+    });
+
+    test('in the worker isolate', () async {
+      await runs(await IsolateWorker.spawn(config, MemoryStore.new));
+    });
+
+    test('a failing trim does not stop recording', () async {
+      final worker = await InProcessWorker.start(_TrimFails(), config);
+      addTearDown(worker.dispose);
+      for (var i = 0; i < snapshots; i++) {
+        worker.upsert(_call('c$i'));
+      }
+      expect(await worker.run(const CountCalls()), snapshots);
     });
   });
 }

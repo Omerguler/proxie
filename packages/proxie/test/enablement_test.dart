@@ -7,7 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
-import 'package:proxie/proxie.dart';
+import 'package:proxie/src/internal_api.dart';
 
 import 'support/temp_dir.dart';
 
@@ -44,6 +44,9 @@ class _FakeAdapter implements ProxieCaptureAdapter {
   @override
   Future<ProxieResponse> replay(ProxieRequest request) =>
       throw UnimplementedError();
+
+  @override
+  ProxieError classifyReplayError(Object error) => defaultReplayError(error);
 }
 
 class _LogAdapter implements ProxieCaptureAdapter {
@@ -65,6 +68,9 @@ class _LogAdapter implements ProxieCaptureAdapter {
   @override
   Future<ProxieResponse> replay(ProxieRequest request) =>
       throw UnimplementedError();
+
+  @override
+  ProxieError classifyReplayError(Object error) => defaultReplayError(error);
 }
 
 void main() {
@@ -370,5 +376,18 @@ void main() {
       await Proxie.init(enabled: false);
       expect((await client.get(Uri.parse('https://a.test/z'))).body, 'ok');
     });
+  });
+
+  test('duplicate adapter names are found, for the log at init', () {
+    expect(duplicateAdapterNames([ProxieHttpClient(), ProxieHttpClient()]), {
+      'http',
+    });
+    expect(
+      duplicateAdapterNames([
+        ProxieHttpClient(),
+        ProxieHttpClient(name: 'other'),
+      ]),
+      isEmpty,
+    );
   });
 }

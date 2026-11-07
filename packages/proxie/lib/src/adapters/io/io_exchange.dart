@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -25,8 +26,9 @@ const _simulatedTimeout = 'Request timed out (simulated by Proxie)';
 /// With no `engine` the request is sent to `inner` as given, unrecorded.
 ///
 /// A response is fully buffered only when a response breakpoint matches the
-/// (possibly edited) request; otherwise it streams through with a copy of at
-/// most `teeCap` bytes recorded when the app finishes reading. A streamed
+/// (possibly edited) request, and only up to `teeCap` bytes or the breakpoint
+/// timeout (see `bufferForPause`); otherwise it streams through with a copy of
+/// at most `teeCap` bytes recorded when the app finishes reading. A streamed
 /// response the app never listens to leaves the call pending.
 class IoExchange {
   /// Creates the exchange for [request] with its buffered body [bytes].
@@ -65,11 +67,13 @@ class IoExchange {
     _abortError = error;
     final callId = _callId;
     if (callId != null) {
-      _engine?.onError(
-        callId,
-        const ProxieError(
-          type: 'cancelled',
-          message: 'Request aborted by the app',
+      guardRecording(
+        () => _engine?.onError(
+          callId,
+          const ProxieError(
+            type: 'cancelled',
+            message: 'Request aborted by the app',
+          ),
         ),
       );
     }
@@ -85,22 +89,36 @@ class IoExchange {
     }
     final callId = engine.newCallId();
     _callId = callId;
-    final captured = ProxieRequest(
-      method: _request.method,
-      url: _request.uri,
-      headers: _recordedHeaders(),
-      body: ProxieBody.from(
-        _bytes,
-        _request.headers[HttpHeaders.contentTypeHeader]?.first,
-        cap: engine.config.teeCap,
-      ),
-    );
-    final decision = await engine.onRequest(callId, _adapterName, captured);
+    final ProxieRequest captured;
+    final RequestDecision decision;
+    try {
+      captured = ProxieRequest(
+        method: _request.method,
+        url: _request.uri,
+        headers: _recordedHeaders(),
+        body: ProxieBody.from(
+          _bytes,
+          _request.headers[HttpHeaders.contentTypeHeader]?.first,
+          cap: engine.config.teeCap,
+        ),
+      );
+      decision = await engine.onRequest(callId, _adapterName, captured);
+    } on Object catch (e, st) {
+      // Recording must never break live traffic: send it on, unrecorded.
+      developer.log(
+        'Proxie capture failed',
+        name: 'proxie',
+        error: e,
+        stackTrace: st,
+      );
+      _checkNotAborted();
+      return await _send(_request.method, _request.uri, null, _bytes);
+    }
     _checkNotAborted();
     switch (decision) {
       case AbortRequest(:final error):
         throw HttpException(error.message, uri: _request.uri);
-      case Mock(:final action):
+      case MockDecision(:final action):
         return await _mock(engine, callId, action);
       case Proceed(request: final proceeded):
         return await _proceed(engine, callId, captured, proceeded);
@@ -156,7 +174,7 @@ class IoExchange {
     final bool buffer;
     final HttpClientResponse res;
     try {
-      buffer = _hasResponseBreakpoint(engine, proceeded);
+      buffer = engine.hasResponseBreakpoint(proceeded);
       res = identical(proceeded, captured)
           ? await _send(_request.method, _request.uri, null, _bytes)
           : await _send(
@@ -169,11 +187,13 @@ class IoExchange {
             );
     } catch (e) {
       if (_abortError == null) {
-        engine.onError(
-          callId,
-          ProxieError(
-            type: e is TimeoutException ? 'timeout' : 'network',
-            message: '$e',
+        guardRecording(
+          () => engine.onError(
+            callId,
+            ProxieError(
+              type: e is TimeoutException ? 'timeout' : 'network',
+              message: '$e',
+            ),
           ),
         );
       }
@@ -184,33 +204,64 @@ class IoExchange {
       unawaited(res.listen(null).cancel());
       _checkNotAborted();
     }
-    if (!buffer) return _tee(engine, callId, res);
+    if (!buffer) return _tee(engine, callId, res, res);
 
     final Uint8List body;
     try {
-      body = await res
-          .fold(BytesBuilder(copy: false), (b, chunk) => b..add(chunk))
-          .then((b) => b.takeBytes());
+      final read = await bufferForPause(
+        res,
+        cap: engine.config.teeCap,
+        timeout: engine.config.breakpointTimeout,
+      );
+      final rest = read.rest;
+      if (rest != null) {
+        // An abort has no effect on a response that has arrived: drop it.
+        if (_abortError != null) unawaited(rest.listen(null).cancel());
+        _checkNotAborted();
+        return _tee(engine, callId, res, rest);
+      }
+      body = read.body!;
     } catch (e) {
       if (_abortError == null) {
-        engine.onError(
-          callId,
-          ProxieError(type: 'stream_error', message: '$e'),
+        guardRecording(
+          () => engine.onError(
+            callId,
+            ProxieError(type: 'stream_error', message: '$e'),
+          ),
         );
       }
       rethrow;
     }
     _checkNotAborted();
-    final received = ProxieResponse(
-      statusCode: res.statusCode,
-      reasonPhrase: res.reasonPhrase,
-      headers: headersToMap(res.headers),
-      body: ProxieBody.from(
-        body,
-        res.headers[HttpHeaders.contentTypeHeader]?.first,
-        cap: engine.config.teeCap,
+    ProxieResponse? built;
+    guardRecording(
+      () => built = ProxieResponse(
+        statusCode: res.statusCode,
+        reasonPhrase: res.reasonPhrase,
+        headers: headersToMap(res.headers),
+        body: ProxieBody.from(
+          body,
+          res.headers[HttpHeaders.contentTypeHeader]?.first,
+          cap: engine.config.teeCap,
+        ),
       ),
     );
+    final received = built;
+    if (received == null) {
+      // Unrecorded, but the app still gets what arrived.
+      return ProxieClientResponse.buffered(
+        ProxieResponse(
+          statusCode: res.statusCode,
+          reasonPhrase: res.reasonPhrase,
+          headers: headersToMap(res.headers),
+          body: ProxieBody.empty(),
+        ),
+        body,
+        method: proceeded.method,
+        real: res,
+        owned: true,
+      );
+    }
     final out = await _respond(engine, callId, received);
     final full = keepsFull(received.body, out.body);
     return ProxieClientResponse.buffered(
@@ -313,12 +364,13 @@ class IoExchange {
     return value == (uri.port == defaultPort ? host : '$host:${uri.port}');
   }
 
-  /// Streams [res] to the app unchanged while keeping a copy of at most
-  /// `teeCap` bytes, reported when the stream ends.
+  /// Streams [source], the body of [res], to the app unchanged while keeping
+  /// a copy of at most `teeCap` bytes, reported when the stream ends.
   HttpClientResponse _tee(
     ProxieEngine engine,
     String callId,
     HttpClientResponse res,
+    Stream<List<int>> source,
   ) {
     final cap = engine.config.teeCap;
     final headers = headersToMap(res.headers);
@@ -334,7 +386,7 @@ class IoExchange {
       body: teedBody(kept, total, contentType, cap: cap, partial: partial),
     );
     final stream = teeStream(
-      res,
+      source,
       cap: cap,
       // The app already has the bytes: record without breakpoints.
       onDone: (kept, total) =>
@@ -370,15 +422,6 @@ class IoExchange {
       return await engine.onResponse(callId, res);
     } on ProxieAbortedException catch (e) {
       throw HttpException(e.error.message, uri: _request.uri);
-    }
-  }
-
-  bool _hasResponseBreakpoint(ProxieEngine engine, ProxieRequest req) {
-    try {
-      return engine.rules.responseBreakpointFor(req) != null;
-    } on Object catch (_) {
-      // The engine logs and ignores failing rule lookups as well.
-      return false;
     }
   }
 

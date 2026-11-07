@@ -88,7 +88,7 @@ class BreakpointController {
   /// timeout.
   Future<BreakpointResolution> pause(PausedCall p) {
     resolve(p.callId, const ContinueUnchanged());
-    final entry = _Entry(p)
+    final entry = _Entry(p, DateTime.now().add(timeout))
       ..timer = Timer(
         timeout,
         () => resolve(p.callId, const ContinueUnchanged()),
@@ -97,6 +97,10 @@ class BreakpointController {
     _notify();
     return entry.completer.future;
   }
+
+  /// When the paused call [callId] continues unchanged unless resolved
+  /// first; null when it is not paused.
+  DateTime? deadlineOf(String callId) => _entries[callId]?.deadline;
 
   /// Resolves a paused call; unknown ids are ignored.
   void resolve(String callId, BreakpointResolution r) {
@@ -121,9 +125,10 @@ class BreakpointController {
 }
 
 class _Entry {
-  _Entry(this.call);
+  _Entry(this.call, this.deadline);
 
   final PausedCall call;
+  final DateTime deadline;
   final completer = Completer<BreakpointResolution>();
   Timer? timer;
 }

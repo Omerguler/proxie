@@ -8,6 +8,7 @@ import 'package:proxie/src/adapters/io/http_tokens.dart';
 import 'package:proxie/src/adapters/io/proxie_http_client.dart';
 import 'package:proxie/src/core/engine.dart';
 import 'package:proxie/src/model/body.dart';
+import 'package:proxie/src/model/call.dart';
 import 'package:proxie/src/model/request.dart';
 import 'package:proxie/src/model/response.dart';
 
@@ -123,6 +124,12 @@ class ProxieHttpOverridesAdapter implements ProxieCaptureAdapter {
       }
     });
   }
+
+  /// `dart:io` reports an `HttpClient.connectionTimeout` as a
+  /// [SocketException] with no type of its own, only a message, so only a
+  /// [TimeoutException] is recorded as `timeout`.
+  @override
+  ProxieError classifyReplayError(Object error) => defaultReplayError(error);
 }
 
 /// The global overrides as set, ignoring any zone overrides.

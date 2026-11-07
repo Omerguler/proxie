@@ -1,7 +1,8 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:proxie/proxie.dart';
+import 'package:proxie/src/internal_api.dart';
 
 ProxieBody _body(List<int> bytes, BodyKind kind, {String? ct}) => ProxieBody(
   bytes: Uint8List.fromList(bytes),
@@ -12,6 +13,18 @@ ProxieBody _body(List<int> bytes, BodyKind kind, {String? ct}) => ProxieBody(
 );
 
 void main() {
+  test('a cut through the first character leaves an empty body', () {
+    final body = ProxieBody.from(
+      Uint8List.fromList(utf8.encode('é')),
+      'text/plain',
+      cap: 1,
+    );
+    expect(body.bytes, isEmpty);
+    expect(body.truncated, isTrue);
+    expect(body.kind, BodyKind.empty);
+    expect(body.originalLength, 2);
+  });
+
   final req = ProxieRequest(
     method: 'POST',
     url: Uri.parse('https://example.com/a?b=1'),

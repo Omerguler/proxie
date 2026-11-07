@@ -4,7 +4,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
-import 'package:proxie/proxie.dart';
+import 'package:proxie/src/internal_api.dart';
 
 import '../support/test_server.dart';
 
@@ -90,18 +90,62 @@ void _onPause(
   });
 }
 
+/// An engine whose recording always throws.
+class _BrokenEngine extends ProxieEngine {
+  _BrokenEngine(CallSink sink)
+    : super(config: const ProxieConfig(), sink: sink);
+
+  @override
+  Future<RequestDecision> onRequest(
+    String callId,
+    String adapter,
+    ProxieRequest req,
+  ) => throw StateError('broken onRequest');
+
+  @override
+  void recordResponse(String callId, ProxieResponse res) =>
+      throw StateError('broken recordResponse');
+
+  @override
+  void onError(String callId, ProxieError err, {ProxieResponse? response}) =>
+      throw StateError('broken onError');
+}
+
+/// Asks like a healthy engine, but recording the outcome throws.
+class _BrokenRecording extends _BrokenEngine {
+  _BrokenRecording(super.sink);
+
+  @override
+  Future<RequestDecision> onRequest(
+    String callId,
+    String adapter,
+    ProxieRequest req,
+  ) async => Proceed(req);
+}
+
+/// An engine whose config can start throwing.
+class _ConfigBreaks extends ProxieEngine {
+  _ConfigBreaks(CallSink sink)
+    : super(config: const ProxieConfig(), sink: sink);
+
+  bool broken = false;
+
+  @override
+  ProxieConfig get config =>
+      broken ? throw StateError('broken config') : super.config;
+}
+
 void main() {
   late TestServer server;
   late _Sink sink;
   late ProxieEngine engine;
   late ProxieHttpClient client;
 
-  ProxieEngine makeEngine({ProxieConfig config = const ProxieConfig()}) =>
-      ProxieEngine(
-        config: config,
-        sink: sink,
-        breakpoints: BreakpointController(timeout: const Duration(seconds: 5)),
-      );
+  ProxieEngine makeEngine({
+    ProxieConfig config = const ProxieConfig(
+      breakpointTimeout: Duration(seconds: 5),
+    ),
+  }) => ProxieEngine(config: config, sink: sink);
 
   setUp(() async {
     server = await startTestServer();
@@ -720,5 +764,296 @@ void main() {
     expect((jsonDecode(res.body) as Map)['body'], 'one,two,three');
     await pumpEventQueue();
     expect(sink.last.request.body.text, 'one,two,three');
+  });
+
+  group('abort triggers', () {
+    http.StreamedResponse ok() =>
+        http.StreamedResponse(Stream.value(utf8.encode('ok')), 200);
+
+    test('reach the inner client', () async {
+      final fake = _FakeClient((_) async => ok());
+      final c = ProxieHttpClient(inner: fake)..attach(engine);
+      final trigger = Completer<void>();
+      final req = http.AbortableRequest(
+        'GET',
+        server.url('/json'),
+        abortTrigger: trigger.future,
+      );
+      await c.send(req);
+      expect(fake.sent.single, isA<http.Abortable>());
+      expect((fake.sent.single as http.Abortable).abortTrigger, trigger.future);
+    });
+
+    test('a request without one stays a plain request', () async {
+      final fake = _FakeClient((_) async => ok());
+      final c = ProxieHttpClient(inner: fake)..attach(engine);
+      await c.send(http.Request('GET', server.url('/json')));
+      expect(fake.sent.single, isNot(isA<http.Abortable>()));
+    });
+
+    test('the real client aborts mid-flight', () async {
+      final trigger = Completer<void>();
+      final res = await client.send(
+        http.AbortableRequest(
+          'GET',
+          server.url('/stream'),
+          abortTrigger: trigger.future,
+        ),
+      );
+      final got = Completer<void>();
+      final done = res.stream.map((c) {
+        if (!got.isCompleted) got.complete();
+        return c;
+      }).drain<void>();
+      await got.future;
+      trigger.complete();
+      await expectLater(done, throwsA(isA<http.RequestAbortedException>()));
+    });
+
+    test('release a request pause and fail the call', () async {
+      engine.rules = RuleSet([_bp('*/json', BreakpointPhase.request)]);
+      final fake = _FakeClient((_) async => ok());
+      final c = ProxieHttpClient(inner: fake)..attach(engine);
+      final trigger = Completer<void>();
+      final sending = c.send(
+        http.AbortableRequest(
+          'GET',
+          server.url('/json'),
+          abortTrigger: trigger.future,
+        ),
+      );
+      await pumpEventQueue();
+      expect(engine.breakpoints.pending, hasLength(1));
+      trigger.complete();
+      await expectLater(sending, throwsA(isA<http.RequestAbortedException>()));
+      expect(engine.breakpoints.pending, isEmpty);
+      expect(fake.sent, isEmpty);
+      expect(sink.last.error!.type, 'cancelled');
+    });
+
+    test('release a response pause and fail the call', () async {
+      engine.rules = RuleSet([_bp('*/json', BreakpointPhase.response)]);
+      final fake = _FakeClient((_) async => ok());
+      final c = ProxieHttpClient(inner: fake)..attach(engine);
+      final trigger = Completer<void>();
+      final sending = c.send(
+        http.AbortableRequest(
+          'GET',
+          server.url('/json'),
+          abortTrigger: trigger.future,
+        ),
+      );
+      await pumpEventQueue();
+      expect(engine.breakpoints.pending, hasLength(1));
+      trigger.complete();
+      await expectLater(sending, throwsA(isA<http.RequestAbortedException>()));
+      expect(engine.breakpoints.pending, isEmpty);
+      expect(sink.last.error!.type, 'cancelled');
+    });
+
+    test('stop a Map Local delay', () async {
+      engine.rules = RuleSet([
+        _mapLocal(
+          '*/json',
+          MapLocalAction(
+            response: _jsonRes(200, '{}'),
+            delay: const Duration(milliseconds: 50),
+          ),
+        ),
+      ]);
+      final trigger = Completer<void>();
+      final sending = client.send(
+        http.AbortableRequest(
+          'GET',
+          server.url('/json'),
+          abortTrigger: trigger.future,
+        ),
+      );
+      await pumpEventQueue();
+      trigger.complete();
+      await expectLater(sending, throwsA(isA<http.RequestAbortedException>()));
+      expect(sink.last.error!.type, 'cancelled');
+    });
+  });
+
+  group('recording never breaks live traffic', () {
+    test('a failing onRequest still sends the request', () async {
+      final c = ProxieHttpClient()..attach(_BrokenEngine(sink));
+      final res = await c.post(server.url('/echo'), body: 'hello');
+      expect(res.statusCode, 200);
+      expect((jsonDecode(res.body) as Map)['body'], 'hello');
+    });
+
+    test('a failing onRequest keeps the abort trigger', () async {
+      final trigger = Completer<void>();
+      final fake = _FakeClient(
+        (_) async => http.StreamedResponse(Stream.value(const [1]), 200),
+      );
+      final c = ProxieHttpClient(inner: fake)..attach(_BrokenEngine(sink));
+      await c.send(
+        http.AbortableRequest(
+          'GET',
+          server.url('/json'),
+          abortTrigger: trigger.future,
+        ),
+      );
+      expect(fake.sent.single, isA<http.Abortable>());
+      expect((fake.sent.single as http.Abortable).abortTrigger, trigger.future);
+
+      await c.send(http.Request('GET', server.url('/json')));
+      expect(fake.sent.last, isNot(isA<http.Abortable>()));
+    });
+
+    test('a failure recording a buffered response still gives the app its '
+        'body', () async {
+      final e = _ConfigBreaks(sink)
+        ..rules = RuleSet([_bp('*/json', BreakpointPhase.response)]);
+      addTearDown(() {
+        e
+          ..broken = false
+          ..dispose();
+      });
+      Stream<List<int>> body() async* {
+        yield utf8.encode('hello ');
+        yield utf8.encode('world');
+        e.broken = true;
+      }
+
+      final c = ProxieHttpClient(
+        inner: _FakeClient(
+          (_) async =>
+              http.StreamedResponse(body(), 201, headers: {'x-kept': 'yes'}),
+        ),
+      )..attach(e);
+      final res = await http.Response.fromStream(
+        await c.send(http.Request('GET', server.url('/json'))),
+      );
+      expect(res.statusCode, 201);
+      expect(res.headers['x-kept'], 'yes');
+      expect(res.body, 'hello world');
+    });
+
+    test('a failing recordResponse still ends the app stream', () async {
+      final c = ProxieHttpClient()..attach(_BrokenRecording(sink));
+      final res = await c
+          .get(server.url('/json'))
+          .timeout(const Duration(seconds: 3));
+      expect(res.body, '{"hello":"world"}');
+    });
+
+    test('a failing onError does not hide a stream error', () async {
+      final c = ProxieHttpClient(
+        inner: _FakeClient(
+          (_) async => http.StreamedResponse(
+            Stream<List<int>>.error(StateError('network')),
+            200,
+          ),
+        ),
+      )..attach(_BrokenRecording(sink));
+      final res = await c.send(http.Request('GET', server.url('/json')));
+      await expectLater(res.stream.drain<void>(), throwsStateError);
+    });
+
+    test('a failing onError does not hide a send failure', () async {
+      final c = ProxieHttpClient(
+        inner: _FakeClient((_) async => throw TimeoutException('slow')),
+      )..attach(_BrokenRecording(sink));
+      await expectLater(
+        c.send(http.Request('GET', server.url('/json'))),
+        throwsA(isA<TimeoutException>()),
+      );
+    });
+  });
+
+  group('a response breakpoint on a response that does not end', () {
+    late StreamController<List<int>> source;
+
+    ProxieHttpClient clientOf(ProxieEngine e) {
+      source = StreamController<List<int>>();
+      addTearDown(e.dispose);
+      return ProxieHttpClient(
+        inner: _FakeClient(
+          (_) async => http.StreamedResponse(source.stream, 200),
+        ),
+      )..attach(e);
+    }
+
+    test('past the capture cap it stops buffering and streams through, '
+        'keeping every byte', () async {
+      final e = ProxieEngine(config: const ProxieConfig(teeCap: 4), sink: sink)
+        ..rules = RuleSet([_bp('*/sse', BreakpointPhase.response)]);
+      final c = clientOf(e);
+      final sending = c.send(http.Request('GET', server.url('/sse')));
+      source.add(utf8.encode('abc'));
+      await pumpEventQueue();
+      source.add(utf8.encode('defg'));
+      final res = await sending.timeout(const Duration(seconds: 3));
+      expect(e.breakpoints.pending, isEmpty);
+
+      final body = res.stream.toBytes();
+      await pumpEventQueue();
+      source.add(utf8.encode('hij'));
+      await source.close();
+      expect(utf8.decode(await body), 'abcdefghij');
+      await pumpEventQueue();
+      expect(sink.last.response!.body.truncated, isTrue);
+      expect(sink.last.response!.body.originalLength, 10);
+      expect(utf8.decode(sink.last.response!.body.bytes), 'abcd');
+    });
+
+    test('a slow one streams through after the breakpoint timeout', () async {
+      final e = ProxieEngine(
+        config: const ProxieConfig(
+          breakpointTimeout: Duration(milliseconds: 20),
+        ),
+        sink: sink,
+      )..rules = RuleSet([_bp('*/sse', BreakpointPhase.response)]);
+      final c = clientOf(e);
+      final sending = c.send(http.Request('GET', server.url('/sse')));
+      source.add(utf8.encode('abc'));
+      final res = await sending.timeout(const Duration(seconds: 3));
+      final body = res.stream.toBytes();
+      await pumpEventQueue();
+      source.add(utf8.encode('def'));
+      await source.close();
+      expect(utf8.decode(await body), 'abcdef');
+    });
+
+    test('one that ends below the cap still pauses', () async {
+      final e = ProxieEngine(config: const ProxieConfig(), sink: sink)
+        ..rules = RuleSet([_bp('*/sse', BreakpointPhase.response)]);
+      final c = clientOf(e);
+      final sending = c.send(http.Request('GET', server.url('/sse')));
+      source.add(utf8.encode('abc'));
+      await source.close();
+      await pumpEventQueue();
+      expect(e.breakpoints.pending, hasLength(1));
+      e.breakpoints.resolve(
+        e.breakpoints.pending.single.callId,
+        const ContinueUnchanged(),
+      );
+      final res = await sending;
+      expect(utf8.decode(await res.stream.toBytes()), 'abc');
+    });
+
+    test(
+      'a stream error while buffering reaches the app and the call',
+      () async {
+        final e = ProxieEngine(config: const ProxieConfig(), sink: sink)
+          ..rules = RuleSet([_bp('*/sse', BreakpointPhase.response)]);
+        final c = clientOf(e);
+        final sending = c.send(http.Request('GET', server.url('/sse')));
+        source.addError(StateError('lost'));
+        await expectLater(sending, throwsStateError);
+        expect(sink.last.error!.type, 'stream_error');
+      },
+    );
+  });
+
+  test('a client can be given its own name', () async {
+    expect(ProxieHttpClient().name, 'http');
+    final c = ProxieHttpClient(name: 'payments')..attach(engine);
+    await c.get(server.url('/json'));
+    expect(sink.last.adapter, 'payments');
   });
 }

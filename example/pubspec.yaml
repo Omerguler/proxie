@@ -10,13 +10,17 @@ environment:
 
 dependencies:
   cupertino_icons: ^1.0.8
+  dio: ^5.11.1
   flutter:
     sdk: flutter
+  http: ^1.6.0
   proxie:
   proxie_dio:
 
 dev_dependencies:
   flutter_test:
+    sdk: flutter
+  integration_test:
     sdk: flutter
   very_good_analysis: 11.0.0
 

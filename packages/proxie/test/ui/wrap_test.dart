@@ -1,11 +1,21 @@
+import 'dart:ui' show ViewFocusDirection, ViewFocusEvent, ViewFocusState;
+
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:proxie/proxie.dart';
+import 'package:proxie/src/internal_api.dart';
+import 'package:proxie/src/ui/json/json_row_tile.dart';
+import 'package:proxie/src/ui/list/call_list.dart';
+import 'package:proxie/src/ui/list/call_row.dart';
+import 'package:proxie/src/ui/theme.dart' show ProxieThemed;
 
+import '../support/semantics.dart';
 import '../support/ui_harness.dart';
+
+final Finder _listFinder = find.byType(CallList);
 
 class _RecordingAdapter implements ProxieNavigationAdapter {
   final shown = <Widget>[];
@@ -89,7 +99,7 @@ Future<void> _backGesture(WidgetTester tester, String method) async {
 }
 
 Brightness _proxieBrightness(WidgetTester tester) =>
-    Theme.of(tester.element(find.text('No requests yet'))).brightness;
+    Theme.of(tester.element(_listFinder)).brightness;
 
 Brightness _bubbleBrightness(WidgetTester tester) =>
     Theme.of(tester.element(bubbleButton)).brightness;
@@ -97,6 +107,116 @@ Brightness _bubbleBrightness(WidgetTester tester) =>
 void main() {
   tearDown(() async {
     await Proxie.shutdown();
+  });
+
+  testWidgets('reopening during the removal frame keeps the open pages', (
+    tester,
+  ) async {
+    addTearDown(tester.view.reset);
+    setViewSize(tester, tabletSize);
+    try {
+      await initProxie(tester);
+      await tester.pumpWidget(hostApp());
+      Proxie.open();
+      await tester.pumpAndSettle();
+      final controller = controllerIn(tester);
+      await tester.tap(find.byTooltip('Rules'));
+      await tester.pumpAndSettle();
+      expect(find.text('No rules yet'), findsOneWidget);
+
+      // One frame: hidden and out of focus, about to be removed.
+      controller.close();
+      await tester.pump();
+      expect(find.text('No rules yet'), findsNothing);
+
+      // The same inspector comes back, on the page it was on, and works.
+      controller.open();
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(find.text('No rules yet'), findsOneWidget);
+      await tester.tap(find.byTooltip('Back'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Close'));
+      await tester.pumpAndSettle();
+      expect(controller.isOpen, isFalse);
+      expect(shellFinder, findsNothing);
+      expect(bubbleFinder, findsOneWidget);
+
+      // Past that frame the navigator is gone: the next open starts fresh.
+      controller.open();
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Rules'));
+      await tester.pumpAndSettle();
+      controller.close();
+      await tester.pump();
+      await tester.pump();
+      controller.open();
+      await tester.pumpAndSettle();
+      expect(find.text('No rules yet'), findsNothing);
+      expect(shellFinder, findsOneWidget);
+    } finally {
+      await tester.runAsync(Proxie.shutdown);
+    }
+  });
+
+  testWidgets('the bubble is its own semantics node, the app stays outside', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
+    try {
+      await initProxie(tester);
+      await tester.pumpWidget(hostApp());
+      await tester.pump();
+
+      final bubble = find.bySemanticsLabel('Open Proxie inspector');
+      expect(bubble, findsOneWidget);
+      expect(tester.getSize(bubble), const Size.square(ProxieBubble.size));
+      // Its tap belongs to it alone, and the app is not a child of it.
+      final node = tester.getSemantics(bubble);
+      expect(node, semanticsLike(isButton: true, hasTapAction: true));
+      expect(node.childrenCount, 0);
+      expect(find.bySemanticsLabel('host home'), findsOneWidget);
+    } finally {
+      semantics.dispose();
+      await tester.runAsync(Proxie.shutdown);
+    }
+  });
+
+  testWidgets('a view focus change while the inspector closes does not throw', (
+    tester,
+  ) async {
+    // On the web, removing the focused element from the semantics tree makes
+    // the browser report a view focus change in the middle of the frame:
+    // after the inspector's render objects were detached, before its focus
+    // nodes are disposed.
+    final semantics = tester.ensureSemantics();
+    void reportFocus() => tester.binding.handleViewFocusChanged(
+      ViewFocusEvent(
+        viewId: tester.view.viewId,
+        state: ViewFocusState.focused,
+        direction: ViewFocusDirection.forward,
+      ),
+    );
+    SemanticsOwner? listened;
+    try {
+      await initProxie(tester);
+      await tester.pumpWidget(hostApp());
+      listened = tester.renderObject(bubbleFinder).owner!.semanticsOwner;
+      Proxie.open();
+      await tester.pumpAndSettle();
+
+      controllerIn(tester).close();
+      listened!.addListener(reportFocus);
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      expect(shellFinder, findsNothing);
+      expect(bubbleFinder, findsOneWidget);
+    } finally {
+      listened?.removeListener(reportFocus);
+      semantics.dispose();
+      await tester.runAsync(Proxie.shutdown);
+    }
   });
 
   group('theme mode', () {
@@ -194,7 +314,11 @@ void main() {
           ),
         ),
       );
-      expect(_proxieBrightness(tester), Brightness.light);
+      // Its default placeholder list.
+      expect(
+        Theme.of(tester.element(find.text('No requests yet'))).brightness,
+        Brightness.light,
+      );
     });
   });
 
@@ -236,7 +360,7 @@ void main() {
       );
       await tester.tap(bubbleButton);
       await tester.pumpAndSettle();
-      expect(find.text('No requests yet'), findsOneWidget);
+      expect(_listFinder, findsOneWidget);
       expect(find.text('Select a request'), findsOneWidget);
       await tester.binding.handlePopRoute();
       await tester.pumpAndSettle();
@@ -314,7 +438,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.byType(BackButton));
       await tester.pumpAndSettle();
-      expect(find.text('No requests yet'), findsOneWidget);
+      expect(_listFinder, findsOneWidget);
       await tester.runAsync(Proxie.shutdown);
     });
 
@@ -338,10 +462,7 @@ void main() {
       );
       Proxie.open();
       await tester.pumpAndSettle();
-      expect(
-        Directionality.of(tester.element(find.text('No requests yet'))),
-        TextDirection.rtl,
-      );
+      expect(Directionality.of(tester.element(_listFinder)), TextDirection.rtl);
       await tester.tap(find.byTooltip('Close'));
       await tester.pumpAndSettle();
       expect(shellFinder, findsNothing);
@@ -362,10 +483,7 @@ void main() {
       );
       Proxie.open();
       await tester.pumpAndSettle();
-      expect(
-        Directionality.of(tester.element(find.text('No requests yet'))),
-        TextDirection.rtl,
-      );
+      expect(Directionality.of(tester.element(_listFinder)), TextDirection.rtl);
       await tester.runAsync(Proxie.shutdown);
     });
   });
@@ -382,7 +500,7 @@ void main() {
       final node = find.semantics.byLabel('Open Proxie inspector');
       expect(
         tester.getSemantics(find.bySemanticsLabel('Open Proxie inspector')),
-        isSemantics(isButton: true, hasTapAction: true),
+        semanticsLike(isButton: true, hasTapAction: true),
       );
       tester.semantics.tap(node);
       await tester.pumpAndSettle();
@@ -405,7 +523,7 @@ void main() {
       Proxie.open();
       await tester.pumpAndSettle();
       expect(find.semantics.byLabel('host home'), findsNothing);
-      expect(find.semantics.byLabel('No requests yet'), findsOneWidget);
+      expect(find.semantics.byLabel('Errors'), findsOneWidget);
       await tester.tap(find.byTooltip('Close'));
       await tester.pumpAndSettle();
       expect(find.semantics.byLabel('host home'), findsOneWidget);
@@ -705,5 +823,98 @@ void main() {
       await tester.runAsync(Proxie.shutdown);
       expect(adapter.hides, 2);
     });
+  });
+
+  testWidgets('nested apps both using Proxie.wrap share one layer', (
+    tester,
+  ) async {
+    addTearDown(tester.view.reset);
+    setViewSize(tester, phoneSize);
+    await initProxie(tester);
+    await tester.pumpWidget(
+      const MaterialApp(
+        builder: Proxie.wrap,
+        home: MaterialApp(
+          builder: Proxie.wrap,
+          home: Scaffold(body: Text('inner home')),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+    expect(find.text('inner home'), findsOneWidget);
+    expect(bubbleFinder, findsOneWidget);
+    Proxie.open();
+    await tester.pumpAndSettle();
+    expect(find.byType(CallList), findsOneWidget);
+    await tester.runAsync(Proxie.shutdown);
+  });
+
+  testWidgets('a large text scale in the host does not overflow Proxie rows', (
+    tester,
+  ) async {
+    addTearDown(tester.view.reset);
+    setViewSize(tester, phoneSize);
+    final call = ProxieCall(
+      id: 'c',
+      sessionId: 1,
+      adapter: 'http',
+      request: ProxieRequest(
+        method: 'DELETE',
+        url: Uri.parse('https://api.test/items/1?page=2'),
+        headers: const {},
+        body: ProxieBody.empty(),
+      ),
+      response: ProxieResponse(
+        statusCode: 200,
+        headers: const {},
+        body: ProxieBody.empty(),
+      ),
+      startedAt: DateTime(2026),
+      duration: const Duration(milliseconds: 12),
+      tags: const {CallTag.mapLocal, CallTag.edited, CallTag.breakpoint},
+    );
+    late double scale;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MediaQuery(
+          data: const MediaQueryData(
+            size: phoneSize,
+            textScaler: TextScaler.linear(3),
+          ),
+          child: ProxieThemed(
+            mode: ProxieThemeMode.dark,
+            child: Builder(
+              builder: (context) {
+                scale = MediaQuery.textScalerOf(context).scale(1);
+                return Scaffold(
+                  body: Column(
+                    children: [
+                      CallRow(call: CallSummary.fromCall(call)),
+                      const JsonRowTile(
+                        editable: false,
+                        row: JsonRow(
+                          nodeId: 1,
+                          depth: 0,
+                          key: 'name',
+                          kind: JsonKind.string,
+                          preview: 'value',
+                          childCount: 0,
+                          expanded: false,
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+    expect(scale, lessThan(3));
+    expect(scale, greaterThan(1));
   });
 }
