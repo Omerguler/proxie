@@ -360,12 +360,11 @@ class _StackedLayoutState extends State<_StackedLayout> {
   final _navigatorKey = GlobalKey<NavigatorState>();
   static const _listKey = ValueKey<String>('proxie-list');
 
-  void _onDidRemovePage(Page<Object?> page) {
-    // Popped by the user (back button or gesture). A detail page removed
-    // because another call was selected must not clear that selection.
-    final key = page.key;
-    if (key is ValueKey<_DetailKey> &&
-        widget.controller.selectedCallId == key.value.callId) {
+  // Popped by the user (back button or gesture). Done from the route, as the
+  // pop starts: onDidRemovePage comes when the exit ends on older Flutter
+  // versions, and by then the same call may have been opened again.
+  void _onDetailPopped(String callId) {
+    if (widget.controller.selectedCallId == callId) {
       widget.controller.select(null);
     }
   }
@@ -386,7 +385,7 @@ class _StackedLayoutState extends State<_StackedLayout> {
         child: HeroControllerScope.none(
           child: Navigator(
             key: _navigatorKey,
-            onDidRemovePage: _onDidRemovePage,
+            onDidRemovePage: (_) {},
             pages: [
               MaterialPage<void>(
                 key: _listKey,
@@ -398,6 +397,7 @@ class _StackedLayoutState extends State<_StackedLayout> {
               if (id != null)
                 _DetailPage(
                   key: ValueKey(_DetailKey(id)),
+                  onPopped: () => _onDetailPopped(id),
                   child: Scaffold(
                     appBar: AppBar(title: const Text('Request')),
                     body: Builder(
@@ -415,8 +415,9 @@ class _StackedLayoutState extends State<_StackedLayout> {
 }
 
 class _DetailPage extends Page<void> {
-  const _DetailPage({required this.child, super.key});
+  const _DetailPage({required this.onPopped, required this.child, super.key});
 
+  final VoidCallback onPopped;
   final Widget child;
 
   @override
@@ -441,6 +442,13 @@ class _DetailRoute extends MaterialPageRoute<void> {
   @override
   WidgetBuilder get builder =>
       (_) => (settings as _DetailPage).child;
+
+  @override
+  bool didPop(void result) {
+    final popped = super.didPop(result);
+    if (popped) (settings as _DetailPage).onPopped();
+    return popped;
+  }
 
   @override
   void didAdd() {

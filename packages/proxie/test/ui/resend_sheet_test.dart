@@ -128,7 +128,11 @@ class _GatedAdapter extends _Adapter {
   }
 }
 
-final Finder _send = find.widgetWithText(FilledButton, 'Send');
+// Not by exact type: FilledButton.icon is a subclass on some Flutter versions.
+final Finder _send = find.ancestor(
+  of: find.text('Send'),
+  matching: find.byWidgetPredicate((w) => w is FilledButton),
+);
 
 bool _sendEnabled(WidgetTester tester) =>
     tester.widget<FilledButton>(_send).onPressed != null;
